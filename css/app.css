@@ -611,6 +611,7 @@ a.ledger-row:not(.action-row)::after{
   mask-repeat:no-repeat;
   -webkit-mask-position:center;
   mask-position:center;
+  align-self:center;
 }
 .ledger-row:last-child,
 .tx-row:last-child{
@@ -698,7 +699,7 @@ a.tx-row:active{
 /* Customer row composition — 2-group / 2-line shared vertical rhythm */
 .customer-list-row{
   display:flex;
-  align-items:stretch;
+  align-items:center;
   justify-content:space-between;
   gap:12px;
   min-width:0;
