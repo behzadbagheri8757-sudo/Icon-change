@@ -7,11 +7,6 @@
  */
 'use strict';
 
-/* CHANGED: v57 -> v58 (BUGFIX: js/shamsi-calendar.js and
-   css/shamsi-calendar.css were referenced by index.html but missing from
-   PRECACHE_URLS, so the Shamsi calendar failed to load while offline —
-   the only broken feature offline. Both added to the precache list. No
-   other shell asset, route, or business logic changed.) */
 /* CHANGED: v56 -> v57 (More bottom sheet converted to a dedicated full-page
    SPA route #/more. New view js/views/more.js added to the precache list;
    old More sheet code and CSS left in place for rollback. No other shell
@@ -32,7 +27,7 @@
    scrollY 1:1 and reverses identically. Removed the now-duplicate "داشبورد"
    <h2> inside Dashboard's own content — the header already shows it as the
    page title since the brand-name/page-title fix) */
-const CACHE_NAME = 'baqeri-shell-v58';
+const CACHE_NAME = 'baqeri-shell-v60';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
@@ -41,8 +36,6 @@ const PRECACHE_URLS = [
   './css/visual-grammar.css',
   './css/visual-grammar-components.css',
   './css/visual-grammar-pages.css',
-  './css/shamsi-calendar.css',
-  './js/shamsi-calendar.js',
   './js/models.js',
   './js/ui.js',
   './js/db.js',
