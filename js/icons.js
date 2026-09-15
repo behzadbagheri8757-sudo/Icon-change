@@ -16,7 +16,14 @@
   'use strict';
 
   var SF_BASE = 'https://cdn.jsdelivr.net/gh/brendanballon/sfsymbols-svg@master/symbols/';
-  var SF_CACHE_KEY = 'baqeri_sf_symbols_v1';
+  var SF_CACHE_KEY = 'baqeri_sf_symbols_v2';
+  /* Uniform glyph-content upscale applied to every SF Symbol SVG once, at
+     cache-write time inside normalizeSvg(). Compensates for the extra
+     internal whitespace SF exports carry compared to the edge-to-edge
+     Heroicon fallbacks, without per-icon offsets and without changing
+     viewBox / aspect ratio / any individual path.
+     Module-level (not local) so it is a single tunable point. */
+  var SF_GLYPH_SCALE = 1.18;
 
   /* Semantic app key -> SF Symbol name.
      The .fill variant is used for active state. */
@@ -76,7 +83,26 @@
     var inner = m[2]
       .replace(/\sfill\s*=\s*["'](?:#(?:000|000000)|black)["']/gi, ' fill="currentColor"')
       .replace(/\s(?:width|height)\s*=\s*["'][^"']*["']/gi, '');
-    return { viewBox: viewBox, inner: inner };
+    /* Uniform SF glyph-scale normalization.
+       The glyph is wrapped in a single <g> that scales it about the
+       viewBox center. Aspect ratio is preserved (same k on x and y);
+       the viewBox itself is NOT changed, so the SVG element's layout
+       box — and therefore every downstream measurement (bottom-nav
+       item anchor rect, .bn-ico box, .more-row-icon box) — is
+       unchanged. Only the visual ink footprint of the SF glyph grows,
+       bringing it closer to the Heroicon fallback fill without per-icon
+       offsets and without touching any individual path. */
+    var parts = String(viewBox).trim().split(/\s+/);
+    var vx = parseFloat(parts[0]); if (!isFinite(vx)) vx = 0;
+    var vy = parseFloat(parts[1]); if (!isFinite(vy)) vy = 0;
+    var vw = parseFloat(parts[2]); if (!isFinite(vw) || vw <= 0) vw = 24;
+    var vh = parseFloat(parts[3]); if (!isFinite(vh) || vh <= 0) vh = 24;
+    var cx = vx + vw / 2;
+    var cy = vy + vh / 2;
+    var wrapped =
+      '<g transform="translate(' + cx + ' ' + cy + ') scale(' + SF_GLYPH_SCALE +
+      ') translate(' + (-cx) + ' ' + (-cy) + ')">' + inner + '</g>';
+    return { viewBox: viewBox, inner: wrapped };
   }
 
   function cacheSave() {
