@@ -27,7 +27,7 @@
    scrollY 1:1 and reverses identically. Removed the now-duplicate "داشبورد"
    <h2> inside Dashboard's own content — the header already shows it as the
    page title since the brand-name/page-title fix) */
-const CACHE_NAME = 'baqeri-shell-v60';
+const CACHE_NAME = 'baqeri-shell-v61';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
