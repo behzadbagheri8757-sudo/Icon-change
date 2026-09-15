@@ -14,6 +14,11 @@ function faToEnDigits(str){
   // ارقام فارسی/عربی + جداکننده‌های هزار (٬ و ,) و اعشار فارسی
   return String(str).replace(/[۰-۹٠-٩٫،٬,]/g, ch=>map[ch]!==undefined?map[ch]:ch);
 }
+function fmtQtyDisplay(n){
+  var num = Number(n) || 0;
+  return String(Math.round(num * 100) / 100);
+}
+
 function enToFaDigits(str){
   const map = {'0':'۰','1':'۱','2':'۲','3':'۳','4':'۴','5':'۵','6':'۶','7':'۷','8':'۸','9':'۹'};
   return String(str).replace(/[0-9]/g, ch=>map[ch]||ch);
