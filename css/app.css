@@ -1050,8 +1050,8 @@ details[open] > .customer-behavior-summary::after{
   background:transparent;
 }
 .dash-section-ico svg{
-  width:20px;
-  height:20px;
+  max-width:21px;
+  max-height:21px;
 }
 .dash-risk-badge{
   display:inline-flex;
@@ -1371,8 +1371,8 @@ details[open] > .customer-behavior-summary::after{
 }
 /* Modest icon well — not a giant container */
 .dash-qa-ico{
-  width:24px;
-  height:24px;
+  width:26px;
+  height:26px;
   border-radius:0;
   display:flex;
   align-items:center;
@@ -1380,10 +1380,10 @@ details[open] > .customer-behavior-summary::after{
   background:transparent;
   color:#0070D2;
 }
-/* Actual SVG size (~20px) — the primary optical correction */
+/* Actual SVG size (~24px) — the primary optical correction */
 .dash-qa-ico svg{
-  width:22px;
-  height:22px;
+  max-width:24px;
+  max-height:24px;
   display:block;
 }
 .dash-qa-label{
