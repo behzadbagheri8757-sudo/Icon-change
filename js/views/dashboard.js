@@ -4,7 +4,7 @@
 'use strict';
 
 (function (global) {
-  const ICON_MAP = { invoice:'documentText', users:'users', box:'cube', card:'creditcard', truck:'truck', bank:'bank', map:'mapPin', chart:'chartBar', gear:'cog', warehouse:'warehouse', shop:'buildingStorefront', target:'target', growth:'growth', game:'trophy', actions:'checklist', summary:'chartDoc', quick:'plusCircle', invoiceSection:'documentText', visitSection:'mapPin' };
+  const ICON_MAP = { invoice:'invoice', users:'users', box:'cube', card:'creditcard', truck:'truck', bank:'bank', visit:'visit', chart:'chartBar', gear:'cog', warehouse:'warehouse', shop:'buildingStorefront', target:'target', growth:'growth', game:'trophy', actions:'checklist', summary:'chartDoc', quick:'plusCircle', invoiceSection:'invoice', visitSection:'visit' };
   const URGENCY_ICON_MAP = { critical:'urgencyCritical', high:'urgencyHigh', medium:'urgencyMedium', low:'urgencyLow' };
   function dashboardIcon(key, size) { var name=ICON_MAP[key]||key; return (typeof AppIcons!=='undefined' && AppIcons.render) ? AppIcons.render(name,{size:size||20}) : ''; }
   function urgencyIcon(level) { return dashboardIcon(URGENCY_ICON_MAP[level]||URGENCY_ICON_MAP.low,20); }
@@ -66,7 +66,7 @@
       '<div class="dash-quick-actions dash-qa-bar">' +
         '<button type="button" class="dash-qa-btn" data-qa="invoice"><span class="dash-qa-ico" aria-hidden="true">' + qaIco('invoice') + '</span><span class="dash-qa-label">فاکتور جدید</span></button>' +
         '<button type="button" class="dash-qa-btn" data-qa="payment"><span class="dash-qa-ico" aria-hidden="true">' + qaIco('card') + '</span><span class="dash-qa-label">ثبت دریافت</span></button>' +
-        '<button type="button" class="dash-qa-btn" data-qa="visit"><span class="dash-qa-ico" aria-hidden="true">' + qaIco('map') + '</span><span class="dash-qa-label">ثبت ویزیت</span></button>' +
+        '<button type="button" class="dash-qa-btn" data-qa="visit"><span class="dash-qa-ico" aria-hidden="true">' + qaIco('visit') + '</span><span class="dash-qa-label">ثبت ویزیت</span></button>' +
         '<a class="dash-qa-btn" href="#/evaluation"><span class="dash-qa-ico" aria-hidden="true">' + qaIco('shop') + '</span><span class="dash-qa-label">ارزیابی مغازه</span></a>' +
       '</div>' +
     '</div>';

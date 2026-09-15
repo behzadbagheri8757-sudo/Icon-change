@@ -22,7 +22,7 @@
     {
       title: 'عملیات میدانی',
       items: [
-        { label: 'ویزیت مشتریان',   href: '#/visits',    iconKey: 'users' },
+        { label: 'ویزیت مشتریان',   href: '#/visits',    iconKey: 'visit' },
         { label: 'ارزیابی مغازه‌ها', href: '#/prospects', iconKey: 'buildingStorefront' },
       ],
     },
@@ -37,13 +37,13 @@
       items: [
         { label: 'پرداخت‌ها', href: '#/payments', iconKey: 'banknotes' },
         { label: 'گزارش‌ها',  href: '#/reports',  iconKey: 'chartBar' },
-        { label: 'چک‌ها',     href: '#/checks',   iconKey: 'documentCheck' },
+        { label: 'چک‌ها',     href: '#/checks',   iconKey: 'cheque' },
       ],
     },
     {
       title: 'مدیریت و پشتیبانی',
       items: [
-        { label: 'انبار',         href: '#/inventory', iconKey: 'archiveBox' },
+        { label: 'انبار',         href: '#/inventory', iconKey: 'warehouse' },
         { label: 'تأمین‌کنندگان', href: '#/suppliers', iconKey: 'truck' },
       ],
     },
