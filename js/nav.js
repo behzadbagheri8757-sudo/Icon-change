@@ -19,7 +19,7 @@ const NAV_ITEMS = [
   { id: 'customers', href: '#/customers', label: 'مشتریان', spaPath: '/customers' },
   { id: 'products',  href: '#/products',  label: 'اجناس', spaPath: '/products' },
   { id: 'inventory', href: '#/inventory', label: 'انبار', spaPath: '/inventory' },
-  { id: 'suppliers', href: '#/suppliers', label: 'تامین‌کننده‌ها', spaPath: '/suppliers' },
+  { id: 'suppliers', href: '#/suppliers',  label: 'تامین‌کننده‌ها', spaPath: '/suppliers' },
   { id: 'invoices',  href: '#/invoices',  label: 'فاکتورها', spaPath: '/invoices' },
   { id: 'payments',  href: '#/payments',  label: 'پرداخت‌ها', spaPath: '/payments' },
   { id: 'checks',    href: '#/checks',    label: 'چک‌ها', spaPath: '/checks' },
@@ -496,8 +496,9 @@ function _bnAnimateIndicatorToItem(bar, item){
 
   var barRect = bar.getBoundingClientRect();
   var targetRect = item.getBoundingClientRect();
-  var targetW = Math.max(44, Math.round(targetRect.width - 2));
-  var targetH = Math.max(44, Math.round(targetRect.height - 8));
+  // PHASE 1 geometry — width equals the active item's real width, height 48px.
+  var targetW = Math.round(targetRect.width);
+  var targetH = 48;
   var targetLeft = targetRect.left - barRect.left + (targetRect.width - targetW)/2;
   var targetTop = targetRect.top - barRect.top + (targetRect.height - targetH)/2;
 
@@ -670,8 +671,9 @@ function positionBnIndicator(bar, animate){
 
   var barRect = bar.getBoundingClientRect();
   var itemRect = active.getBoundingClientRect();
-  var w = Math.max(50, Math.round(itemRect.width - 2));
-  var h = Math.max(44, Math.round(itemRect.height - 8));
+  // PHASE 1 geometry — width equals the active item's real width, height 48px.
+  var w = Math.round(itemRect.width);
+  var h = 48;
   var left = itemRect.left - barRect.left + (itemRect.width - w)/2;
   var top = itemRect.top - barRect.top + (itemRect.height - h)/2;
   var reduceMotion = _bnReduceMotion();
