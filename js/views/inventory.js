@@ -175,9 +175,9 @@
       '</div>' +
       '<h3 class="sub-title">موجودی کالاها</h3>' +
       '<div class="empty" style="padding:0 0 8px;text-align:right;font-size:.78rem;">برای اصلاح موجودی روی هر کالا بزنید (همان فرم فعلی ورود/خروج/ویرایش).</div>' +
-      '<div class="inventory-stock-list">' + stockList + '</div>' +
+      '<div class="tx-list inventory-list">' + stockList + '</div>' +
       '<h3 class="sub-title">گردش اخیر انبار</h3>' +
-      logHtml;
+      '<div class="tx-list inventory-log-list">' + logHtml + '</div>';
 
     listClickHandler = function (e) {
       const showAll = e.target.closest('#inv-stock-log-show-all');
