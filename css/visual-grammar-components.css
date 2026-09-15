@@ -144,14 +144,14 @@ input[placeholder*="جستجو"]{
 }
 
 .bottom-nav-item .bn-ico{
-  width:calc(24px - (1px * var(--bn-minimize-progress)));
-  height:calc(24px - (1px * var(--bn-minimize-progress)));
+  width:calc(26px - (1px * var(--bn-minimize-progress)));
+  height:calc(26px - (1px * var(--bn-minimize-progress)));
   color:var(--vg-color-text-muted);
 }
 
 .bottom-nav-item .bn-ico svg{
-  width:calc(24px - (1px * var(--bn-minimize-progress)));
-  height:calc(24px - (1px * var(--bn-minimize-progress)));
+  width:calc(26px - (1px * var(--bn-minimize-progress)));
+  height:calc(26px - (1px * var(--bn-minimize-progress)));
   stroke-width:1.55;
 }
 
@@ -210,8 +210,8 @@ input[placeholder*="جستجو"]{
 
 .bottom-nav.is-minimized .bottom-nav-item .bn-ico,
 .bottom-nav.is-minimized .bottom-nav-item .bn-ico svg{
-  width:23px;
-  height:23px;
+  width:25px;
+  height:25px;
 }
 
 @media (prefers-reduced-motion: reduce){
