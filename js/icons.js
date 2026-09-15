@@ -5,25 +5,42 @@
    1) Render immediately from the bundled Heroicons fallback, so the UI never
       waits for a network request and never goes blank offline.
    2) When online, fetch the mapped SF Symbols SVGs once from the public
-      sfsymbols-svg export and cache their inner SVG markup in localStorage.
+      sfsymbols-svg export, cache their inner SVG markup in localStorage.
    3) On later launches the cached SF geometry is used synchronously; the
       network is only needed to refresh a missing symbol.
 
    This keeps the PWA offline-first while replacing the visible icon geometry
    with the actual SF Symbols SVG exports once they have been cached.
+
+   v3 — real ink-bounds normalization:
+   The previous approach scaled every SF SVG uniformly about its viewBox
+   center by a fixed 1.18 factor. That failed two ways on device:
+     - SF exports carry ~25-30% internal padding, so 1.18 was too small;
+     - the ink is not necessarily centered in its own viewBox, so scaling
+       about the viewBox center amplified any pre-existing offset, which
+       showed up as the glyph drifting up-and-left after replacement.
+   v3 instead measures each fetched SF SVG's real ink bounds once (via
+   getBBox() in an off-screen live container), then rewrites its viewBox to
+   a canonical square centered on the measured ink center with a fixed
+   padding ratio derived from the Heroicon reference in this same file.
+   No per-symbol offsets, no guesses, no layout or CSS changes.
 */
 (function (global) {
   'use strict';
 
   var SF_BASE = 'https://cdn.jsdelivr.net/gh/brendanballon/sfsymbols-svg@master/symbols/';
-  var SF_CACHE_KEY = 'baqeri_sf_symbols_v2';
-  /* Uniform glyph-content upscale applied to every SF Symbol SVG once, at
-     cache-write time inside normalizeSvg(). Compensates for the extra
-     internal whitespace SF exports carry compared to the edge-to-edge
-     Heroicon fallbacks, without per-icon offsets and without changing
-     viewBox / aspect ratio / any individual path.
-     Module-level (not local) so it is a single tunable point. */
-  var SF_GLYPH_SCALE = 1.18;
+  /* Bumped v2 -> v3: v2 caches contain SVGs scaled about viewBox center
+     (not ink center), which is the wrong geometry. v3 caches contain
+     SVGs normalized to a canonical square about the measured ink center. */
+  var SF_CACHE_KEY = 'baqeri_sf_symbols_v3';
+
+  /* Canonical padding fraction applied around the measured ink on every
+     side of the longest side. Chosen so the ink occupies ~87.9% of the
+     canonical viewBox, matching the Heroicon fallbacks' own ink-to-viewBox
+     ratio (Heroicons sit from ~2.25 to ~21.75 in a 0 0 24 24 viewBox with
+     stroke-width 1.6, i.e. (19.5 + 1.6)/24 ≈ 0.879). Reference-derived,
+     not a guess about SF geometry. */
+  var SF_CANONICAL_PADDING = 0.069;
 
   /* Semantic app key -> SF Symbol name.
      The .fill variant is used for active state. */
@@ -57,7 +74,7 @@
     cube: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="m21 7.5-9-5.25L3 7.5m18 0-9 5.25m9-5.25v9l-9 5.25M3 7.5l9 5.25M3 7.5v9l9 5.25m0-9v9"/>', solid: '<path d="M12.378 1.602a.75.75 0 0 0-.756 0L3 6.632l9 5.25 9-5.25-8.622-5.03ZM21.75 7.93l-9 5.25v9l8.628-5.032a.75.75 0 0 0 .372-.648V7.93ZM11.25 22.18v-9l-9-5.25v8.57a.75.75 0 0 0 .372.648l8.628 5.033Z"/>' },
     documentText: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M5.625 1.5c-1.036 0-1.875.84-1.875 1.875v17.25c0 1.035.84 1.875 1.875 1.875h12.75c1.035 0 1.875-.84 1.875-1.875V12.75A3.75 3.75 0 0 0 16.5 9h-1.875a1.875 1.875 0 0 1-1.875-1.875V5.25A3.75 3.75 0 0 0 9 1.5H5.625ZM7.5 15a.75.75 0 0 1 .75-.75h7.5a.75.75 0 0 1 0 1.5h-7.5A.75.75 0 0 1 7.5 15Zm.75 2.25a.75.75 0 0 0 0 1.5H12a.75.75 0 0 0 0-1.5H8.25Z"/>' },
     more: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25Zm0 8.625a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25ZM15.375 12a1.125 1.125 0 1 1 2.25 0 1.125 1.125 0 0 1-2.25 0ZM7.5 10.875a1.125 1.125 0 1 0 0 2.25 1.125 1.125 0 0 0 0-2.25Z"/>' },
-    archiveBox: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M3.375 3.75A1.875 1.875 0 0 0 1.5 5.625v1.5c0 .621.504 1.125 1.125 1.125h.245l.624 10.96A3.375 3.375 0 0 0 6.865 22.5h10.27a3.375 3.375 0 0 0 3.371-3.29l.624-10.96h.245A1.125 1.125 0 0 0 22.5 7.125v-1.5a1.875 1.875 0 0 0-1.875-1.875H3.375Zm2.79 6.75h11.67l-.65 8.624a1.125 1.125 0 0 1-1.122 1.041H7.937a1.125 1.125 0 0 1-1.122-1.041L6.165 10.5Zm3.46 3a.75.75 0 0 1 .75-.75h3.25a.75.75 0 0 1 0 1.5h-3.25a.75.75 0 0 1-.75-.75Z"/>' },
+    archiveBox: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M3.375 3.75A1.875 1.875 0 0 0 15 5.625v1.5c0 .621.504 1.125 1.125 1.125h.245l.624 10.96A3.375 3.375 0 0 0 6.865 22.5h10.27a3.375 3.375 0 0 0 3.371-3.29l.624-10.96h.245A1.125 1.125 0 0 0 22.5 7.125v-1.5a1.875 1.875 0 0 0-1.875-1.875H3.375Zm2.79 6.75h11.67l-.65 8.624a1.125 1.125 0 0 1-1.122 1.041H7.937a1.125 1.125 0 0 1-1.122-1.041L6.165 10.5Zm3.46 3a.75.75 0 0 1 .75-.75h3.25a.75.75 0 0 1 0 1.5h-3.25a.75.75 0 0 1-.75-.75Z"/>' },
     truck: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M2.25 5.625A1.875 1.875 0 0 1 4.125 3.75H14.25a1.875 1.875 0 0 1 1.875 1.875V7.5h2.29c.675 0 1.31.36 1.65.944l2.44 4.18c.12.206.183.44.183.678v4.073A1.875 1.875 0 0 1 20.813 19.25h-.126a3.375 3.375 0 1 1-6.375 0H8.688a3.375 3.375 0 1 1-6.375 0h-.063A1.875 1.875 0 0 1 .375 17.375V7.5c0-1.036.84-1.875 1.875-1.875ZM17.25 10.5v3h3.05l-1.75-3h-1.3ZM5.5 20.25a1.875 1.875 0 1 0 0-3.75 1.875 1.875 0 0 0 0 3.75Zm11.812 0a1.875 1.875 0 1 0 0-3.75 1.875 1.875 0 0 0 0 3.75Z"/>' },
     banknotes: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 18.75a60.07 60.07 0 0 1 15.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 0 1 3 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 0 0-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 0 1-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 0 0 3 15h-.75M15 10.5a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm3 0h.008v.008H18V10.5Zm-12 0h.008v.008H6V10.5Z"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M2.25 4.5A2.25 2.25 0 0 0 0 6.75v7.5a2.25 2.25 0 0 0 2.25 2.25h15.5A2.25 2.25 0 0 0 20 14.25v-7.5A2.25 2.25 0 0 0 17.75 4.5H2.25Zm7.75 2.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5ZM3.75 8.25a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Zm12.5 4.5a.75.75 0 1 1 0 1.5.75.75 0 0 1 0 1.5Z"/>' },
     documentCheck: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M10.125 2.25h-4.5c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125v-9M10.125 2.25h.375a9 9 0 0 1 9 9v.375M10.125 2.25A3.375 3.375 0 0 1 13.5 5.625v1.5c0 .621.504 1.125 1.125 1.125h1.5a3.375 3.375 0 0 1 3.375 3.375M9 15l2.25 2.25L15 12"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M5.625 1.5A1.875 1.875 0 0 0 3.75 3.375v17.25c0 1.036.84 1.875 1.875 1.875h12.75a1.875 1.875 0 0 0 1.875-1.875V10.5a3.75 3.75 0 0 0-3.75-3.75h-1.875A1.875 1.875 0 0 1 14.75 4.875V3.375A1.875 1.875 0 0 0 12.875 1.5H5.625Zm3.75 13.5 1.5 1.5 3.75-4.5 1.125 1.125-4.875 5.625-2.625-2.625L9.375 15Z"/>' },
@@ -75,34 +92,105 @@
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  function round2(n) {
+    return Math.round(n * 100) / 100;
+  }
+
+  /* Off-screen SVG container used only for measuring a fetched SF symbol's
+     real ink bounds once, before the normalized form is cached. Reused
+     across symbols. Uses position:fixed;left:-10000px (off-screen but
+     still laid out) — display:none or visibility:hidden would break
+     getBBox() in some WebKit versions. */
+  var _measureWrapper = null;
+  function _getMeasureWrapper() {
+    if (!global.document || !global.document.body) return null;
+    if (_measureWrapper && _measureWrapper.parentNode) return _measureWrapper;
+    var svgNS = 'http://www.w3.org/2000/svg';
+    _measureWrapper = global.document.createElementNS(svgNS, 'svg');
+    _measureWrapper.setAttribute('xmlns', svgNS);
+    _measureWrapper.setAttribute('width', '100');
+    _measureWrapper.setAttribute('height', '100');
+    _measureWrapper.style.cssText =
+      'position:fixed;left:-10000px;top:-10000px;width:100px;height:100px;overflow:hidden;pointer-events:none;';
+    global.document.body.appendChild(_measureWrapper);
+    return _measureWrapper;
+  }
+
+  /* Measure the actual ink bounds of `inner` rendered under `viewBox` in
+     the SVG's own coordinate system. Returns { x, y, width, height } or
+     null when measurement is unavailable (no DOM, getBBox throws, or the
+     bounds are degenerate). No side effects on the caller's SVG. */
+  function measureSvgInkBounds(viewBox, inner) {
+    var wrapper = _getMeasureWrapper();
+    if (!wrapper) return null;
+    try {
+      while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
+      wrapper.setAttribute('viewBox', viewBox);
+      wrapper.innerHTML = inner;
+      void wrapper.getBoundingClientRect();
+      var svgNS = 'http://www.w3.org/2000/svg';
+      var g = global.document.createElementNS(svgNS, 'g');
+      while (wrapper.firstChild) g.appendChild(wrapper.firstChild);
+      wrapper.appendChild(g);
+      void wrapper.getBoundingClientRect();
+      var bb = null;
+      try {
+        if (typeof g.getBBox === 'function') bb = g.getBBox();
+      } catch (eBb) {
+        bb = null;
+      }
+      while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
+      if (!bb) return null;
+      var bx = Number(bb.x), by = Number(bb.y), bw = Number(bb.width), bh = Number(bb.height);
+      if (!isFinite(bx) || !isFinite(by) || !isFinite(bw) || !isFinite(bh)) return null;
+      if (!(bw > 0) || !(bh > 0)) return null;
+      return { x: bx, y: by, width: bw, height: bh };
+    } catch (e) {
+      try { while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild); } catch (eClean) {}
+      return null;
+    }
+  }
+
+  /* Turn a raw SF SVG document into the cached normalized form
+     { viewBox, inner }:
+       - fill="black" / fill="#000" / fill="#000000" -> fill="currentColor"
+       - strip any width / height attributes on inner elements
+       - measure the true ink bounds once (getBBox in a hidden container)
+       - rewrite the viewBox to a canonical SQUARE centered on the ink
+         center with SF_CANONICAL_PADDING of padding on every side of the
+         longest side; the outer SVG element box therefore stays the same
+         nominal size at every render while the visible ink footprint
+         matches the Heroicon fallbacks'.
+     If measurement is unavailable, the original viewBox is preserved and
+     no scaling is applied — never reintroduce the drift the earlier
+     viewBox-center scale caused. */
   function normalizeSvg(text) {
     var m = String(text || '').match(/<svg\b([^>]*)>([\s\S]*?)<\/svg>/i);
     if (!m) return null;
     var attrs = m[1] || '';
-    var viewBox = (attrs.match(/viewBox\s*=\s*["']([^"']+)["']/i) || [])[1] || '0 0 100 100';
+    var originalViewBox = (attrs.match(/viewBox\s*=\s*["']([^"']+)["']/i) || [])[1] || '0 0 100 100';
     var inner = m[2]
       .replace(/\sfill\s*=\s*["'](?:#(?:000|000000)|black)["']/gi, ' fill="currentColor"')
       .replace(/\s(?:width|height)\s*=\s*["'][^"']*["']/gi, '');
-    /* Uniform SF glyph-scale normalization.
-       The glyph is wrapped in a single <g> that scales it about the
-       viewBox center. Aspect ratio is preserved (same k on x and y);
-       the viewBox itself is NOT changed, so the SVG element's layout
-       box — and therefore every downstream measurement (bottom-nav
-       item anchor rect, .bn-ico box, .more-row-icon box) — is
-       unchanged. Only the visual ink footprint of the SF glyph grows,
-       bringing it closer to the Heroicon fallback fill without per-icon
-       offsets and without touching any individual path. */
-    var parts = String(viewBox).trim().split(/\s+/);
-    var vx = parseFloat(parts[0]); if (!isFinite(vx)) vx = 0;
-    var vy = parseFloat(parts[1]); if (!isFinite(vy)) vy = 0;
-    var vw = parseFloat(parts[2]); if (!isFinite(vw) || vw <= 0) vw = 24;
-    var vh = parseFloat(parts[3]); if (!isFinite(vh) || vh <= 0) vh = 24;
-    var cx = vx + vw / 2;
-    var cy = vy + vh / 2;
-    var wrapped =
-      '<g transform="translate(' + cx + ' ' + cy + ') scale(' + SF_GLYPH_SCALE +
-      ') translate(' + (-cx) + ' ' + (-cy) + ')">' + inner + '</g>';
-    return { viewBox: viewBox, inner: wrapped };
+
+    var ink = measureSvgInkBounds(originalViewBox, inner);
+    if (!ink) {
+      return { viewBox: originalViewBox, inner: inner };
+    }
+
+    var longSide = Math.max(ink.width, ink.height);
+    if (!(longSide > 0)) {
+      return { viewBox: originalViewBox, inner: inner };
+    }
+    var padded = longSide * (1 + 2 * SF_CANONICAL_PADDING);
+    var inkCx = ink.x + ink.width / 2;
+    var inkCy = ink.y + ink.height / 2;
+    var canonVx = inkCx - padded / 2;
+    var canonVy = inkCy - padded / 2;
+    var canonicalViewBox =
+      round2(canonVx) + ' ' + round2(canonVy) + ' ' + round2(padded) + ' ' + round2(padded);
+
+    return { viewBox: canonicalViewBox, inner: inner };
   }
 
   function cacheSave() {
@@ -138,8 +226,7 @@
     return '<svg class="app-icon app-icon-' + escapeHtml(name) + '" viewBox="' + escapeHtml(viewBox) + '" width="' + w + '" height="' + h + '" ' + attrs + ' data-app-icon-name="' + escapeHtml(name) + '" data-app-icon-active="' + (active ? '1' : '0') + '" data-app-icon-size="' + size + '" aria-hidden="true" focusable="false">' + markup + '</svg>';
   }
 
-  /* V61 semantic fallbacks. SF_SYMBOLS is intentionally unchanged because
-     SF CDN validation is unavailable in this environment. */
+  /* V61 semantic fallbacks. SF_SYMBOLS is intentionally unchanged. */
   FALLBACK_ICONS.creditcard = FALLBACK_ICONS.banknotes;
   FALLBACK_ICONS.bank = FALLBACK_ICONS.banknotes;
   FALLBACK_ICONS.warehouse = { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M4 20V10L12 4L20 10V20Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 20V14H15V20"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M4 20V10L12 4L20 10V20Z M9 20V14H15V20Z"/>' };
