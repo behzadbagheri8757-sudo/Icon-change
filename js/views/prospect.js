@@ -132,7 +132,7 @@
       <div class="tx-identity card field-prospect-head">
         <div class="tx-identity-title">${esc(shop.name)}</div>
         <div class="tx-identity-meta">
-          <span>📍 ${esc(getLocationDisplayString(shop.locationId))}</span>
+          <span>${(typeof AppIcons !== 'undefined' && AppIcons.render) ? AppIcons.render('mapPin', { size: 16 }) : ''} ${esc(getLocationDisplayString(shop.locationId))}</span>
         </div>
         <div class="snapshot-meta-row">
           <span class="badge tone-neutral">${esc(profileLabel)}</span>
@@ -166,7 +166,7 @@
       <div class="tx-identity card field-prospect-head">
         <div class="tx-identity-title">${esc(shop.name)}</div>
         <div class="tx-identity-meta">
-          <span>📍 ${esc(getLocationDisplayString(shop.locationId))}</span>
+          <span>${(typeof AppIcons !== 'undefined' && AppIcons.render) ? AppIcons.render('mapPin', { size: 16 }) : ''} ${esc(getLocationDisplayString(shop.locationId))}</span>
         </div>
         <div class="field-score-row">
           <span class="field-score-value">${shop.latestScore}</span>

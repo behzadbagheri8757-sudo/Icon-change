@@ -105,7 +105,7 @@
       <div class="field"><label>نام مغازه</label><input id="eval-shop-name" value="${esc(formState.name)}" autocomplete="off"></div>
       <div class="eval-location-context card" style="margin-top:10px;margin-bottom:14px;">
         <div class="eval-location-context-main">
-          <span class="eval-location-pin" aria-hidden="true">📍</span>
+          <span class="eval-location-pin" aria-hidden="true">${(typeof AppIcons !== 'undefined' && AppIcons.render) ? AppIcons.render('mapPin', { size: 18 }) : ''}</span>
           <span class="eval-location-context-text">${esc(formState.locationId ? getLocationDisplayString(formState.locationId) : 'محدوده انتخاب نشده')}</span>
         </div>
         <button type="button" class="btn secondary small" id="eval-change-location">تغییر</button>
