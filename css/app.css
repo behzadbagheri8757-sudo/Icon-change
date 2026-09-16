@@ -194,7 +194,7 @@ button.app-back{
   border:none;
   border-radius:14px;
   background:rgba(255,255,255,.38);
-  color:#0070D2;
+  color:#1C1C1E;
   font-family:inherit;
   font-size:.78rem;
   font-weight:600;
@@ -443,7 +443,7 @@ main .empty{
   justify-content:center;
   border-radius:9px;
   background:rgba(0,112,210,.10);
-  color:#0070D2;
+  color:#1C1C1E;
 }
 .more-sheet-item.active .more-sheet-item-ico{
   background:rgba(0,112,210,.16);
@@ -1045,7 +1045,7 @@ details[open] > .customer-behavior-summary::after{
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  color:#0070D2;
+  color:#1C1C1E;
   border-radius:0;
   background:transparent;
 }
@@ -1378,7 +1378,7 @@ details[open] > .customer-behavior-summary::after{
   align-items:center;
   justify-content:center;
   background:transparent;
-  color:#0070D2;
+  color:#1C1C1E;
 }
 /* Actual SVG size (~24px) — the primary optical correction */
 .dash-qa-ico svg{
@@ -1572,7 +1572,7 @@ details[open] > .customer-behavior-summary::after{
   justify-content:center;
   border-radius:50%;
   background:#FFF3DF;
-  color:#9A5B00;
+  color:#1C1C1E;
 }
 .dash-watch-compact-body{
   flex:1;
@@ -2113,7 +2113,7 @@ button.inv-header-save.btn{
   height:22px;
   border-radius:50%;
   background:#E8F2FC;
-  color:#0070D2;
+  color:#1C1C1E;
   font-size:.95rem;
 }
 .inv-payment-heading{
@@ -3022,7 +3022,7 @@ button.inv-header-save.btn{
 }
 .gc-section-ico{
   display:flex;
-  color:#FF5C35;
+  color:#1C1C1E;
 }
 .gc-section-title{
   margin:0;
@@ -3079,7 +3079,7 @@ button.inv-header-save.btn{
   align-items:center;
   justify-content:center;
   background:rgba(0,0,0,.04);
-  color:#667085;
+  color:#1C1C1E;
 }
 .gc-mission.is-active .gc-mission-icon{
   background:rgba(255,92,53,.12);
@@ -3337,7 +3337,7 @@ button.inv-header-save.btn{
 }
 .watch-reviewed-badge{
   font-size:.62rem;
-  color:#9A5B00;
+  color:#1C1C1E;
 }
 .watch-reviewed-badge.is-reviewed{
   color:#007A50;
@@ -3427,7 +3427,7 @@ button.inv-header-save.btn{
   display:flex;
   align-items:center;
   justify-content:center;
-  color:#D94725;
+  color:#1C1C1E;
 }
 #pin-lock-overlay .pin-title{
   font-size:1.25rem;
@@ -3466,11 +3466,11 @@ button.inv-header-save.btn{
   transition:border-color .15s,background .15s,box-shadow .15s;
 }
 #pin-lock-overlay .pin-cell.filled{
-  border-color:#FF5C35;
+  border-color:#1C1C1E;
   background:#FFF0EC;
 }
 #pin-lock-overlay .pin-cell.active{
-  border-color:#D94725;
+  border-color:#1C1C1E;
   background:#fff;
   box-shadow:0 0 0 4px #FFF0EC;
 }

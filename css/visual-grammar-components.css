@@ -149,7 +149,7 @@ input[placeholder*="جستجو"]{
   display:flex;
   align-items:center;
   justify-content:center;
-  color:var(--vg-color-text-muted);
+  color:#1C1C1E;
 }
 
 .bottom-nav-item .bn-ico svg{
