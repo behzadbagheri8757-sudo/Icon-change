@@ -121,11 +121,20 @@
             try { main.classList.remove('route-transition'); } catch (e) {}
           }, 320);
         }
-        const saved = scrollPositions.get(hash);
-        requestAnimationFrame(function () {
-          try { window.scrollTo(0, saved != null ? saved : 0); } catch (e) {}
-        });
       }
+
+      const saved = scrollPositions.get(hash);
+      const targetY = (saved != null) ? saved : 0;
+      try {
+        window.scrollTo(0, targetY);
+        var actualY = window.scrollY || window.pageYOffset || 0;
+        if (
+          typeof bindBottomNavMinimizeOnScroll === 'function' &&
+          typeof bindBottomNavMinimizeOnScroll.syncTo === 'function'
+        ) {
+          bindBottomNavMinimizeOnScroll.syncTo(actualY, true);
+        }
+      } catch (_e) {}
     } finally {
       resolving = false;
     }

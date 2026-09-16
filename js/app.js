@@ -970,6 +970,10 @@ function openAddTransaction(cid){
     return returnRows.filter(r=>r.productId===productId).reduce((s,r)=>s+(Number(r.qty)||0),0);
   }
 
+  function expectedReturnAmount(){
+    return returnRows.reduce((s,r)=>s+(Number(r.qty)||0)*(Number(r.price)||0),0);
+  }
+
   function returnItemsSectionHtml(){
     if(method !== 'return') return '';
     const invoices = customerInvoices(cid);
@@ -1021,6 +1025,10 @@ function openAddTransaction(cid){
   }
 
   function renderSheet(){
+    if(method==='return' && !amountStr){
+      const expected = expectedReturnAmount();
+      if(expected>0) amountStr = String(expected);
+    }
     openSheet(`
       <h3>ثبت تراکنش</h3>
       <div class="q-block">
@@ -1225,7 +1233,7 @@ function openEditStandalonePayment(cid, paymentId){
   });
   document.getElementById('ep-delete').addEventListener('click', async e=>{
     await withSubmitGuard(e.currentTarget, async()=>{
-      if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟'))) throw new Error('validation');
+      if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟','حذف دریافت'))) throw new Error('validation');
       const previousData=JSON.parse(JSON.stringify(data));
       try{
         data.payments=data.payments.filter(x=>x.id!==paymentId);
@@ -1702,7 +1710,6 @@ function openAddVisit(cid){
           }
           state.step = 'done';
           renderStage();
-          persistVisit(true);
           return;
         }
       });
@@ -1876,7 +1883,7 @@ function openCustomerDetail(cid){
       await withSubmitGuard(e.currentTarget, async()=>{
         const p=data.payments.find(x=>x.id===btn.dataset.deleteStandalonePayment && x.customerId===cid);
         if(!p || p.invoiceId || p.method==='return') return;
-        if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟'))) throw new Error('validation');
+        if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟','حذف دریافت'))) throw new Error('validation');
         const previousData=JSON.parse(JSON.stringify(data));
         try{ data.payments=data.payments.filter(x=>x.id!==p.id); await saveData(); }catch(err){ restoreDataInPlace(previousData); throw err; }
         if (typeof gameOnPaymentDeleted === 'function') {
@@ -1895,7 +1902,7 @@ function openCustomerDetail(cid){
     row.addEventListener('click', async ()=>{
       const chk = data.checks.find(x=>x.id===row.dataset.toggleCheck);
       if(!chk) return;
-      if(!(await appConfirm(chk.status === 'cleared' ? 'وضعیت این چک به «در جریان» برگردد؟' : 'این چک به‌عنوان «وصول‌شده» ثبت شود؟'))) return;
+      if(!(await appConfirm(chk.status === 'cleared' ? 'وضعیت این چک به «در جریان» برگردد؟' : 'این چک به‌عنوان «وصول‌شده» ثبت شود؟', chk.status === 'cleared' ? 'برگرداندن وضعیت' : 'ثبت وصول'))) return;
       const prev = chk.status;
       try{
         chk.status = chk.status==='cleared' ? 'pending' : 'cleared';
@@ -2012,7 +2019,7 @@ function openInvoiceDetail(invId, cid){
         showToast('این فاکتور دارای برگشت از فروش است و برای حفظ یکپارچگی موجودی قابل حذف نیست');
         throw new Error('validation');
       }
-      if(!(await appConfirm('با حذف این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟'))) throw new Error('validation');
+      if(!(await appConfirm('با حذف این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟','حذف فاکتور'))) throw new Error('validation');
       // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور —
       // تا اگر saveData() شکست بخورد، data در حافظه دقیقاً به حالت قبل از
       // حذف برگردد و با آخرین نسخه‌ی موفق در IndexedDB ناهماهنگ نماند.
@@ -2242,6 +2249,8 @@ function openInvoiceForm(cid, editInv){
     `;
   }
 
+  let didInitialQtyFocus = false;
+
   function renderSheet(){
     // Preserve the sheet's internal scroll position across re-renders.
     // renderSheet() is called on every add-row / row-delete / discount-type
@@ -2314,25 +2323,25 @@ function openInvoiceForm(cid, editInv){
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18M7 14h.01M11 14h3"/></svg>
                 </span>
-                <span>نقد</span>
+                <span>نقد</span><small class="inv-payment-action-amount" data-payment-summary="cash">${cashPaid?toman(cashPaid)+' ت':''}</small>
               </button>
               <button type="button" class="inv-payment-action" data-payment-method="card" aria-expanded="false">
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
                 </span>
-                <span>کارت</span>
+                <span>کارت</span><small class="inv-payment-action-amount" data-payment-summary="card">${cardPaid?toman(cardPaid)+' ت':''}</small>
               </button>
               <button type="button" class="inv-payment-action" data-payment-method="transfer" aria-expanded="false">
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5M8 17h8"/></svg>
                 </span>
-                <span>بانکی</span>
+                <span>بانکی</span><small class="inv-payment-action-amount" data-payment-summary="transfer">${transferPaid?toman(transferPaid)+' ت':''}</small>
               </button>
               <button type="button" class="inv-payment-action" data-payment-method="check" aria-expanded="false">
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
                 </span>
-                <span>چک</span>
+                <span>چک</span><small class="inv-payment-action-amount" data-payment-summary="check">${checkAmount?toman(checkAmount)+' ت':''}</small>
               </button>
             </div>
 
@@ -2404,8 +2413,18 @@ function openInvoiceForm(cid, editInv){
       if(_newScrollEl) _newScrollEl.scrollTop = _prevScrollTop;
     }
     updateSummary();
+    if(editInv && rows.length && !didInitialQtyFocus){
+      didInitialQtyFocus = true;
+      requestAnimationFrame(function(){
+        const qtyInput = document.querySelector('.row-qty[data-row="0"]');
+        if(qtyInput){
+          try{ qtyInput.focus(); qtyInput.setSelectionRange(qtyInput.value.length, qtyInput.value.length); }catch(_e){}
+        }
+      });
+    }
     // No-Purchase Reason chips (re-bound after every renderSheet rebuild)
     if(typeof bindNoPurchasePrompt === 'function') bindNoPurchasePrompt(cid);
+    bindProductDropPositionTracking();
 
     document.getElementById('add-row').addEventListener('click', ()=>{
       // One active empty line at a time: once a blank line exists, repeated
@@ -2462,6 +2481,32 @@ function openInvoiceForm(cid, editInv){
         dropEl.style.top = 'auto';
         if(spaceAbove < maxH) dropEl.style.maxHeight = Math.max(160, spaceAbove) + 'px';
       }
+    }
+    function bindProductDropPositionTracking(){
+      const invBody = document.querySelector('.inv-body');
+      if(!invBody || invBody._productDropScrollBound) return;
+      invBody._productDropScrollBound = true;
+      let ticking = false;
+      function schedule(){
+        if(ticking) return;
+        ticking = true;
+        requestAnimationFrame(function(){
+          ticking = false;
+          const open = document.querySelector('.prod-drop.is-open:not([hidden])');
+          if(!open) return;
+          const idx = open.getAttribute('data-row');
+          const anchor = document.querySelector(`.row-product-search[data-row="${idx}"]`);
+          if(anchor) positionProductDrop(open, anchor);
+        });
+      }
+      invBody.addEventListener('scroll', schedule, {passive:true});
+      if(window.visualViewport) window.visualViewport.addEventListener('scroll', schedule, {passive:true});
+      window.addEventListener('resize', schedule, {passive:true});
+      invBody._productDropPositionCleanup = function(){
+        try{ invBody.removeEventListener('scroll', schedule); }catch(_e){}
+        if(window.visualViewport) try{ window.visualViewport.removeEventListener('scroll', schedule); }catch(_e){}
+        try{ window.removeEventListener('resize', schedule); }catch(_e){}
+      };
     }
     function openProductDrop(idx){
       idx = String(idx);
@@ -2521,6 +2566,14 @@ function openInvoiceForm(cid, editInv){
       closeAllProductDrops();
       updateRowInfo(idx);
       updateSummary();
+      // After choosing a product, quantity is the next editable value.
+      // Focus the real rendered input and place the caret at the end.
+      requestAnimationFrame(function(){
+        const qtyInput = document.querySelector(`.row-qty[data-row="${idx}"]`);
+        if(qtyInput){
+          try{ qtyInput.focus(); qtyInput.setSelectionRange(qtyInput.value.length, qtyInput.value.length); }catch(_e){}
+        }
+      });
       // Hide No-Purchase prompt for products now in the basket
       try{
         const card = document.getElementById('npr-card');
@@ -2627,6 +2680,11 @@ function openInvoiceForm(cid, editInv){
     function updateInvPaymentTotal(){
       const totalEl = document.getElementById('inv-payment-total');
       if(totalEl) totalEl.textContent = toman(cashPaid+cardPaid+transferPaid+checkAmount) + ' ت';
+      const summaries = {cash:cashPaid, card:cardPaid, transfer:transferPaid, check:checkAmount};
+      Object.keys(summaries).forEach(function(method){
+        const el = document.querySelector(`[data-payment-summary="${method}"]`);
+        if(el) el.textContent = summaries[method] ? toman(summaries[method]) + ' ت' : '';
+      });
     }
     function closeInvPaymentPanels(){
       document.querySelectorAll('.inv-payment-panel').forEach(panel=>panel.hidden = true);
@@ -2689,9 +2747,18 @@ function openInvoiceForm(cid, editInv){
       updateSummary();
     });
     document.getElementById('f-discount-type').addEventListener('change', e=>{
+      const discountInput = document.getElementById('f-discount');
+      const selectionStart = discountInput && typeof discountInput.selectionStart === 'number' ? discountInput.selectionStart : null;
+      const selectionEnd = discountInput && typeof discountInput.selectionEnd === 'number' ? discountInput.selectionEnd : null;
       discountType = e.target.value;
       if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
-      renderSheet();
+      if(discountInput){
+        discountInput.value = discount || '';
+        if(selectionStart != null){
+          try{ discountInput.setSelectionRange(Math.min(selectionStart, discountInput.value.length), Math.min(selectionEnd == null ? selectionStart : selectionEnd, discountInput.value.length)); }catch(_e){}
+        }
+      }
+      updateSummary();
     });
 
     document.getElementById('save-invoice').addEventListener('click', async (e)=>{
@@ -3237,7 +3304,7 @@ function openSupplierDetail(sid){
         const realIdx = (s.payments||[]).indexOf(p);
         if(realIdx<0) throw new Error('validation');
         const label = p.method==='check' ? ('چک'+(p.checkNumber?(' #'+p.checkNumber):'')) : 'پرداخت';
-        if(!(await appConfirm('«'+label+'» به مبلغ '+toman(p.method==='check'?(p.faceAmount||p.amount):p.amount)+' تومان حذف شود؟\nمانده حساب تامین‌کننده اصلاح می‌شود.'))) throw new Error('validation');
+        if(!(await appConfirm('«'+label+'» به مبلغ '+toman(p.method==='check'?(p.faceAmount||p.amount):p.amount)+' تومان حذف شود؟\nمانده حساب تامین‌کننده اصلاح می‌شود.','حذف پرداخت'))) throw new Error('validation');
         s.payments.splice(realIdx, 1);
         await saveData(); openSupplierDetail(sid); render(); showToast('حذف شد');
       });

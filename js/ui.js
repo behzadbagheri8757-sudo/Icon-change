@@ -72,8 +72,9 @@ function formatLiveAmount(str){
   const raw = String(str);
   if(!raw) return '';
   const preferFa = /[۰-۹]/.test(raw);
+  const negative = /^\s*[-−]/.test(raw);
   let cleaned = faToEnDigits(raw).replace(/[^\d.]/g, '');
-  if(!cleaned) return '';
+  if(!cleaned) return negative ? '-' : '';
   const dot = cleaned.indexOf('.');
   let intPart = dot >= 0 ? cleaned.slice(0, dot) : cleaned;
   let fracPart = dot >= 0 ? cleaned.slice(dot + 1).replace(/\./g, '') : null;
@@ -82,7 +83,8 @@ function formatLiveAmount(str){
   if(intPart === '') return '';
   const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   let out = fracPart !== null ? (grouped + '.' + fracPart) : grouped;
-  if(preferFa) out = enToFaDigits(out).replace(/,/g, '٬');
+  if(negative) out = '-' + out;
+  if(preferFa) out = (negative ? '-' : '') + enToFaDigits(negative ? out.slice(1) : out).replace(/,/g, '٬');
   return out;
 }
 
