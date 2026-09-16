@@ -1,16 +1,20 @@
 /* icons.js — CENTRAL ICON SYSTEM
-   SF Symbols geometry + local fallback.
+   Fluent UI System Icons geometry + local fallback.
+
+   Phase 1 uses official Microsoft Fluent UI System Icons through the
+   Iconify SVG endpoint (the same icon set is maintained by Microsoft and
+   licensed under MIT). SVG markup is cached locally after first fetch.
 
    Runtime model:
-   1) Render immediately from the bundled Heroicons fallback, so the UI never
-      waits for a network request and never goes blank offline.
-   2) When online, fetch the mapped SF Symbols SVGs once from the public
-      sfsymbols-svg export, cache their inner SVG markup in localStorage.
-   3) On later launches the cached SF geometry is used synchronously; the
-      network is only needed to refresh a missing symbol.
+   1) Render immediately from the bundled fallback so the UI never waits for
+      a network request and never goes blank offline.
+   2) When online, fetch the mapped Fluent SVGs once and cache their normalized
+      inner SVG markup in localStorage.
+   3) On later launches the cached Fluent geometry is used synchronously.
 
-   This keeps the PWA offline-first while replacing the visible icon geometry
-   with the actual SF Symbols SVG exports once they have been cached.
+   The normalization logic below is retained because Fluent SVGs can also
+   carry different internal ink bounds. It prevents visible size/centering
+   drift when the remote asset is upgraded.
 
    v3 — real ink-bounds normalization:
    The previous approach scaled every SF SVG uniformly about its viewBox
@@ -28,11 +32,10 @@
 (function (global) {
   'use strict';
 
-  var SF_BASE = 'https://cdn.jsdelivr.net/gh/brendanballon/sfsymbols-svg@master/symbols/';
-  /* Bumped v2 -> v3: v2 caches contain SVGs scaled about viewBox center
-     (not ink center), which is the wrong geometry. v3 caches contain
-     SVGs normalized to a canonical square about the measured ink center. */
-  var SF_CACHE_KEY = 'baqeri_sf_symbols_v5';
+  var FLUENT_BASE = 'https://api.iconify.design/fluent:';
+  /* Phase-1 cache is intentionally separate from all previous SF caches so
+     stale SF geometry can never be mistaken for the new Fluent assets. */
+  var FLUENT_CACHE_KEY = 'baqeri_fluent_icons_v1';
 
   /* Canonical padding fraction applied around the measured ink on every
      side of the longest side. Chosen so the ink occupies ~87.9% of the
@@ -42,25 +45,31 @@
      not a guess about SF geometry. */
   var SF_CANONICAL_PADDING = 0.069;
 
-  /* Semantic app key -> SF Symbol name.
-     The .fill variant is used for active state. */
-  var SF_SYMBOLS = {
-    home: ['house', 'house.fill'],
-    users: ['person.2', 'person.2.fill'],
-    cube: ['shippingbox', 'shippingbox.fill'],
-    documentText: ['doc', 'doc.fill'],
-    more: ['ellipsis.circle', 'ellipsis.circle.fill'],
-    archiveBox: ['archivebox', 'archivebox.fill'],
-    truck: ['truck.box', 'truck.box.fill'],
-    banknotes: ['banknote', 'banknote.fill'],
-    documentCheck: ['checkmark.seal', 'checkmark.seal.fill'],
-    mapPin: ['mappin', 'mappin'],
-    invoice: ['doc', 'doc.fill'],
-    visit: ['calendar', 'calendar.fill'],
-    buildingStorefront: ['storefront', 'storefront.fill'],
-    trophy: ['trophy', 'trophy.fill'],
-    chartBar: ['chart.bar', 'chart.bar.fill'],
-    cog: ['gearshape', 'gearshape.fill']
+  /* Semantic app key -> Fluent UI System Icon names.
+     Regular is used for inactive/default state; filled is used for active.
+     Phase 1 covers only the visible Bottom Nav + Dashboard + More concepts. */
+  var FLUENT_SYMBOLS = {
+    home: ['home-24-regular', 'home-24-filled'],
+    users: ['people-24-regular', 'people-24-filled'],
+    cube: ['box-24-regular', 'box-24-filled'],
+    invoice: ['receipt-24-regular', 'receipt-24-filled'],
+    more: ['more-horizontal-24-regular', 'more-horizontal-24-filled'],
+    warehouse: ['box-multiple-24-regular', 'box-multiple-24-filled'],
+    truck: ['vehicle-truck-cube-24-regular', 'vehicle-truck-cube-24-filled'],
+    banknotes: ['money-24-regular', 'money-24-filled'],
+    creditcard: ['credit-card-24-regular', 'credit-card-24-filled'],
+    bank: ['building-bank-24-regular', 'building-bank-24-filled'],
+    cheque: ['document-checkmark-24-regular', 'document-checkmark-24-filled'],
+    visit: ['calendar-person-24-regular', 'calendar-person-24-filled'],
+    buildingStorefront: ['storefront-24-regular', 'storefront-24-filled'],
+    trophy: ['trophy-24-regular', 'trophy-24-filled'],
+    chartBar: ['data-bar-vertical-24-regular', 'data-bar-vertical-24-filled'],
+    cog: ['settings-24-regular', 'settings-24-filled'],
+    target: ['target-24-regular', 'target-24-filled'],
+    growth: ['arrow-trending-24-regular', 'arrow-trending-24-filled'],
+    chartDoc: ['chart-multiple-24-regular', 'chart-multiple-24-filled'],
+    checklist: ['clipboard-task-24-regular', 'clipboard-task-24-filled'],
+    plusCircle: ['add-circle-24-regular', 'add-circle-24-filled']
   };
 
   /* Bundled fallback. Kept complete so first-run/offline rendering is safe. */
@@ -87,8 +96,8 @@
     cog: { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M9.594 3.94A1.875 1.875 0 0 1 11.445 2.25h1.11a1.875 1.875 0 0 1 1.851 1.69l.147.885c.19.07.374.146.555.23l.806-.302a1.875 1.875 0 0 1 2.28.817l.555.962a1.875 1.875 0 0 1-.434 2.383l-.69.568c.012.2.012.4 0 .6l.69.568a1.875 1.875 0 0 1 .434 2.383l-.555.962a1.875 1.875 0 0 1-2.28.817l-.806-.302c-.181.084-.365.16-.555.23l-.147.885a1.875 1.875 0 0 1-1.851 1.69h-1.11a1.875 1.875 0 0 1-1.851-1.69l-.147-.885a7.46 7.46 0 0 1-.555-.23l-.806.302a1.875 1.875 0 0 1-2.28-.817l-.555-.962a1.875 1.875 0 0 1 .434-2.383l.69-.568a5.16 5.16 0 0 1 0-.6l-.69-.568a1.875 1.875 0 0 1-.434-2.383l.555-.962a1.875 1.875 0 0 1 2.28-.817l.806.302c.181-.084.365-.16.555-.23.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z"/>' }
   };
 
-  var sfCache = {};
-  try { sfCache = JSON.parse(global.localStorage.getItem(SF_CACHE_KEY) || '{}') || {}; } catch (e) { sfCache = {}; }
+  var fluentCache = {};
+  try { fluentCache = JSON.parse(global.localStorage.getItem(FLUENT_CACHE_KEY) || '{}') || {}; } catch (e) { fluentCache = {}; }
 
   function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -196,17 +205,17 @@
   }
 
   function cacheSave() {
-    try { global.localStorage.setItem(SF_CACHE_KEY, JSON.stringify(sfCache)); } catch (e) {}
+    try { global.localStorage.setItem(FLUENT_CACHE_KEY, JSON.stringify(fluentCache)); } catch (e) {}
   }
 
   function cacheKey(name, active) {
-    var pair = SF_SYMBOLS[name];
+    var pair = FLUENT_SYMBOLS[name];
     return pair ? (active ? pair[1] : pair[0]) : '';
   }
 
   function cachedMarkup(name, active) {
     var key = cacheKey(name, active);
-    return key && sfCache[key] ? sfCache[key] : null;
+    return key && fluentCache[key] ? fluentCache[key] : null;
   }
 
   function render(name, opts) {
@@ -228,7 +237,7 @@
     return '<svg class="app-icon app-icon-' + escapeHtml(name) + '" viewBox="' + escapeHtml(viewBox) + '" width="' + w + '" height="' + h + '" ' + attrs + ' data-app-icon-name="' + escapeHtml(name) + '" data-app-icon-active="' + (active ? '1' : '0') + '" data-app-icon-size="' + size + '" aria-hidden="true" focusable="false">' + markup + '</svg>';
   }
 
-  /* V61 semantic fallbacks. SF_SYMBOLS is intentionally unchanged. */
+  /* Phase-1 fallback geometry. Remote Fluent SVGs upgrade these after cache. */
   FALLBACK_ICONS.creditcard = FALLBACK_ICONS.banknotes;
   FALLBACK_ICONS.bank = FALLBACK_ICONS.banknotes;
   FALLBACK_ICONS.warehouse = { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M4 20V10L12 4L20 10V20Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 20V14H15V20"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M4 20V10L12 4L20 10V20Z M9 20V14H15V20Z"/>' };
@@ -266,27 +275,29 @@
     });
   }
 
-  function fetchSymbol(symbolName) {
-    if (!symbolName || sfCache[symbolName]) return Promise.resolve(true);
-    return fetch(SF_BASE + encodeURIComponent(symbolName) + '.svg', { cache: 'force-cache' })
-      .then(function (r) { if (!r.ok) throw new Error('SF SVG ' + r.status); return r.text(); })
+  function fetchFluentIcon(symbolName) {
+    if (!symbolName || fluentCache[symbolName]) return Promise.resolve(true);
+    return fetch(FLUENT_BASE + symbolName + '.svg', { cache: 'force-cache' })
+      .then(function (r) { if (!r.ok) throw new Error('Fluent SVG ' + r.status); return r.text(); })
       .then(function (text) {
         var normalized = normalizeSvg(text);
-        if (!normalized) throw new Error('Invalid SF SVG');
-        sfCache[symbolName] = normalized;
+        if (!normalized) throw new Error('Invalid Fluent SVG');
+        fluentCache[symbolName] = normalized;
         cacheSave();
         return true;
       })
       .catch(function () { return false; });
   }
 
-  function preloadSfIcons() {
+  function preloadFluentIcons() {
     var names = [];
-    Object.keys(SF_SYMBOLS).forEach(function (key) {
-      SF_SYMBOLS[key].forEach(function (symbol) { if (!sfCache[symbol]) names.push(symbol); });
+    Object.keys(FLUENT_SYMBOLS).forEach(function (key) {
+      FLUENT_SYMBOLS[key].forEach(function (symbol) {
+        if (!fluentCache[symbol]) names.push(symbol);
+      });
     });
     if (!names.length) { refreshMountedIcons(); return Promise.resolve(true); }
-    return Promise.all(names.map(fetchSymbol)).then(function () {
+    return Promise.all(names.map(fetchFluentIcon)).then(function () {
       refreshMountedIcons();
       return true;
     });
@@ -296,9 +307,9 @@
     render: render,
     has: has,
     ICONS: FALLBACK_ICONS,
-    SF_SYMBOLS: SF_SYMBOLS,
-    SF_CACHE_KEY: SF_CACHE_KEY,
-    preloadSfIcons: preloadSfIcons,
+    FLUENT_SYMBOLS: FLUENT_SYMBOLS,
+    FLUENT_CACHE_KEY: FLUENT_CACHE_KEY,
+    preloadFluentIcons: preloadFluentIcons,
     refreshMountedIcons: refreshMountedIcons
   };
 
@@ -306,9 +317,9 @@
      symbols are upgraded in the background when the network is available. */
   try {
     if (global.document && global.document.readyState === 'loading') {
-      global.document.addEventListener('DOMContentLoaded', preloadSfIcons, { once: true });
+      global.document.addEventListener('DOMContentLoaded', preloadFluentIcons, { once: true });
     } else {
-      setTimeout(preloadSfIcons, 0);
+      setTimeout(preloadFluentIcons, 0);
     }
   } catch (e) {}
 })(window);
