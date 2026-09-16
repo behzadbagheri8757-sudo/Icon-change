@@ -32,7 +32,7 @@
   /* Bumped v2 -> v3: v2 caches contain SVGs scaled about viewBox center
      (not ink center), which is the wrong geometry. v3 caches contain
      SVGs normalized to a canonical square about the measured ink center. */
-  var SF_CACHE_KEY = 'baqeri_sf_symbols_v3';
+  var SF_CACHE_KEY = 'baqeri_sf_symbols_v4';
 
   /* Canonical padding fraction applied around the measured ink on every
      side of the longest side. Chosen so the ink occupies ~87.9% of the
@@ -48,13 +48,13 @@
     home: ['house', 'house.fill'],
     users: ['person.2', 'person.2.fill'],
     cube: ['shippingbox', 'shippingbox.fill'],
-    documentText: ['note.text', 'note.text'],
+    documentText: ['text.document', 'text.document'],
     more: ['ellipsis.circle', 'ellipsis.circle.fill'],
     archiveBox: ['archivebox', 'archivebox.fill'],
     truck: ['truck.box', 'truck.box.fill'],
     banknotes: ['banknote', 'banknote.fill'],
     documentCheck: ['checkmark.seal', 'checkmark.seal.fill'],
-    mapPin: ['mappin', 'mappin.fill'],
+    mapPin: ['calendar.and.person', 'calendar.and.person'],
     buildingStorefront: ['storefront', 'storefront.fill'],
     trophy: ['trophy', 'trophy.fill'],
     chartBar: ['chart.bar', 'chart.bar.fill'],
