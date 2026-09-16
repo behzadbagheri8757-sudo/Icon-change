@@ -27,7 +27,12 @@
    scrollY 1:1 and reverses identically. Removed the now-duplicate "داشبورد"
    <h2> inside Dashboard's own content — the header already shows it as the
    page title since the brand-name/page-title fix) */
-const CACHE_NAME = 'baqeri-shell-v61';
+/* CHANGED: v61 -> v62 (offline-shell fix only: css/shamsi-calendar.css and
+   js/shamsi-calendar.js are loaded by index.html on every page load but were
+   missing from PRECACHE_URLS, so a freshly-activated cache version had no
+   guarantee they'd be cached before the first offline use. Added both to the
+   precache list; no other asset, route, or business logic touched.) */
+const CACHE_NAME = 'baqeri-shell-v62';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
@@ -36,6 +41,8 @@ const PRECACHE_URLS = [
   './css/visual-grammar.css',
   './css/visual-grammar-components.css',
   './css/visual-grammar-pages.css',
+  './css/shamsi-calendar.css',
+  './js/shamsi-calendar.js',
   './js/models.js',
   './js/ui.js',
   './js/db.js',
