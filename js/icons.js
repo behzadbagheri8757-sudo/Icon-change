@@ -32,7 +32,7 @@
   /* Bumped v2 -> v3: v2 caches contain SVGs scaled about viewBox center
      (not ink center), which is the wrong geometry. v3 caches contain
      SVGs normalized to a canonical square about the measured ink center. */
-  var SF_CACHE_KEY = 'baqeri_sf_symbols_v4';
+  var SF_CACHE_KEY = 'baqeri_sf_symbols_v5';
 
   /* Canonical padding fraction applied around the measured ink on every
      side of the longest side. Chosen so the ink occupies ~87.9% of the
@@ -48,13 +48,15 @@
     home: ['house', 'house.fill'],
     users: ['person.2', 'person.2.fill'],
     cube: ['shippingbox', 'shippingbox.fill'],
-    documentText: ['text.document', 'text.document'],
+    documentText: ['doc', 'doc.fill'],
     more: ['ellipsis.circle', 'ellipsis.circle.fill'],
     archiveBox: ['archivebox', 'archivebox.fill'],
     truck: ['truck.box', 'truck.box.fill'],
     banknotes: ['banknote', 'banknote.fill'],
     documentCheck: ['checkmark.seal', 'checkmark.seal.fill'],
-    mapPin: ['calendar.and.person', 'calendar.and.person'],
+    mapPin: ['mappin', 'mappin'],
+    invoice: ['doc', 'doc.fill'],
+    visit: ['calendar', 'calendar.fill'],
     buildingStorefront: ['storefront', 'storefront.fill'],
     trophy: ['trophy', 'trophy.fill'],
     chartBar: ['chart.bar', 'chart.bar.fill'],
@@ -230,9 +232,9 @@
   FALLBACK_ICONS.creditcard = FALLBACK_ICONS.banknotes;
   FALLBACK_ICONS.bank = FALLBACK_ICONS.banknotes;
   FALLBACK_ICONS.warehouse = { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M4 20V10L12 4L20 10V20Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 20V14H15V20"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M4 20V10L12 4L20 10V20Z M9 20V14H15V20Z"/>' };
-  FALLBACK_ICONS.invoice = { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M6 4H18V17L16.8 19L15.6 17L14.4 19L13.2 17L12 19L10.8 17L9.6 19L8.4 17L7.2 19L6 17Z M8 7.5H16 M8 10.5H16 M8 13.5H14"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M6 4H18V17L16.8 19L15.6 17L14.4 19L13.2 17L12 19L10.8 17L9.6 19L8.4 17L7.2 19L6 17Z M8 8H16V9H8Z"/>' };
+  FALLBACK_ICONS.invoice = FALLBACK_ICONS.documentText;
   FALLBACK_ICONS.cheque = { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M3 7H21V17H3Z M6 10.5H18 M14 14.5L15.2 13.5L16.4 14.5L17.6 13.5L18.6 14.3"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M3 7H21V17H3Z M6 10H18V11H6Z"/>' };
-  FALLBACK_ICONS.visit = { outline: '<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M9.4 10.6L11.2 12.4L14.6 9"/>', solid: '<path d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1 1 15 0Z"/>' };
+  FALLBACK_ICONS.visit = FALLBACK_ICONS.documentCheck;
   FALLBACK_ICONS.target = { outline: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/>', solid: '<path fill-rule="evenodd" clip-rule="evenodd" d="M12 2.25a9.75 9.75 0 1 0 9.75 9.75A9.75 9.75 0 0 0 12 2.25Zm0 5a4.75 4.75 0 1 1-4.75 4.75A4.75 4.75 0 0 1 12 7.25Zm0 3a1.75 1.75 0 1 0 1.75 1.75A1.75 1.75 0 0 0 12 10.25Z"/>' };
   FALLBACK_ICONS.growth = { outline: '<path d="M3 17l6-6 4 4 8-8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 7h6v6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>', solid: '<path d="M3 18a1 1 0 0 1-.707-1.707l6-6a1 1 0 0 1 1.414 0L13 13.586l7.293-7.293A1 1 0 0 1 21.707 7.707l-8 8a1 1 0 0 1-1.414 0L9 12.414l-5.293 5.293A1 1 0 0 1 3 18Z"/>' };
   FALLBACK_ICONS.chartDoc = FALLBACK_ICONS.chartBar;
