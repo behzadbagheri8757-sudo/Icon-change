@@ -81,11 +81,13 @@
           return;
         }
         global.__navigationGuard = null;
+        if(typeof global.clearModalCloseGuard === 'function') global.clearModalCloseGuard();
         previousHash = location.hash || '#/';
         resolve(true);
       }).catch(function(){
         guardResolutionInFlight = false;
         previousHash = location.hash || '#/';
+        if(typeof global.clearModalCloseGuard === 'function') global.clearModalCloseGuard();
         resolve(true);
       });
       return;
@@ -209,6 +211,7 @@
           if(ok){
             previousHash = newHash;
             global.__navigationGuard = null;
+            if(typeof global.clearModalCloseGuard === 'function') global.clearModalCloseGuard();
             resolve(true);
           }else{
             try { history.replaceState(null, '', previousHash); } catch(e) { location.hash = previousHash; }
@@ -217,6 +220,7 @@
           guardResolutionInFlight = false;
           previousHash = newHash;
           global.__navigationGuard = null;
+          if(typeof global.clearModalCloseGuard === 'function') global.clearModalCloseGuard();
           resolve(true);
         });
         return;

@@ -702,11 +702,13 @@ function bindSheetDragToDismiss(sheetEl, handleEl, dismissFn){
 }
 
 let _modalHideTimer = null;
+let __activeConfirmFinish = null;
 
 /* In-app confirmation layer. It sits above an existing sheet when needed, so
    destructive actions can be confirmed without replacing/dismissing an
    in-flight form or changing its state. */
 function appConfirm(message, confirmLabel, cancelLabel){
+  if(typeof __activeConfirmFinish === 'function') __activeConfirmFinish(false);
   confirmLabel = confirmLabel || 'تأیید';
   cancelLabel = cancelLabel || 'انصراف';
   return new Promise(function(resolve){
@@ -723,9 +725,11 @@ function appConfirm(message, confirmLabel, cancelLabel){
     function finish(value){
       if(settled) return;
       settled = true;
+      if(__activeConfirmFinish === finish) __activeConfirmFinish = null;
       layer.remove();
       resolve(value);
     }
+    __activeConfirmFinish = finish;
     layer.querySelector('[data-confirm-cancel]').addEventListener('click', function(){ finish(false); });
     layer.querySelector('[data-confirm-ok]').addEventListener('click', function(){ finish(true); });
     layer.addEventListener('click', function(e){ if(e.target === layer) finish(false); });
@@ -761,28 +765,36 @@ function canLeaveCurrentContext(){
 let __modalCloseGuard = null;
 function setModalCloseGuard(fn){ __modalCloseGuard = (typeof fn === 'function') ? fn : null; }
 function clearModalCloseGuard(){ __modalCloseGuard = null; }
-function requestModalClose(){
-  const guard = __modalCloseGuard;
-  if(typeof guard !== 'function') { closeModal(); return; }
-  try { Promise.resolve(guard()).catch(function(){ return false; }); } catch(e) {}
-}
+function requestModalClose(){ closeModal(); }
 
-
-function closeModal(){
+function closeModalForce(){
   __modalCloseGuard = null;
+  try{ if(typeof __activeConfirmFinish === 'function') __activeConfirmFinish(false); }catch(_e){}
+  try{
+    if(typeof window.__invoiceStickyViewportCleanup === 'function') window.__invoiceStickyViewportCleanup();
+  }catch(_e){}
   const overlay = document.getElementById('overlay');
   const root = document.getElementById('modalRoot');
-  if(!overlay){ if(root) root.innerHTML=''; return; }
+  if(!overlay){ if(root) root.innerHTML=''; try{ document.body.classList.remove('modal-open'); }catch(_e){} return; }
   overlay.classList.remove('show');
   const sheetEl = overlay.querySelector('.sheet');
   if(sheetEl) sheetEl.classList.remove('show');
-  try{ document.body.classList.remove('modal-open'); }catch(_e){}
   if(_modalHideTimer){ clearTimeout(_modalHideTimer); }
   _modalHideTimer = setTimeout(() => {
     _modalHideTimer = null;
     root.innerHTML = '';
+    try{ document.body.classList.remove('modal-open'); }catch(_e){}
     if(window.scrollX) window.scrollTo(0, window.scrollY);
   }, 240);
+}
+
+function closeModal(){
+  const guard = __modalCloseGuard;
+  if(typeof guard === 'function'){
+    try { Promise.resolve(guard()).catch(function(){}); } catch(e) {}
+    return;
+  }
+  closeModalForce();
 }
 
 function openSheet(html){

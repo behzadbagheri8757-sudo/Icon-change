@@ -3,8 +3,12 @@
 */
 // ---------- submit guard (double-tap on mobile) ----------
 /** Disable mutation button for one run; re-enable only on failure/validation abort. */
-function focusValidationControl(btn){
+function focusValidationControl(btn, invoiceRowIndex){
   if(!btn) return;
+  if(btn.id === 'save-invoice' && Number.isInteger(invoiceRowIndex) && typeof btn.__invoiceFocusInvalidRow === 'function'){
+    btn.__invoiceFocusInvalidRow(invoiceRowIndex);
+    return;
+  }
   const id = btn.id || '';
   const root = btn.closest('.sheet') || document;
   let selectors = [];
@@ -2073,6 +2077,10 @@ function openInvoiceForm(cid, editInv){
   let transferPaid = editInv ? (editInv.transferPaid||0) : 0;
   let checkAmount = editInv ? (editInv.checkPaid||0) : 0;
   let checkDue = existingCheck ? existingCheck.dueDate : todayISO();
+  // Invoice date is form state: renderSheet() may rebuild the DOM many times,
+  // so the user's selected date must survive those re-renders.
+  let currentDate = editInv ? (editInv.date || todayISO()) : todayISO();
+  const invoiceInitialDate = currentDate;
   let discount = editInv ? (editInv.discount||0) : 0;
   let discountType = (editInv && editInv.discountType==='percent') ? 'percent' : 'fixed';
   if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
@@ -2369,10 +2377,8 @@ function openInvoiceForm(cid, editInv){
   }
 
   function invoiceFormSnapshot(){
-    let date = invoiceInitialDate;
-    try{ const el=document.getElementById('f-date'); if(el && el.value) date=el.value; }catch(e){}
     return JSON.stringify({
-      date,
+      date: currentDate || invoiceInitialDate,
       rows: rows.map(r=>({productId:r.productId||'',qty:Number(r.qty)||0,price:Number(r.price)||0,discount:Number(r.discount)||0})),
       cashPaid:Number(cashPaid)||0,
       cardPaid:Number(cardPaid)||0,
@@ -2400,17 +2406,6 @@ function openInvoiceForm(cid, editInv){
   }
 
   function renderSheet(){
-    // Preserve the sheet's internal scroll position across re-renders.
-    // renderSheet() is called on every add-row / row-delete / discount-type
-    // change, and each call fully rebuilds #modalRoot via openSheet() (a
-    // brand-new .sheet element with scrollTop=0). On a long invoice where the
-    // user has scrolled down to the discount/payment section, that reset
-    // makes the whole form visibly "jump" back to the top on every one of
-    // those actions. Capturing/restoring scrollTop here is local to this
-    // function and does not change what openSheet()/closeModal() do for any
-    // other sheet in the app.
-    const _prevScrollEl = document.querySelector('.inv-body') || document.querySelector('.sheet');
-    const _prevScrollTop = _prevScrollEl ? _prevScrollEl.scrollTop : 0;
     // No-Purchase Reason: expected SKUs missing from current basket (non-blocking)
     const basketPids = rows.map(function(r){ return r.productId; }).filter(Boolean);
     const nprCandidatesInv = (typeof getNoPurchaseCandidates === 'function')
@@ -2423,7 +2418,6 @@ function openInvoiceForm(cid, editInv){
       ? (cust.ownerName ? (esc(cust.name)+' / '+esc(cust.ownerName)) : esc(cust.name||'—'))
       : '—';
     const custInitial = esc((cust && cust.name ? cust.name.trim().charAt(0) : 'م') || 'م');
-  const invoiceInitialDate = editInv ? editInv.date : todayISO();
 
     openSheet(`
       <div class="inv-sheet-v2">
@@ -2447,7 +2441,7 @@ function openInvoiceForm(cid, editInv){
                   <div class="inv-customer-name">${custDisplay}</div>
                   <div class="inv-customer-meta">
                     ${cust&&cust.phone?`<span>${esc(cust.phone)}</span><span class="inv-customer-meta-sep">·</span>`:''}
-                    <span class="inv-customer-date">${shamsiDateInputHTML('f-date', invoiceInitialDate)}</span>
+                    <span class="inv-customer-date">${shamsiDateInputHTML('f-date', currentDate)}</span>
                   </div>
                 </div>
               </div>
@@ -2530,7 +2524,7 @@ function openInvoiceForm(cid, editInv){
     // custom header's save button IS the original #save-invoice element
     // (same id, same listener below) — no duplicate save logic anywhere.
     (function(){
-      const sheetEl = document.querySelector('.sheet');
+      const sheetEl = document.querySelector('#modalRoot .sheet');
       if(sheetEl) sheetEl.classList.add('inv-sheet-host');
       // Overlay default z-index (60) is below bottom-nav (70). Lift only while
       // Invoice V6 host is open so chrome cannot cover the full-screen sheet.
@@ -2546,10 +2540,6 @@ function openInvoiceForm(cid, editInv){
         if(saveBtn) saveBtn.click();
       });
     })();
-    if(_prevScrollTop){
-      const _newScrollEl = document.querySelector('.inv-body') || document.querySelector('.sheet');
-      if(_newScrollEl) _newScrollEl.scrollTop = _prevScrollTop;
-    }
     if(typeof setNavigationGuard==='function') setNavigationGuard(function(){
       if(!invoiceHasUnsavedData()) return true;
       return appConfirm('فاکتور ذخیره نشده است. آیا می‌خواهید از فاکتور خارج شوید؟','خروج بدون ذخیره','ادامه ویرایش');
@@ -2568,7 +2558,19 @@ function openInvoiceForm(cid, editInv){
           const keyboardOffset = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop||0));
           sticky.style.bottom = keyboardOffset + 'px';
         };
-        window.__invoiceStickyViewportBinding = { sync };
+        const cleanup = function(){
+          if(window.visualViewport){
+            window.visualViewport.removeEventListener('resize', sync);
+            window.visualViewport.removeEventListener('scroll', sync);
+          }
+          window.removeEventListener('resize', sync);
+          if(window.__invoiceStickyViewportBinding && window.__invoiceStickyViewportBinding.sync === sync){
+            window.__invoiceStickyViewportBinding = null;
+          }
+          if(window.__invoiceStickyViewportCleanup === cleanup) window.__invoiceStickyViewportCleanup = null;
+        };
+        window.__invoiceStickyViewportBinding = { sync, cleanup };
+        window.__invoiceStickyViewportCleanup = cleanup;
         if(window.visualViewport){
           window.visualViewport.addEventListener('resize', sync);
           window.visualViewport.addEventListener('scroll', sync);
@@ -2936,6 +2938,11 @@ function openInvoiceForm(cid, editInv){
       updateInvPaymentTotal();
       updateSummary();
     });
+    const invoiceDateEl = document.getElementById('f-date');
+    if(invoiceDateEl){
+      invoiceDateEl.addEventListener('input', e=>{ currentDate = e.target.value || currentDate; });
+      invoiceDateEl.addEventListener('change', e=>{ currentDate = e.target.value || currentDate; });
+    }
     document.getElementById('f-check-due').addEventListener('change', e=>{ checkDue = e.target.value; });
     document.getElementById('f-discount').addEventListener('input', e=>{
       let v = parseFloat(faToEnDigits(e.target.value))||0;
@@ -2952,29 +2959,49 @@ function openInvoiceForm(cid, editInv){
       renderSheet();
     });
 
+    const invoiceSaveBtn = document.getElementById('save-invoice');
+    if(invoiceSaveBtn){
+      invoiceSaveBtn.__invoiceFocusInvalidRow = function(rowIndex){
+        const idx = Number(rowIndex);
+        if(!Number.isInteger(idx) || idx < 0 || idx >= rows.length) return;
+        editingRowIndex = idx;
+        editingRowSnapshot = JSON.parse(JSON.stringify(rows[idx]));
+        renderSheet();
+        requestAnimationFrame(function(){
+          const root = document.querySelector('#modalRoot .sheet');
+          const row = root && root.querySelector('.inv-line-editing[data-row="'+idx+'"]');
+          const control = row && row.querySelector('.row-product-search, .row-qty, .row-price');
+          if(control){
+            try{ control.setAttribute('aria-invalid','true'); control.focus({preventScroll:true}); control.scrollIntoView({behavior:'smooth',block:'center'}); }catch(_e){ try{ control.focus(); }catch(__){} }
+          }
+        });
+      };
+    }
     document.getElementById('save-invoice').addEventListener('click', async (e)=>{
       const btn = e.currentTarget;
       if(btn.disabled) return; // جلوگیری از ثبت دوباره با کلیک سریع/پی‌درپی
       btn.disabled = true;
-      const date = document.getElementById('f-date').value || todayISO();
+      const date = currentDate || todayISO();
 
       // اعتبارسنجی: هر ردیف باید جنس مشخصی داشته باشه (چون فیلد جستجو دیگه پیش‌فرض نداره)
-      const noProductRow = rows.find(r=> !r.productId || !data.products.find(p=>p.id===r.productId));
-      if(noProductRow){
+      const noProductIndex = rows.findIndex(r=> !r.productId || !data.products.find(p=>p.id===r.productId));
+      if(noProductIndex >= 0){
         showToast('برای هر ردیف باید یک جنس از لیست انتخاب کنی.');
+        focusValidationControl(btn, noProductIndex);
         btn.disabled = false;
         return;
       }
 
       // Business validation: discount invariants must hold before any stock/payment
       // mutation or persistence. UI clamping is not sufficient protection.
-      const invalidRow = rows.find(r=> {
+      const invalidRowIndex = rows.findIndex(r=> {
         const gross = (Number(r.qty)||0) * (Number(r.price)||0);
         const rowDiscount = Number(r.discount)||0;
         return !(r.qty>0) || r.price<0 || rowDiscount<0 || rowDiscount>gross;
       });
-      if(invalidRow){
+      if(invalidRowIndex >= 0){
         showToast('مقادیر فاکتور نامعتبر است.\n\nتعداد باید بزرگ‌تر از صفر، قیمت و تخفیف نباید منفی باشند و تخفیف هر ردیف نباید از مبلغ همان ردیف بیشتر باشد.');
+        focusValidationControl(btn, invalidRowIndex);
         btn.disabled = false;
         return;
       }
