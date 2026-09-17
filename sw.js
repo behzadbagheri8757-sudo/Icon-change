@@ -33,7 +33,8 @@
    missing from PRECACHE_URLS, so a freshly-activated cache version had no
    guarantee they'd be cached before the first offline use. Added both to the
    precache list; no other asset, route, or business logic touched.) */
-const CACHE_NAME = 'baqeri-shell-v63';
+/* CHANGED: v63 -> v64 (Invoice 6 visual grammar cleanup, compact grouped sections, sticky submit, and guarded exit for unsaved invoice data.) */
+const CACHE_NAME = 'baqeri-shell-v64';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
