@@ -32,7 +32,7 @@
     return '\u200E' + s + '\u200E';
   }
 
-  var ICON_MAP = { brand:'trophy', brandMark:'trophy', evaluation:'clipboard', visit:'visit', sales:'documentText', mission:'checklist', monthly:'target', streak:'flame', xp:'bolt', check:'checkmark', payment:'creditcard' };
+  var ICON_MAP = { brand:'trophy', brandMark:'trophy', evaluation:'clipboard', visit:'mapPin', sales:'documentText', mission:'checklist', monthly:'target', streak:'flame', xp:'bolt', check:'checkmark', payment:'creditcard' };
   function gameIcon(key,size){ var name=ICON_MAP[key]||key; return (typeof AppIcons!=='undefined' && AppIcons.render) ? AppIcons.render(name,{size:size||18}) : ''; }
   function missionIcon(type){ if(type==='evaluation') return gameIcon('evaluation',18); if(type==='customerVisit') return gameIcon('visit',18); if(type==='invoice') return gameIcon('sales',18); return gameIcon('mission',16); }
 

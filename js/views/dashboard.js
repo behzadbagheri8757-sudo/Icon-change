@@ -91,12 +91,12 @@
      come from calculateAllCustomerActions() as-is. This function only
      looks up the customer's name (read-only) and renders the existing
      dashboard-block/ledger-row markup used elsewhere on this page. */
-  function todaysActionsHtml() {
+  function todaysActionsHtml(signalsCache) {
     // Prefer unified queue; fall back to legacy customer-only actions.
     let items = [];
     try {
       if (typeof calculateAllActions === 'function') {
-        items = (calculateAllActions() || []).filter(function (a) {
+        items = (calculateAllActions(signalsCache) || []).filter(function (a) {
           return a && a.actionType !== 'no_action';
         });
       } else if (typeof calculateAllCustomerActions === 'function') {
@@ -390,9 +390,24 @@
   }
 
   async function renderInto(root, isStale) {
+    // Explicit per-render signals cache (Dashboard-only; created fresh on
+    // every call, never module/global scoped, discarded once this render
+    // finishes). Computes extractCustomerSignals(cid) once per active
+    // customer and threads that same result into both the Watch reconcile
+    // path and the Action/Priority/Risk path below, so extractCustomerSignals
+    // no longer runs twice per customer per render.
+    const allSignals = {};
+    if (typeof extractCustomerSignals === 'function' && typeof data !== 'undefined' && Array.isArray(data.customers)) {
+      const activeCustomersForSignals = data.customers.filter(function (c) { return c && c.active !== false; });
+      for (let si = 0; si < activeCustomersForSignals.length; si++) {
+        const scid = activeCustomersForSignals[si].id;
+        try { allSignals[scid] = extractCustomerSignals(scid) || []; } catch (eSig) { allSignals[scid] = []; }
+      }
+    }
+
     // Lifecycle reconcile before painting Watch summary (additive; fail-open)
     if (typeof reconcileWatchLifecycle === 'function') {
-      try { await reconcileWatchLifecycle(); } catch (eRec) { console.warn('watch lifecycle reconcile failed', eRec); }
+      try { await reconcileWatchLifecycle(undefined, allSignals); } catch (eRec) { console.warn('watch lifecycle reconcile failed', eRec); }
     }
     const metrics = typeof commandCenterMetrics === 'function' ? commandCenterMetrics(new Date()) : { mtdSales: globalTotals().monthSales, mtdProfit: 0, salesDeltaPct: null, profitDeltaPct: null };
     const g = globalTotals();
@@ -405,7 +420,7 @@
          C. Quick Actions — tools (de-emphasized)
          D. Recent Activity — invoices + visits (one activity surface)
          Data sources, helpers, IDs, and event bindings are unchanged. */
-    const focusActions = todaysActionsHtml();
+    const focusActions = todaysActionsHtml(allSignals);
     const activityInvoices = recentInvoicesHtml();
     const activityVisits = recentVisitsHtml();
     const activityBody = activityInvoices + activityVisits;
