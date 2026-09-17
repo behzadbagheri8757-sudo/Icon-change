@@ -2215,11 +2215,25 @@ function openInvoiceForm(cid, editInv){
     return { total, pct, negative: total < 0 };
   }
 
+  function lineEmptyHtml(r, idx){
+    return `
+      <div class="inv-line inv-line-empty" data-row="${idx}" role="button" tabindex="0" aria-label="افزودن کالا به قلم ${toman(idx+1)}">
+        <div class="inv-line-main">
+          <span class="inv-line-index">${toman(idx+1)}</span>
+          <span class="inv-line-name">+ افزودن کالا</span>
+          <span class="inv-line-chevron" aria-hidden="true">‹</span>
+        </div>
+      </div>`;
+  }
+
   function lineCollapsedHtml(r, idx){
     const prod = data.products.find(p=>p.id===r.productId);
-    if(!prod) return '';
+    if(!prod) return lineEmptyHtml(r, idx);
     const total = (Number(r.qty)||0) * (Number(r.price)||0) - (Number(r.discount)||0);
     const profit = lineProfitValue(idx);
+    const profitHtml = Number.isFinite(profit.total) && profit.total !== 0
+      ? `<span class="inv-line-collapsed-profit" data-profit-id="${idx}">سود: <span class="inv-profit-private">${profit.negative?'−':''}${toman(Math.abs(profit.total))} ت</span></span>`
+      : '';
     const flash = flashRowIndex === idx ? ' line-flash' : '';
     return `
       <div class="inv-line inv-line-collapsed${flash}" data-row="${idx}" role="button" tabindex="0" aria-label="ویرایش قلم ${toman(idx+1)}">
@@ -2231,11 +2245,12 @@ function openInvoiceForm(cid, editInv){
               <span class="inv-line-amount">${toman(total)} ت</span>
             </div>
             <div class="inv-line-collapsed-bottom">
-              <span>${toman(r.qty)} × ${toman(r.price)} ت</span>
-              <span class="inv-line-collapsed-profit" data-profit-id="${idx}">سود: <span class="inv-profit-private">${profit.negative?'−':''}${toman(Math.abs(profit.total))} ت</span></span>
+              <span class="inv-line-collapsed-qty">${toman(r.qty)} × ${toman(r.price)} ت</span>
+              ${profitHtml}
             </div>
           </div>
           <span class="inv-line-chevron" aria-hidden="true">‹</span>
+          <button type="button" class="inv-line-del" data-del="${idx}" aria-label="حذف قلم">×</button>
         </div>
       </div>`;
   }
@@ -2250,7 +2265,10 @@ function openInvoiceForm(cid, editInv){
       <div class="inv-line inv-line-editing" data-row="${idx}">
         <div class="inv-line-edit-head">
           <span>قلم ${toman(idx+1)}</span>
-          <button type="button" class="inv-line-close" data-line-close="${idx}" aria-label="بستن ویرایش">×</button>
+          <div class="inv-line-edit-head-actions">
+            <button type="button" class="inv-line-delete" data-del="${idx}" aria-label="حذف قلم">×</button>
+            <button type="button" class="inv-line-commit" data-line-commit="${idx}" aria-label="ثبت قلم">✓</button>
+          </div>
         </div>
         <div class="inv-line-product-wrap">
           <label>نام کالا</label>
@@ -2281,13 +2299,7 @@ function openInvoiceForm(cid, editInv){
         </div>
         <button type="button" class="inv-price-info-btn inv-edit-price-info" data-row="${idx}" aria-expanded="false">اطلاعات قیمت</button>
         <div class="row-info" data-row="${idx}">${rowInfoHtml(idx)}</div>
-        <div class="inv-line-edit-actions">
-          <button type="button" class="inv-line-delete" data-del="${idx}">حذف</button>
-          <div>
-            <button type="button" class="inv-line-cancel" data-line-cancel="${idx}">انصراف</button>
-            <button type="button" class="inv-line-commit" data-line-commit="${idx}">✓ ثبت قلم</button>
-          </div>
-        </div>
+
       </div>`;
   }
 
@@ -2340,22 +2352,51 @@ function openInvoiceForm(cid, editInv){
     const paid = cashPaid+cardPaid+transferPaid+checkAmount;
     const newBalance = prevBalance + total - paid;
     const profit = invoiceProfitEstimate();
-    const profitColor = profit<0 ? 'var(--rust)' : 'var(--olive-dark)';
-    const remainCls = newBalance>0 ? 'accent-rust' : 'accent-olive';
+    const remainCls = newBalance>0 ? 'is-danger' : 'is-success';
+    const discountRow = discountAmount!==0
+      ? `<div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label">تخفیف</span><span class="vg-row-value is-muted">${toman(discountAmount)} ت</span></div>`
+      : '';
     document.getElementById('calc-summary').innerHTML = `
-      <div class="ledger-row inv-sum-tertiary"><span class="name">مانده قبلی مشتری</span><span class="filler"></span><span class="amount">${toman(prevBalance)} ت</span></div>
-      <div class="ledger-row inv-sum-secondary"><span class="name">جمع اقلام</span><span class="filler"></span><span class="amount">${toman(subtotal)} ت</span></div>
-      <div class="ledger-row inv-sum-tertiary"><span class="name">تخفیف کلی فاکتور${discountType==='percent'?` (${toman(discount)}٪)`:''}</span><span class="filler"></span><span class="amount">${toman(discountAmount)} ت</span></div>
-      <div class="ledger-row inv-total-row inv-sum-primary"><span class="name">جمع این فاکتور</span><span class="filler"></span><span class="amount">${toman(total)} ت</span></div>
-      <div class="ledger-row inv-sum-secondary"><span class="name">جمع دریافتی</span><span class="filler"></span><span class="amount">${toman(paid)} ت</span></div>
-      <div class="ledger-row inv-remain-row inv-sum-primary"><span class="name ${remainCls}">مانده جدید</span><span class="filler"></span><span class="amount ${remainCls}">${toman(Math.abs(newBalance))} ت ${balanceStatusWord(newBalance)}</span></div>
-      <div class="ledger-row inv-sum-profit inv-sum-tertiary">
-        <span class="name">سود این فاکتور (بر اساس FIFO)</span><span class="filler"></span>
-        <span class="amount" style="color:${profitColor}">${profit<0?'−':''}${toman(Math.abs(profit))} ت</span>
-      </div>
+      <div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label">اقلام</span><span class="vg-row-value">${toman(subtotal)} ت</span></div>
+      ${discountRow}
+      <div class="vg-row vg-row-between total-row"><span class="vg-row-label" style="font-weight:700;color:var(--vg-color-text);">جمع فاکتور</span><span class="vg-row-value">${toman(total)} ت</span></div>
+      <div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label">مانده قبلی</span><span class="vg-row-value">${toman(Math.abs(prevBalance))} ت</span></div>
+      <div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label ${remainCls}">مانده جدید</span><span class="vg-row-value ${remainCls}">${toman(Math.abs(newBalance))} ت ${balanceStatusWord(newBalance)}</span></div>
+      <div class="vg-row vg-row-between vg-row-compact profit-row"><span class="vg-row-label">سود (FIFO)</span><span class="vg-row-value">${profit<0?'−':''}${toman(Math.abs(profit))} ت</span></div>
     `;
-    const sticky = document.getElementById('inv-sticky-total');
-    if(sticky) sticky.textContent = 'جمع فاکتور: ' + toman(total) + ' ت';
+    const sticky = document.getElementById('inv-sticky-total-value');
+    if(sticky) sticky.textContent = toman(total) + ' ت';
+  }
+
+  function invoiceFormSnapshot(){
+    let date = invoiceInitialDate;
+    try{ const el=document.getElementById('f-date'); if(el && el.value) date=el.value; }catch(e){}
+    return JSON.stringify({
+      date,
+      rows: rows.map(r=>({productId:r.productId||'',qty:Number(r.qty)||0,price:Number(r.price)||0,discount:Number(r.discount)||0})),
+      cashPaid:Number(cashPaid)||0,
+      cardPaid:Number(cardPaid)||0,
+      transferPaid:Number(transferPaid)||0,
+      checkAmount:Number(checkAmount)||0,
+      discount:Number(discount)||0,
+      discountType:discountType||'fixed'
+    });
+  }
+  const invoiceInitialSnapshot = JSON.stringify({
+    date: invoiceInitialDate,
+    rows: rows.map(r=>({productId:r.productId||'',qty:Number(r.qty)||0,price:Number(r.price)||0,discount:Number(r.discount)||0})),
+    cashPaid:Number(cashPaid)||0, cardPaid:Number(cardPaid)||0, transferPaid:Number(transferPaid)||0,
+    checkAmount:Number(checkAmount)||0, discount:Number(discount)||0, discountType:discountType||'fixed'
+  });
+  function invoiceHasUnsavedData(){ return invoiceFormSnapshot() !== invoiceInitialSnapshot; }
+  async function tryCloseInvoiceSheet(){
+    if(invoiceHasUnsavedData()){
+      const ok = await appConfirm('فاکتور ذخیره نشده است. آیا می‌خواهید از فاکتور خارج شوید؟','خروج بدون ذخیره','ادامه ویرایش');
+      if(!ok) return;
+    }
+    if(typeof clearNavigationGuard==='function') clearNavigationGuard();
+    if(typeof clearModalCloseGuard==='function') clearModalCloseGuard();
+    closeModal();
   }
 
   function renderSheet(){
@@ -2382,6 +2423,7 @@ function openInvoiceForm(cid, editInv){
       ? (cust.ownerName ? (esc(cust.name)+' / '+esc(cust.ownerName)) : esc(cust.name||'—'))
       : '—';
     const custInitial = esc((cust && cust.name ? cust.name.trim().charAt(0) : 'م') || 'م');
+  const invoiceInitialDate = editInv ? editInv.date : todayISO();
 
     openSheet(`
       <div class="inv-sheet-v2">
@@ -2397,59 +2439,52 @@ function openInvoiceForm(cid, editInv){
         <div class="inv-body has-sticky-total">
           ${editInv?`<div class="inv-edit-notice">با ذخیره‌ی این ویرایش، موجودی انبار و مانده حساب مشتری به‌طور خودکار اصلاح می‌شود.</div>`:''}
 
-          <div class="inv-customer-context">
-            <div class="inv-customer-avatar" aria-hidden="true">${custInitial}</div>
-            <div class="inv-customer-info">
-              <div class="inv-customer-name">${custDisplay}</div>
-              ${cust&&cust.phone?`<div class="inv-customer-meta">${esc(cust.phone)}</div>`:''}
+          <div class="vg-section inv-vg-section">
+            <div class="vg-section-card inv-customer-card">
+              <div class="vg-row inv-customer-row">
+                <div class="inv-customer-avatar" aria-hidden="true">${custInitial}</div>
+                <div class="inv-customer-info">
+                  <div class="inv-customer-name">${custDisplay}</div>
+                  <div class="inv-customer-meta">
+                    ${cust&&cust.phone?`<span>${esc(cust.phone)}</span><span class="inv-customer-meta-sep">·</span>`:''}
+                    <span class="inv-customer-date">${shamsiDateInputHTML('f-date', invoiceInitialDate)}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div class="field inv-date-field"><label>تاریخ فاکتور</label>${shamsiDateInputHTML('f-date', editInv?editInv.date:todayISO())}</div>
-
-          <div class="inv-section inv-items-section">
-            <div class="inv-items-card-head">
-              <span class="inv-items-card-label">اقلام فاکتور</span>
-            </div>
-            <div class="inv-items-card">
+          <div class="vg-section inv-vg-section inv-items-section">
+            <h2 class="vg-section-title">اقلام</h2>
+            <div class="vg-section-card inv-items-card">
               <div id="items-wrap" class="inv-items">${itemsHtml()}</div>
-              <button type="button" class="inv-add-line" id="add-row"><span class="inv-add-line-icon" aria-hidden="true">+</span> افزودن قلم جدید</button>
+              <button type="button" class="inv-add-line" id="add-row" ${rows.some(r=>!r.productId)?'hidden':''}><span class="inv-add-line-icon" aria-hidden="true">+</span> افزودن کالا</button>
             </div>
           </div>
 
           ${nprHtmlInv}
 
-          <div class="inv-section inv-payment-section">
-            <div class="inv-payment-heading">
-              <h2 class="inv-section-title">دریافتی همراه این فاکتور <span class="inv-section-title-optional">(اختیاری)</span></h2>
-              <span class="inv-payment-total" id="inv-payment-total">${toman(cashPaid+cardPaid+transferPaid+checkAmount)} ت</span>
-            </div>
-
-            <div class="inv-payment-actions" role="group" aria-label="روش دریافت">
-              <button type="button" class="inv-payment-action" data-payment-method="cash" aria-expanded="false">
-                <span class="inv-payment-action-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18M7 14h.01M11 14h3"/></svg>
-                </span>
-                <span>نقد</span>
-              </button>
-              <button type="button" class="inv-payment-action" data-payment-method="card" aria-expanded="false">
-                <span class="inv-payment-action-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
-                </span>
-                <span>کارت</span>
-              </button>
-              <button type="button" class="inv-payment-action" data-payment-method="transfer" aria-expanded="false">
-                <span class="inv-payment-action-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5M8 17h8"/></svg>
-                </span>
-                <span>بانکی</span>
-              </button>
-              <button type="button" class="inv-payment-action" data-payment-method="check" aria-expanded="false">
-                <span class="inv-payment-action-icon" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-                </span>
-                <span>چک</span>
-              </button>
+          <div class="vg-section inv-vg-section inv-payment-section">
+            <h2 class="vg-section-title">پرداخت</h2>
+            <div class="vg-section-card inv-payment-card">
+              <div class="inv-payment-row">
+                <span class="inv-payment-row-label">دریافت</span>
+                <div class="inv-payment-actions" role="group" aria-label="روش دریافت">
+                  <button type="button" class="inv-payment-action" data-payment-method="cash" aria-expanded="false"><span>نقد</span></button>
+                  <button type="button" class="inv-payment-action" data-payment-method="card" aria-expanded="false"><span>کارت</span></button>
+                  <button type="button" class="inv-payment-action" data-payment-method="transfer" aria-expanded="false"><span>بانکی</span></button>
+                  <button type="button" class="inv-payment-action" data-payment-method="check" aria-expanded="false"><span>چک</span></button>
+                </div>
+                <span class="inv-payment-row-value" id="inv-payment-total">${toman(cashPaid+cardPaid+transferPaid+checkAmount)} ت</span>
+              </div>
+              <div class="inv-payment-row inv-discount-row">
+                <span class="inv-payment-row-label">تخفیف</span>
+                <input id="f-discount" type="text" inputmode="decimal" value="${discount||''}" placeholder="۰" aria-label="مبلغ تخفیف">
+                <select id="f-discount-type" aria-label="نوع تخفیف">
+                  <option value="fixed" ${discountType==='fixed'?'selected':''}>مبلغ</option>
+                  <option value="percent" ${discountType==='percent'?'selected':''}>درصد</option>
+                </select>
+              </div>
             </div>
 
             <div class="inv-payment-backdrop" data-payment-backdrop hidden></div>
@@ -2459,19 +2494,16 @@ function openInvoiceForm(cid, editInv){
               <label for="f-cash">مبلغ نقدی</label>
               <input id="f-cash" type="text" inputmode="decimal" value="${cashPaid||''}" placeholder="مبلغ را وارد کنید">
             </div>
-
             <div class="inv-payment-panel" data-payment-panel="card" hidden>
               <div class="inv-payment-panel-head"><span>دریافت با کارت</span><button type="button" class="inv-payment-close" data-payment-close="card" aria-label="بستن">×</button></div>
               <label for="f-card">مبلغ کارت</label>
               <input id="f-card" type="text" inputmode="decimal" value="${cardPaid||''}" placeholder="مبلغ را وارد کنید">
             </div>
-
             <div class="inv-payment-panel" data-payment-panel="transfer" hidden>
               <div class="inv-payment-panel-head"><span>انتقال بانکی</span><button type="button" class="inv-payment-close" data-payment-close="transfer" aria-label="بستن">×</button></div>
               <label for="f-transfer">مبلغ انتقال</label>
               <input id="f-transfer" type="text" inputmode="decimal" value="${transferPaid||''}" placeholder="مبلغ را وارد کنید">
             </div>
-
             <div class="inv-payment-panel" data-payment-panel="check" hidden>
               <div class="inv-payment-panel-head"><span>دریافت چک</span><button type="button" class="inv-payment-close" data-payment-close="check" aria-label="بستن">×</button></div>
               <label for="f-check">مبلغ چک</label>
@@ -2481,23 +2513,16 @@ function openInvoiceForm(cid, editInv){
                 ${shamsiDateInputHTML('f-check-due', checkDue)}
               </div>
             </div>
+          </div>
 
-            <div class="inv-discount-block">
-              <span class="inv-discount-label">تخفیف</span>
-              <select id="f-discount-type" aria-label="نوع تخفیف">
-                <option value="fixed" ${discountType==='fixed'?'selected':''}>مبلغ</option>
-                <option value="percent" ${discountType==='percent'?'selected':''}>درصد</option>
-              </select>
-              <input id="f-discount" type="text" inputmode="decimal" value="${discount||''}" placeholder="۰">
+          <div class="vg-section inv-vg-section inv-summary-section">
+            <h2 class="vg-section-title">خلاصه</h2>
+            <div class="vg-section-card inv-summary-card">
+              <div id="calc-summary"></div>
             </div>
           </div>
-
-          <div class="inv-summary-section">
-            <h2 class="inv-section-title">جمع‌بندی فاکتور</h2>
-            <div id="calc-summary"></div>
-          </div>
         </div>
-        <div class="inv-sticky-total" id="inv-sticky-total" aria-live="polite">جمع فاکتور: ${toman(invoiceTotal())} ت</div>
+        <div class="inv-sticky-total" id="inv-sticky-total" aria-live="polite"><span class="inv-sticky-total-label">جمع فاکتور</span><span class="inv-sticky-total-value" id="inv-sticky-total-value">${toman(invoiceTotal())} ت</span><button type="button" class="btn inv-sticky-total-submit" id="inv-sticky-submit">ثبت</button></div>
       </div>
     `);
     // Presentation-only: the sheet's generic close-x (from openSheet) is
@@ -2514,31 +2539,43 @@ function openInvoiceForm(cid, editInv){
       const genericClose = document.getElementById('closeX');
       if(genericClose) genericClose.style.display = 'none';
       const cancelBtn = document.getElementById('inv-cancel');
-      if(cancelBtn) cancelBtn.addEventListener('click', closeModal);
+      if(cancelBtn) cancelBtn.addEventListener('click', tryCloseInvoiceSheet);
+      const stickySubmit = document.getElementById('inv-sticky-submit');
+      if(stickySubmit) stickySubmit.addEventListener('click', function(){
+        const saveBtn = document.getElementById('save-invoice');
+        if(saveBtn) saveBtn.click();
+      });
     })();
     if(_prevScrollTop){
       const _newScrollEl = document.querySelector('.inv-body') || document.querySelector('.sheet');
       if(_newScrollEl) _newScrollEl.scrollTop = _prevScrollTop;
     }
+    if(typeof setNavigationGuard==='function') setNavigationGuard(function(){
+      if(!invoiceHasUnsavedData()) return true;
+      return appConfirm('فاکتور ذخیره نشده است. آیا می‌خواهید از فاکتور خارج شوید؟','خروج بدون ذخیره','ادامه ویرایش');
+    });
+    if(typeof setModalCloseGuard==='function') setModalCloseGuard(tryCloseInvoiceSheet);
     updateSummary();
-    // iOS keyboard-safe sticky total: visualViewport shrinks when the keyboard opens.
+    // iOS keyboard-safe sticky total: bind the viewport listeners once so repeated
+    // renderSheet() calls do not accumulate stale listeners for removed bars.
     (function bindInvoiceStickyViewport(){
-      const sticky = document.getElementById('inv-sticky-total');
-      if(!sticky || sticky._vvBound) return;
-      sticky._vvBound = true;
-      const sync = function(){
-        const vv = window.visualViewport;
-        if(!vv){ sticky.style.bottom = 'env(safe-area-inset-bottom,0px)'; return; }
-        const keyboardOffset = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop||0));
-        sticky.style.bottom = keyboardOffset + 'px';
-      };
-      sticky._vvSync = sync;
-      if(window.visualViewport){
-        window.visualViewport.addEventListener('resize', sync);
-        window.visualViewport.addEventListener('scroll', sync);
+      if(!window.__invoiceStickyViewportBinding){
+        const sync = function(){
+          const sticky = document.getElementById('inv-sticky-total');
+          if(!sticky) return;
+          const vv = window.visualViewport;
+          if(!vv){ sticky.style.bottom = 'env(safe-area-inset-bottom,0px)'; return; }
+          const keyboardOffset = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop||0));
+          sticky.style.bottom = keyboardOffset + 'px';
+        };
+        window.__invoiceStickyViewportBinding = { sync };
+        if(window.visualViewport){
+          window.visualViewport.addEventListener('resize', sync);
+          window.visualViewport.addEventListener('scroll', sync);
+        }
+        window.addEventListener('resize', sync);
       }
-      window.addEventListener('resize', sync);
-      sync();
+      window.__invoiceStickyViewportBinding.sync();
     })();
     // No-Purchase Reason chips (re-bound after every renderSheet rebuild)
     if(typeof bindNoPurchasePrompt === 'function') bindNoPurchasePrompt(cid);
@@ -2615,6 +2652,12 @@ function openInvoiceForm(cid, editInv){
           }
           return;
         }
+        const empty = e.target.closest('.inv-line-empty[data-row]');
+        if(empty){
+          e.preventDefault(); e.stopPropagation();
+          beginEditingLine(Number(empty.getAttribute('data-row')));
+          return;
+        }
         const collapsed = e.target.closest('.inv-line-collapsed[data-row]');
         if(collapsed){
           const idx = Number(collapsed.getAttribute('data-row'));
@@ -2622,6 +2665,16 @@ function openInvoiceForm(cid, editInv){
         }
       });
       itemsWrap.addEventListener('keydown', function(e){
+        if(e.key==='Enter' && editingRowIndex !== null && e.target.closest('.inv-line-editing') && !e.target.closest('.prod-drop-search')){
+          e.preventDefault();
+          if(!commitEditingLine(editingRowIndex)) showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
+          return;
+        }
+        if((e.key==='Enter' || e.key===' ') && e.target.closest('.inv-line-empty[data-row]')){
+          e.preventDefault();
+          beginEditingLine(Number(e.target.closest('.inv-line-empty').getAttribute('data-row')));
+          return;
+        }
         if((e.key==='Enter' || e.key===' ') && e.target.closest('.inv-line-collapsed[data-row]')){
           e.preventDefault();
           beginEditingLine(Number(e.target.closest('.inv-line-collapsed').getAttribute('data-row')));
@@ -2716,12 +2769,14 @@ function openInvoiceForm(cid, editInv){
       const priceEl = document.querySelector(`.row-price[data-row="${idx}"]`);
       if(priceEl){
         priceEl.value = (typeof formatLiveAmount==='function')
-          ? formatLiveAmount(String(rows[idx].price))
-          : rows[idx].price;
+          ? enToFaDigits(formatLiveAmount(String(rows[idx].price))).replace(/,/g,'٬')
+          : enToFaDigits(String(rows[idx].price));
       }
       closeAllProductDrops();
       updateRowInfo(idx);
       updateSummary();
+      const addRowBtn = document.getElementById('add-row');
+      if(addRowBtn && !rows.some(r=>!r.productId)) addRowBtn.hidden = false;
       // Hide No-Purchase prompt for products now in the basket
       try{
         const card = document.getElementById('npr-card');
@@ -3046,6 +3101,8 @@ function openInvoiceForm(cid, editInv){
           btn.disabled = false;
           return;
         }
+        if(typeof clearNavigationGuard==='function') clearNavigationGuard();
+        if(typeof clearModalCloseGuard==='function') clearModalCloseGuard();
         closeModal(); openInvoiceDetail(editInv.id, cid); render();
         showToast('فاکتور ویرایش شد؛ موجودی و حساب مشتری اصلاح شد');
         return;
@@ -3093,6 +3150,8 @@ function openInvoiceForm(cid, editInv){
           console.warn('Game hook failed:', e);
         }
       }
+      if(typeof clearNavigationGuard==='function') clearNavigationGuard();
+      if(typeof clearModalCloseGuard==='function') clearModalCloseGuard();
       render(); showToast('فاکتور ثبت شد');
       openSheet(`
         <h3>فاکتور ثبت و توی حساب مشتری ذخیره شد</h3>

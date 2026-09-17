@@ -1,5 +1,5 @@
 /* router.js — pure hash router for SPA shell (Phase 2).
-   No pushState / replaceState. Uses location.hash + hashchange only.
+   Uses location.hash + hashchange; guarded cancellations may restore the hash via replaceState.
    Does not touch business logic, IndexedDB, or MPA pages.
 */
 'use strict';
@@ -9,6 +9,8 @@
   let currentCleanup = null;
   let started = false;
   let resolving = false;
+  let previousHash = location.hash || '#/';
+  let guardResolutionInFlight = false;
   const scrollPositions = new Map();
 
   function normalizePath(raw) {
@@ -68,7 +70,26 @@
     } catch (e) { /* ignore */ }
   }
 
-  function resolve() {
+  function resolve(skipGuard) {
+    if (resolving) return;
+    if(!skipGuard && typeof global.canLeaveCurrentContext === 'function' && typeof global.__navigationGuard === 'function' && !guardResolutionInFlight){
+      guardResolutionInFlight = true;
+      global.canLeaveCurrentContext().then(function(ok){
+        guardResolutionInFlight = false;
+        if(!ok){
+          try { history.replaceState(null, '', previousHash); } catch(e) { location.hash = previousHash; }
+          return;
+        }
+        global.__navigationGuard = null;
+        previousHash = location.hash || '#/';
+        resolve(true);
+      }).catch(function(){
+        guardResolutionInFlight = false;
+        previousHash = location.hash || '#/';
+        resolve(true);
+      });
+      return;
+    }
     if (resolving) return;
     resolving = true;
     try {
@@ -175,14 +196,39 @@
     window.addEventListener('hashchange', function () {
       if (suppressNextHashchangeOnce) {
         suppressNextHashchangeOnce = false;
+        previousHash = location.hash || '#/';
         return;
       }
-      resolve();
+      const newHash = location.hash || '#/';
+      if(newHash === previousHash){ resolve(); return; }
+      if(typeof global.canLeaveCurrentContext === 'function' && typeof global.__navigationGuard === 'function'){
+        if(guardResolutionInFlight) return;
+        guardResolutionInFlight = true;
+        global.canLeaveCurrentContext().then(function(ok){
+          guardResolutionInFlight = false;
+          if(ok){
+            previousHash = newHash;
+            global.__navigationGuard = null;
+            resolve(true);
+          }else{
+            try { history.replaceState(null, '', previousHash); } catch(e) { location.hash = previousHash; }
+          }
+        }).catch(function(){
+          guardResolutionInFlight = false;
+          previousHash = newHash;
+          global.__navigationGuard = null;
+          resolve(true);
+        });
+        return;
+      }
+      previousHash = newHash;
+      resolve(true);
     });
     // Initial: if no hash, set default without firing duplicate if possible
     if (!location.hash || location.hash === '#') {
       suppressNextHashchangeOnce = true;
       location.hash = '/';
+      previousHash = '#/';
       // Safety net: if this browser never fires hashchange for the
       // assignment above, the flag must not linger and wrongly swallow the
       // user's first *real* navigation later. Any hashchange task queued by

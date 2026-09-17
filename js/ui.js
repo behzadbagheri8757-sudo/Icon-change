@@ -706,8 +706,9 @@ let _modalHideTimer = null;
 /* In-app confirmation layer. It sits above an existing sheet when needed, so
    destructive actions can be confirmed without replacing/dismissing an
    in-flight form or changing its state. */
-function appConfirm(message, confirmLabel){
+function appConfirm(message, confirmLabel, cancelLabel){
   confirmLabel = confirmLabel || 'تأیید';
+  cancelLabel = cancelLabel || 'انصراف';
   return new Promise(function(resolve){
     const root = document.getElementById('modalRoot');
     if(!root){ resolve(false); return; }
@@ -715,7 +716,7 @@ function appConfirm(message, confirmLabel){
     layer.className = 'confirm-overlay';
     layer.setAttribute('role','alertdialog');
     layer.setAttribute('aria-modal','true');
-    layer.innerHTML = '<div class="confirm-card"><div class="confirm-message"></div><div class="btn-row"><button type="button" class="btn secondary" data-confirm-cancel>انصراف</button><button type="button" class="btn danger" data-confirm-ok>'+esc(confirmLabel)+'</button></div></div>';
+    layer.innerHTML = '<div class="confirm-card"><div class="confirm-message"></div><div class="btn-row"><button type="button" class="btn secondary" data-confirm-cancel>'+esc(cancelLabel)+'</button><button type="button" class="btn danger" data-confirm-ok>'+esc(confirmLabel)+'</button></div></div>';
     layer.querySelector('.confirm-message').textContent = String(message || 'ادامه می‌دهید؟');
     root.appendChild(layer);
     let settled = false;
@@ -736,7 +737,39 @@ function appConfirm(message, confirmLabel){
 }
 
 
+/* Optional navigation guard for in-progress forms. */
+window.__navigationGuard = null;
+function setNavigationGuard(fn){
+  window.__navigationGuard = (typeof fn === 'function') ? fn : null;
+}
+function clearNavigationGuard(){
+  window.__navigationGuard = null;
+}
+function canLeaveCurrentContext(){
+  const guard = window.__navigationGuard;
+  if(typeof guard !== 'function') return Promise.resolve(true);
+  try{
+    const result = guard();
+    if(result && typeof result.then === 'function') return result.then(Boolean).catch(function(){ return true; });
+    return Promise.resolve(Boolean(result));
+  }catch(e){
+    return Promise.resolve(true);
+  }
+}
+
+/* Optional modal-dismiss guard used by in-progress full-screen forms. */
+let __modalCloseGuard = null;
+function setModalCloseGuard(fn){ __modalCloseGuard = (typeof fn === 'function') ? fn : null; }
+function clearModalCloseGuard(){ __modalCloseGuard = null; }
+function requestModalClose(){
+  const guard = __modalCloseGuard;
+  if(typeof guard !== 'function') { closeModal(); return; }
+  try { Promise.resolve(guard()).catch(function(){ return false; }); } catch(e) {}
+}
+
+
 function closeModal(){
+  __modalCloseGuard = null;
   const overlay = document.getElementById('overlay');
   const root = document.getElementById('modalRoot');
   if(!overlay){ if(root) root.innerHTML=''; return; }
@@ -815,10 +848,10 @@ function openSheet(html){
     overlay.classList.add('show');
     sheet.classList.add('show');
   });
-  overlay.addEventListener('click', (e)=>{ if(e.target.id==='overlay') closeModal(); });
+  overlay.addEventListener('click', (e)=>{ if(e.target.id==='overlay') requestModalClose(); });
   overlay.addEventListener('touchmove', function(e){
     if(!e.target.closest('.sheet')) e.preventDefault();
   }, {passive:false});
-  document.getElementById('closeX').addEventListener('click', closeModal);
-  bindSheetDragToDismiss(sheet, sheet.querySelector('.sheet-handle'), closeModal);
+  document.getElementById('closeX').addEventListener('click', requestModalClose);
+  bindSheetDragToDismiss(sheet, sheet.querySelector('.sheet-handle'), requestModalClose);
 }
