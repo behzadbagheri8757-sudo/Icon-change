@@ -4262,6 +4262,135 @@ button#save-tx{
   color:var(--vg-color-text-muted);
 }
 
+/* Invoice V6 — Compact Row + Inline Edit refinement */
+.inv-items-card{
+  padding:0;
+}
+.inv-line-collapsed{
+  min-height:64px;
+  padding:10px 14px!important;
+  cursor:pointer;
+  background:#fff;
+  transition:background .15s ease;
+  border-bottom:1px solid rgba(15,23,42,.06)!important;
+}
+.inv-line-collapsed:active{background:#F7F8FA!important;}
+.inv-line-collapsed .inv-line-main{
+  width:100%;
+  min-width:0;
+}
+.inv-line-index{
+  flex:0 0 auto;
+  width:24px;height:24px;
+  border-radius:7px;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(31,41,55,.06);
+  color:#667085;
+  font-size:.72rem;
+  font-weight:700;
+}
+.inv-line-collapsed-body{min-width:0;flex:1 1 auto;}
+.inv-line-collapsed-top,
+.inv-line-collapsed-bottom{
+  display:flex;align-items:baseline;justify-content:space-between;
+  gap:8px;min-width:0;
+}
+.inv-line-collapsed-top{margin-bottom:2px;}
+.inv-line-collapsed-name{
+  min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:.93rem;font-weight:600;color:#1F2937;
+}
+.inv-line-collapsed .inv-line-amount{
+  flex:0 0 auto;font-size:.92rem;font-weight:700;color:#1F2937;
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.inv-line-collapsed-bottom{font-size:.74rem;color:#667085;}
+.inv-line-collapsed-profit{white-space:nowrap;}
+.inv-line-collapsed-profit .inv-profit-private{filter:blur(4.5px);transition:filter .15s ease;}
+.inv-line-collapsed-profit:active .inv-profit-private{filter:none;}
+.inv-line-collapsed .inv-line-chevron{
+  flex:0 0 auto;color:#667085;opacity:.72;font-size:1rem;line-height:1;
+  width:16px;text-align:center;
+}
+.inv-line-editing{
+  display:block;
+  padding:12px 14px 14px!important;
+  background:#F7F8FA!important;
+  border-bottom:1px solid rgba(15,23,42,.07)!important;
+}
+.inv-line-edit-head{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:10px;
+  font-size:.72rem;font-weight:600;color:#667085;
+}
+.inv-line-close{
+  width:28px;height:28px;border:0;border-radius:50%;
+  background:rgba(31,41,55,.06);color:#667085;font-size:1rem;
+}
+.inv-line-product-wrap{margin-bottom:10px;}
+.inv-line-product-wrap label,
+.inv-edit-field label{
+  display:block;margin:0 0 5px;
+  font-size:.7rem;font-weight:500;color:#667085;
+}
+.inv-line-editing .inv-line-name{
+  width:100%;min-height:44px;padding:10px 12px!important;
+  border:1px solid rgba(31,41,55,.09)!important;
+  border-radius:999px!important;background:#fff!important;
+  color:#1F2937!important;font-size:.9rem;font-weight:600!important;
+  box-shadow:none!important;
+}
+.inv-line-edit-two-col{
+  display:grid;grid-template-columns:1fr 1.2fr;gap:8px;margin-bottom:10px;
+}
+.inv-edit-field{min-width:0;}
+.inv-edit-field .inv-mini-input{width:100%;min-height:44px;padding:9px 12px;text-align:start;border:1px solid rgba(31,41,55,.09);border-radius:999px;background:#fff;}
+.inv-edit-field .inv-mini-input-price{width:100%;}
+.edit-computed-row{
+  display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;
+}
+.edit-computed-row .compact-computed{
+  min-width:0;margin:0;padding:9px 11px;
+  display:flex;flex-direction:column;align-items:flex-start;gap:2px;
+  background:#fff;border:1px solid rgba(31,41,55,.07);border-radius:14px;
+}
+.edit-computed-row .edit-computed-value{font-size:.94rem;line-height:1.35;}
+.edit-computed-row .edit-computed-profit{font-size:.82rem;line-height:1.35;}
+.inv-edit-price-info{display:inline-flex!important;margin:0 0 7px!important;padding:0!important;font-size:.7rem!important;}
+.inv-line-editing .row-info{margin-top:0;}
+.inv-line-editing .row-info .inv-row-profit-line{display:none;}
+.inv-line-editing .row-info .inv-price-info-btn{display:none;}
+.inv-line-editing .row-info .inv-price-info-panel{margin-top:0;}
+.inv-line-edit-actions{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;
+}
+.inv-line-edit-actions>div{display:flex;gap:8px;}
+.inv-line-delete,.inv-line-cancel,.inv-line-commit{
+  min-height:44px;padding:8px 14px;border-radius:999px;font-family:inherit;font-size:.82rem;font-weight:600;cursor:pointer;
+}
+.inv-line-delete{border:0;background:transparent;color:#FA3946;}
+.inv-line-cancel{border:1px solid rgba(31,41,55,.08);background:#fff;color:#667085;}
+.inv-line-commit{border:1px solid #0070D2;background:#0070D2;color:#fff;font-weight:700;padding-inline:16px;}
+.line-flash{background:rgba(0,160,104,.08)!important;transition:background .15s ease;}
+
+/* Persistent total: mirrors the final invoice total, not the pre-discount subtotal. */
+.inv-sticky-total{
+  position:fixed;
+  left:0;right:0;
+  bottom:env(safe-area-inset-bottom,0px);
+  z-index:6;
+  min-height:46px;
+  display:flex;align-items:center;justify-content:center;
+  padding:8px 14px;
+  background:rgba(255,255,255,.92);
+  backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  border-top:1px solid var(--border);
+  color:#1F2937;font-size:.84rem;font-weight:700;
+}
+.inv-body.has-sticky-total{padding-bottom:calc(84px + env(safe-area-inset-bottom,0px));}
+.inv-sticky-total[hidden]{display:none!important;}
+
 /* 22 — Invoice product selector: compact plain (empty state already pill; selected is plain) */
 .inv-line:not(.inv-line-empty) .inv-line-name{
   font-size:.92rem;

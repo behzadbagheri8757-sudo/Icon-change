@@ -143,11 +143,6 @@ input[placeholder*="جستجو"]{
              padding-block 180ms cubic-bezier(.22,1,.36,1);
 }
 
-/* AppIcons are monochrome by default across all views. Only the active Bottom Nav item is brand-blue. */
-.app-icon{
-  color:#1C1C1E;
-}
-
 .bottom-nav-item .bn-ico{
   width:calc(26px - (1px * var(--bn-minimize-progress)));
   height:calc(26px - (1px * var(--bn-minimize-progress)));
@@ -188,10 +183,6 @@ input[placeholder*="جستجو"]{
 }
 
 .bottom-nav-item.active .bn-ico{
-  color:var(--vg-color-primary);
-}
-
-.bottom-nav-item.active .bn-ico .app-icon{
   color:var(--vg-color-primary);
 }
 
