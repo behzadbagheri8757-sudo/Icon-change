@@ -27,6 +27,7 @@
    scrollY 1:1 and reverses identically. Removed the now-duplicate "داشبورد"
    <h2> inside Dashboard's own content — the header already shows it as the
    page title since the brand-name/page-title fix) */
+/* CHANGED: v62 -> v63 (Invoice V6 Compact Row + Inline Edit refinement: compact line editor, auto-commit validation, keyboard-safe sticky total, and numeric UX; no financial logic changed.)
 /* CHANGED: v61 -> v62 (offline-shell fix only: css/shamsi-calendar.css and
    js/shamsi-calendar.js are loaded by index.html on every page load but were
    missing from PRECACHE_URLS, so a freshly-activated cache version had no
