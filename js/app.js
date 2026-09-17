@@ -970,10 +970,6 @@ function openAddTransaction(cid){
     return returnRows.filter(r=>r.productId===productId).reduce((s,r)=>s+(Number(r.qty)||0),0);
   }
 
-  function expectedReturnAmount(){
-    return returnRows.reduce((s,r)=>s+(Number(r.qty)||0)*(Number(r.price)||0),0);
-  }
-
   function returnItemsSectionHtml(){
     if(method !== 'return') return '';
     const invoices = customerInvoices(cid);
@@ -1025,10 +1021,6 @@ function openAddTransaction(cid){
   }
 
   function renderSheet(){
-    if(method==='return' && !amountStr){
-      const expected = expectedReturnAmount();
-      if(expected>0) amountStr = String(expected);
-    }
     openSheet(`
       <h3>ثبت تراکنش</h3>
       <div class="q-block">
@@ -1233,7 +1225,7 @@ function openEditStandalonePayment(cid, paymentId){
   });
   document.getElementById('ep-delete').addEventListener('click', async e=>{
     await withSubmitGuard(e.currentTarget, async()=>{
-      if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟','حذف دریافت'))) throw new Error('validation');
+      if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟'))) throw new Error('validation');
       const previousData=JSON.parse(JSON.stringify(data));
       try{
         data.payments=data.payments.filter(x=>x.id!==paymentId);
@@ -1710,6 +1702,7 @@ function openAddVisit(cid){
           }
           state.step = 'done';
           renderStage();
+          persistVisit(true);
           return;
         }
       });
@@ -1883,7 +1876,7 @@ function openCustomerDetail(cid){
       await withSubmitGuard(e.currentTarget, async()=>{
         const p=data.payments.find(x=>x.id===btn.dataset.deleteStandalonePayment && x.customerId===cid);
         if(!p || p.invoiceId || p.method==='return') return;
-        if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟','حذف دریافت'))) throw new Error('validation');
+        if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟'))) throw new Error('validation');
         const previousData=JSON.parse(JSON.stringify(data));
         try{ data.payments=data.payments.filter(x=>x.id!==p.id); await saveData(); }catch(err){ restoreDataInPlace(previousData); throw err; }
         if (typeof gameOnPaymentDeleted === 'function') {
@@ -1902,7 +1895,7 @@ function openCustomerDetail(cid){
     row.addEventListener('click', async ()=>{
       const chk = data.checks.find(x=>x.id===row.dataset.toggleCheck);
       if(!chk) return;
-      if(!(await appConfirm(chk.status === 'cleared' ? 'وضعیت این چک به «در جریان» برگردد؟' : 'این چک به‌عنوان «وصول‌شده» ثبت شود؟', chk.status === 'cleared' ? 'برگرداندن وضعیت' : 'ثبت وصول'))) return;
+      if(!(await appConfirm(chk.status === 'cleared' ? 'وضعیت این چک به «در جریان» برگردد؟' : 'این چک به‌عنوان «وصول‌شده» ثبت شود؟'))) return;
       const prev = chk.status;
       try{
         chk.status = chk.status==='cleared' ? 'pending' : 'cleared';
@@ -2019,7 +2012,7 @@ function openInvoiceDetail(invId, cid){
         showToast('این فاکتور دارای برگشت از فروش است و برای حفظ یکپارچگی موجودی قابل حذف نیست');
         throw new Error('validation');
       }
-      if(!(await appConfirm('با حذف این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟','حذف فاکتور'))) throw new Error('validation');
+      if(!(await appConfirm('با حذف این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟'))) throw new Error('validation');
       // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور —
       // تا اگر saveData() شکست بخورد، data در حافظه دقیقاً به حالت قبل از
       // حذف برگردد و با آخرین نسخه‌ی موفق در IndexedDB ناهماهنگ نماند.
@@ -2068,6 +2061,11 @@ function openInvoiceForm(cid, editInv){
   let rows = editInv
     ? editInv.items.map(it=>({productId:it.productId, qty:it.qty, price:it.price, discount:it.discount||0, buyPrice:it.buyPrice}))
     : [{productId:'', qty:1, price:0, discount:0}];
+  // Invoice V6 line editor: one row at a time is expanded. New invoices
+  // start with the required empty line open; existing invoices start compact.
+  let editingRowIndex = (!editInv && rows.length === 1 && !rows[0].productId) ? 0 : null;
+  let editingRowSnapshot = null;
+  let flashRowIndex = null;
   const cust = data.customers.find(c=>c.id===cid); // presentation only: Customer Context header
   const existingCheck = editInv ? data.checks.find(c=>c.invoiceId===editInv.id) : null;
   let cashPaid = editInv ? (editInv.cashPaid||0) : 0;
@@ -2134,20 +2132,46 @@ function openInvoiceForm(cid, editInv){
   function updateRowInfo(idx){
     const el = document.querySelector(`.row-info[data-row="${idx}"]`);
     if(el) el.innerHTML = rowInfoHtml(idx);
-    // Presentation-only: keep the line's top-row amount/chevron and the
-    // qty×rate sub-row in sync with whether a product is selected, without
-    // a full re-render (selectProduct/qty/price handlers call this directly).
     const r = rows[idx];
-    const prod = data.products.find(p=>p.id===r.productId);
-    const amountEl = document.querySelector(`.inv-line-amount[data-row="${idx}"]`);
-    const chevronEl = document.querySelector(`.inv-line-chevron[data-row="${idx}"]`);
-    const subEl = document.querySelector(`.inv-line-sub[data-row="${idx}"]`);
-    if(amountEl){
-      amountEl.style.display = prod ? '' : 'none';
-      if(prod) amountEl.textContent = toman((r.qty||0)*(r.price||0)) + ' ت';
+    if(!r) return;
+    const totalEl = document.querySelector(`[data-total-for="${idx}"]`);
+    if(totalEl) totalEl.textContent = toman((Number(r.qty)||0)*(Number(r.price)||0)-(Number(r.discount)||0)) + ' ت';
+  }
+
+  function lineIsValid(idx){
+    const r = rows[idx];
+    const prod = r && data.products.find(p=>p.id===r.productId);
+    return !!(r && prod && prod.name && String(prod.name).trim() && Number(r.qty)>0 && Number(r.price)>0);
+  }
+
+  function commitEditingLine(idx){
+    if(idx===null || idx===undefined || !rows[idx]) return false;
+    if(!lineIsValid(idx)) return false;
+    editingRowIndex = null;
+    editingRowSnapshot = null;
+    flashRowIndex = idx;
+    renderSheet();
+    setTimeout(()=>{
+      if(flashRowIndex === idx){
+        flashRowIndex = null;
+        const el = document.querySelector(`.inv-line-collapsed[data-row="${idx}"]`);
+        if(el) el.classList.remove('line-flash');
+      }
+    }, 300);
+    return true;
+  }
+
+  function beginEditingLine(idx){
+    if(idx<0 || idx>=rows.length) return;
+    if(editingRowIndex !== null && editingRowIndex !== idx){
+      if(!commitEditingLine(editingRowIndex)){
+        showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
+        return;
+      }
     }
-    if(chevronEl) chevronEl.style.display = prod ? 'none' : '';
-    if(subEl) subEl.style.display = prod ? '' : 'none';
+    editingRowIndex = idx;
+    editingRowSnapshot = JSON.parse(JSON.stringify(rows[idx]));
+    renderSheet();
   }
 
   // Product selector state (one open at a time) — UI only
@@ -2180,33 +2204,116 @@ function openInvoiceForm(cid, editInv){
     return productDropListHtml(idx, query);
   }
 
-  function itemsHtml(){
-    return rows.map((r,idx)=>{
-      const prod = data.products.find(p=>p.id===r.productId);
-      const priceDisp = (typeof formatLiveAmount==='function' && r.price) ? formatLiveAmount(String(r.price)) : (r.price||'');
-      const label = prod ? esc(prod.name) : '';
-      const lineAmt = (r.qty||0) * (r.price||0);
-      return `
-      <div class="inv-line${prod?'':' inv-line-empty'}">
+  function lineProfitValue(idx){
+    const r = rows[idx];
+    const prod = data.products.find(p=>p.id===r.productId);
+    if(!prod) return { total:0, pct:0, negative:false };
+    const fifoCost = productFifoUnitCost(prod.id);
+    const profitPerUnit = (Number(r.price)||0) - fifoCost;
+    const total = profitPerUnit * (Number(r.qty)||0);
+    const pct = fifoCost ? Math.round((profitPerUnit/fifoCost)*100) : 0;
+    return { total, pct, negative: total < 0 };
+  }
+
+  function lineCollapsedHtml(r, idx){
+    const prod = data.products.find(p=>p.id===r.productId);
+    if(!prod) return '';
+    const total = (Number(r.qty)||0) * (Number(r.price)||0) - (Number(r.discount)||0);
+    const profit = lineProfitValue(idx);
+    const flash = flashRowIndex === idx ? ' line-flash' : '';
+    return `
+      <div class="inv-line inv-line-collapsed${flash}" data-row="${idx}" role="button" tabindex="0" aria-label="ویرایش قلم ${toman(idx+1)}">
         <div class="inv-line-main">
+          <span class="inv-line-index">${toman(idx+1)}</span>
+          <div class="inv-line-collapsed-body">
+            <div class="inv-line-collapsed-top">
+              <span class="inv-line-collapsed-name">${esc(prod.name)}</span>
+              <span class="inv-line-amount">${toman(total)} ت</span>
+            </div>
+            <div class="inv-line-collapsed-bottom">
+              <span>${toman(r.qty)} × ${toman(r.price)} ت</span>
+              <span class="inv-line-collapsed-profit" data-profit-id="${idx}">سود: <span class="inv-profit-private">${profit.negative?'−':''}${toman(Math.abs(profit.total))} ت</span></span>
+            </div>
+          </div>
+          <span class="inv-line-chevron" aria-hidden="true">‹</span>
+        </div>
+      </div>`;
+  }
+
+  function lineEditingHtml(r, idx){
+    const prod = data.products.find(p=>p.id===r.productId);
+    const lineAmt = (Number(r.qty)||0) * (Number(r.price)||0) - (Number(r.discount)||0);
+    const profit = lineProfitValue(idx);
+    const priceDisp = (typeof formatLiveAmount==='function' && r.price) ? enToFaDigits(formatLiveAmount(String(r.price))).replace(/,/g,'٬') : enToFaDigits(String(r.price||''));
+    const label = prod ? esc(prod.name) : '';
+    return `
+      <div class="inv-line inv-line-editing" data-row="${idx}">
+        <div class="inv-line-edit-head">
+          <span>قلم ${toman(idx+1)}</span>
+          <button type="button" class="inv-line-close" data-line-close="${idx}" aria-label="بستن ویرایش">×</button>
+        </div>
+        <div class="inv-line-product-wrap">
+          <label>نام کالا</label>
           <input type="text" class="row-product-search inv-line-name" data-row="${idx}" placeholder="انتخاب کالا..." autocomplete="off" readonly value="${label}" inputmode="none">
-          <span class="inv-line-amount" data-row="${idx}" style="display:${prod?'':'none'}">${toman(lineAmt)} ت</span>
-          <span class="inv-line-chevron" data-row="${idx}" style="display:${prod?'none':''}" aria-hidden="true">›</span>
-          <div class="prod-drop" data-row="${idx}" hidden></div>
+          <span class="prod-drop" data-row="${idx}" hidden></span>
         </div>
-        <div class="inv-line-sub" data-row="${idx}" style="display:${prod?'':'none'}">
-          <span class="inv-line-qtyrate">
-            <input type="text" inputmode="decimal" data-row="${idx}" class="row-qty inv-mini-input" aria-label="تعداد" value="${r.qty}">
-            <span class="inv-line-x">×</span>
-            <input type="text" inputmode="decimal" data-row="${idx}" class="row-price inv-mini-input inv-mini-input-price" aria-label="قیمت واحد" value="${esc(String(priceDisp))}">
-            <span class="inv-line-unit">ت</span>
-          </span>
-          ${rows.length>1?`<button type="button" class="inv-line-del row-del" data-row="${idx}" title="حذف این قلم" aria-label="حذف این قلم">×</button>`:''}
+        <div class="inv-line-edit-two-col">
+          <div class="inv-edit-field">
+            <label for="inv-row-qty-${idx}">تعداد</label>
+            <input id="inv-row-qty-${idx}" type="text" inputmode="decimal" data-row="${idx}" class="row-qty inv-mini-input" aria-label="تعداد" value="${esc(enToFaDigits(String(r.qty||'')))}">
+          </div>
+          <div class="inv-edit-field">
+            <label for="inv-row-price-${idx}">قیمت واحد</label>
+            <input id="inv-row-price-${idx}" type="text" inputmode="decimal" data-row="${idx}" class="row-price inv-mini-input inv-mini-input-price" aria-label="قیمت واحد" value="${esc(String(priceDisp))}">
+          </div>
         </div>
+        <div class="edit-computed-row">
+          <div class="edit-computed compact-computed">
+            <span class="edit-computed-label">جمع</span>
+            <span class="edit-computed-value" data-total-for="${idx}">${toman(lineAmt)} ت</span>
+          </div>
+          <div class="edit-computed compact-computed">
+            <span class="edit-computed-label">سود این قلم</span>
+            <span class="line-profit edit-computed-profit" data-revealed="0" data-profit-id="${idx}">
+              <span class="profit-value">${profit.negative?'−':''}${toman(Math.abs(profit.total))} ت</span>
+            </span>
+          </div>
+        </div>
+        <button type="button" class="inv-price-info-btn inv-edit-price-info" data-row="${idx}" aria-expanded="false">اطلاعات قیمت</button>
         <div class="row-info" data-row="${idx}">${rowInfoHtml(idx)}</div>
-      </div>
-    `;
-    }).join('');
+        <div class="inv-line-edit-actions">
+          <button type="button" class="inv-line-delete" data-del="${idx}">حذف</button>
+          <div>
+            <button type="button" class="inv-line-cancel" data-line-cancel="${idx}">انصراف</button>
+            <button type="button" class="inv-line-commit" data-line-commit="${idx}">✓ ثبت قلم</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function formatInvoiceFaInput(el){
+    if(!el) return;
+    const oldVal = String(el.value || '');
+    const sel = (typeof el.selectionStart === 'number') ? el.selectionStart : oldVal.length;
+    const digitsBefore = faToEnDigits(oldVal.slice(0, sel)).replace(/[^\d.]/g,'').length;
+    const enFormatted = (typeof formatLiveAmount === 'function')
+      ? formatLiveAmount(oldVal)
+      : faToEnDigits(oldVal).replace(/[^\d.]/g,'');
+    const formatted = enToFaDigits(enFormatted).replace(/,/g,'٬');
+    if(formatted === oldVal) return;
+    el.value = formatted;
+    let pos = formatted.length, seen = 0;
+    for(let i=0;i<formatted.length;i++){
+      if(/[\d۰-۹٠-٩.٫]/.test(formatted[i])){
+        seen++;
+        if(seen >= digitsBefore){ pos=i+1; break; }
+      }
+    }
+    try{ el.setSelectionRange(pos,pos); }catch(e){}
+  }
+
+  function itemsHtml(){
+    return rows.map((r,idx)=> editingRowIndex === idx ? lineEditingHtml(r,idx) : lineCollapsedHtml(r,idx)).join('');
   }
 
   function invoiceTotal(){
@@ -2247,9 +2354,9 @@ function openInvoiceForm(cid, editInv){
         <span class="amount" style="color:${profitColor}">${profit<0?'−':''}${toman(Math.abs(profit))} ت</span>
       </div>
     `;
+    const sticky = document.getElementById('inv-sticky-total');
+    if(sticky) sticky.textContent = 'جمع فاکتور: ' + toman(total) + ' ت';
   }
-
-  let didInitialQtyFocus = false;
 
   function renderSheet(){
     // Preserve the sheet's internal scroll position across re-renders.
@@ -2287,7 +2394,7 @@ function openInvoiceForm(cid, editInv){
           <button type="button" class="btn inv-header-save" id="save-invoice">${editInv?'ذخیره':'ثبت'}</button>
         </div>
 
-        <div class="inv-body">
+        <div class="inv-body has-sticky-total">
           ${editInv?`<div class="inv-edit-notice">با ذخیره‌ی این ویرایش، موجودی انبار و مانده حساب مشتری به‌طور خودکار اصلاح می‌شود.</div>`:''}
 
           <div class="inv-customer-context">
@@ -2323,25 +2430,25 @@ function openInvoiceForm(cid, editInv){
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18M7 14h.01M11 14h3"/></svg>
                 </span>
-                <span>نقد</span><small class="inv-payment-action-amount" data-payment-summary="cash">${cashPaid?toman(cashPaid)+' ت':''}</small>
+                <span>نقد</span>
               </button>
               <button type="button" class="inv-payment-action" data-payment-method="card" aria-expanded="false">
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
                 </span>
-                <span>کارت</span><small class="inv-payment-action-amount" data-payment-summary="card">${cardPaid?toman(cardPaid)+' ت':''}</small>
+                <span>کارت</span>
               </button>
               <button type="button" class="inv-payment-action" data-payment-method="transfer" aria-expanded="false">
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5M8 17h8"/></svg>
                 </span>
-                <span>بانکی</span><small class="inv-payment-action-amount" data-payment-summary="transfer">${transferPaid?toman(transferPaid)+' ت':''}</small>
+                <span>بانکی</span>
               </button>
               <button type="button" class="inv-payment-action" data-payment-method="check" aria-expanded="false">
                 <span class="inv-payment-action-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
                 </span>
-                <span>چک</span><small class="inv-payment-action-amount" data-payment-summary="check">${checkAmount?toman(checkAmount)+' ت':''}</small>
+                <span>چک</span>
               </button>
             </div>
 
@@ -2390,6 +2497,7 @@ function openInvoiceForm(cid, editInv){
             <div id="calc-summary"></div>
           </div>
         </div>
+        <div class="inv-sticky-total" id="inv-sticky-total" aria-live="polite">جمع فاکتور: ${toman(invoiceTotal())} ت</div>
       </div>
     `);
     // Presentation-only: the sheet's generic close-x (from openSheet) is
@@ -2413,20 +2521,37 @@ function openInvoiceForm(cid, editInv){
       if(_newScrollEl) _newScrollEl.scrollTop = _prevScrollTop;
     }
     updateSummary();
-    if(editInv && rows.length && !didInitialQtyFocus){
-      didInitialQtyFocus = true;
-      requestAnimationFrame(function(){
-        const qtyInput = document.querySelector('.row-qty[data-row="0"]');
-        if(qtyInput){
-          try{ qtyInput.focus(); qtyInput.setSelectionRange(qtyInput.value.length, qtyInput.value.length); }catch(_e){}
-        }
-      });
-    }
+    // iOS keyboard-safe sticky total: visualViewport shrinks when the keyboard opens.
+    (function bindInvoiceStickyViewport(){
+      const sticky = document.getElementById('inv-sticky-total');
+      if(!sticky || sticky._vvBound) return;
+      sticky._vvBound = true;
+      const sync = function(){
+        const vv = window.visualViewport;
+        if(!vv){ sticky.style.bottom = 'env(safe-area-inset-bottom,0px)'; return; }
+        const keyboardOffset = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop||0));
+        sticky.style.bottom = keyboardOffset + 'px';
+      };
+      sticky._vvSync = sync;
+      if(window.visualViewport){
+        window.visualViewport.addEventListener('resize', sync);
+        window.visualViewport.addEventListener('scroll', sync);
+      }
+      window.addEventListener('resize', sync);
+      sync();
+    })();
     // No-Purchase Reason chips (re-bound after every renderSheet rebuild)
     if(typeof bindNoPurchasePrompt === 'function') bindNoPurchasePrompt(cid);
-    bindProductDropPositionTracking();
 
     document.getElementById('add-row').addEventListener('click', ()=>{
+      // Starting another line commits the current one first; an incomplete
+      // current line remains open and blocks the new line.
+      if(editingRowIndex !== null){
+        if(!commitEditingLine(editingRowIndex)){
+          showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
+          return;
+        }
+      }
       // One active empty line at a time: once a blank line exists, repeated
       // taps open its product picker instead of creating another blank row.
       const emptyIdx = rows.findIndex(r=>!r.productId);
@@ -2435,17 +2560,74 @@ function openInvoiceForm(cid, editInv){
         return;
       }
       rows.push({productId:'', qty:1, price:0, discount:0});
+      editingRowIndex = rows.length-1;
+      editingRowSnapshot = JSON.parse(JSON.stringify(rows[editingRowIndex]));
       renderSheet();
       // Start the intended workflow immediately: Add Line → Product Search.
       setTimeout(()=>openProductDrop(rows.length-1), 0);
     });
-    document.querySelectorAll('.row-del').forEach(el=>el.addEventListener('click', e=>{
-      const i = parseInt(e.currentTarget.dataset.row, 10);
-      if(rows.length>1 && i>=0 && i<rows.length){
-        rows.splice(i, 1);
-        renderSheet();
-      }
-    }));
+    const itemsWrap = document.getElementById('items-wrap');
+    if(itemsWrap){
+      itemsWrap.addEventListener('click', function(e){
+        const profit = e.target.closest('[data-profit-id]');
+        if(profit){
+          e.preventDefault(); e.stopPropagation();
+          profit.setAttribute('data-revealed', profit.getAttribute('data-revealed') === '1' ? '0' : '1');
+          return;
+        }
+        const commit = e.target.closest('[data-line-commit]');
+        if(commit){
+          e.preventDefault(); e.stopPropagation();
+          const idx = Number(commit.getAttribute('data-line-commit'));
+          if(!commitEditingLine(idx)) showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
+          return;
+        }
+        const cancel = e.target.closest('[data-line-cancel]');
+        if(cancel){
+          e.preventDefault(); e.stopPropagation();
+          const idx = Number(cancel.getAttribute('data-line-cancel'));
+          if(editingRowSnapshot && editingRowIndex === idx){ rows[idx] = editingRowSnapshot; }
+          editingRowSnapshot = null;
+          editingRowIndex = null;
+          if(rows.length > 1 && !rows[idx].productId){ rows.splice(idx,1); }
+          renderSheet();
+          return;
+        }
+        const close = e.target.closest('[data-line-close]');
+        if(close){
+          e.preventDefault(); e.stopPropagation();
+          const idx = Number(close.getAttribute('data-line-close'));
+          if(editingRowSnapshot && editingRowIndex === idx) rows[idx] = editingRowSnapshot;
+          editingRowSnapshot = null;
+          editingRowIndex = null;
+          renderSheet();
+          return;
+        }
+        const del = e.target.closest('[data-del]');
+        if(del){
+          e.preventDefault(); e.stopPropagation();
+          const i = Number(del.getAttribute('data-del'));
+          if(rows.length>1 && i>=0 && i<rows.length){
+            rows.splice(i,1);
+            editingRowIndex = null;
+            editingRowSnapshot = null;
+            renderSheet();
+          }
+          return;
+        }
+        const collapsed = e.target.closest('.inv-line-collapsed[data-row]');
+        if(collapsed){
+          const idx = Number(collapsed.getAttribute('data-row'));
+          beginEditingLine(idx);
+        }
+      });
+      itemsWrap.addEventListener('keydown', function(e){
+        if((e.key==='Enter' || e.key===' ') && e.target.closest('.inv-line-collapsed[data-row]')){
+          e.preventDefault();
+          beginEditingLine(Number(e.target.closest('.inv-line-collapsed').getAttribute('data-row')));
+        }
+      });
+    }
 
     function closeAllProductDrops(){
       prodDropOpenRow = null;
@@ -2481,32 +2663,6 @@ function openInvoiceForm(cid, editInv){
         dropEl.style.top = 'auto';
         if(spaceAbove < maxH) dropEl.style.maxHeight = Math.max(160, spaceAbove) + 'px';
       }
-    }
-    function bindProductDropPositionTracking(){
-      const invBody = document.querySelector('.inv-body');
-      if(!invBody || invBody._productDropScrollBound) return;
-      invBody._productDropScrollBound = true;
-      let ticking = false;
-      function schedule(){
-        if(ticking) return;
-        ticking = true;
-        requestAnimationFrame(function(){
-          ticking = false;
-          const open = document.querySelector('.prod-drop.is-open:not([hidden])');
-          if(!open) return;
-          const idx = open.getAttribute('data-row');
-          const anchor = document.querySelector(`.row-product-search[data-row="${idx}"]`);
-          if(anchor) positionProductDrop(open, anchor);
-        });
-      }
-      invBody.addEventListener('scroll', schedule, {passive:true});
-      if(window.visualViewport) window.visualViewport.addEventListener('scroll', schedule, {passive:true});
-      window.addEventListener('resize', schedule, {passive:true});
-      invBody._productDropPositionCleanup = function(){
-        try{ invBody.removeEventListener('scroll', schedule); }catch(_e){}
-        if(window.visualViewport) try{ window.visualViewport.removeEventListener('scroll', schedule); }catch(_e){}
-        try{ window.removeEventListener('resize', schedule); }catch(_e){}
-      };
     }
     function openProductDrop(idx){
       idx = String(idx);
@@ -2566,14 +2722,6 @@ function openInvoiceForm(cid, editInv){
       closeAllProductDrops();
       updateRowInfo(idx);
       updateSummary();
-      // After choosing a product, quantity is the next editable value.
-      // Focus the real rendered input and place the caret at the end.
-      requestAnimationFrame(function(){
-        const qtyInput = document.querySelector(`.row-qty[data-row="${idx}"]`);
-        if(qtyInput){
-          try{ qtyInput.focus(); qtyInput.setSelectionRange(qtyInput.value.length, qtyInput.value.length); }catch(_e){}
-        }
-      });
       // Hide No-Purchase prompt for products now in the basket
       try{
         const card = document.getElementById('npr-card');
@@ -2668,23 +2816,20 @@ function openInvoiceForm(cid, editInv){
     document.querySelectorAll('.row-qty').forEach(el=>el.addEventListener('input', e=>{
       const idx = e.target.dataset.row;
       rows[idx].qty = parseFloat(faToEnDigits(e.target.value))||0;
+      formatInvoiceFaInput(e.target);
       updateRowInfo(idx);
       updateSummary();
     }));
     document.querySelectorAll('.row-price').forEach(el=>el.addEventListener('input', e=>{
       const idx = e.target.dataset.row;
       rows[idx].price = parseFloat(faToEnDigits(e.target.value))||0;
+      formatInvoiceFaInput(e.target);
       updateRowInfo(idx);
       updateSummary();
     }));
     function updateInvPaymentTotal(){
       const totalEl = document.getElementById('inv-payment-total');
       if(totalEl) totalEl.textContent = toman(cashPaid+cardPaid+transferPaid+checkAmount) + ' ت';
-      const summaries = {cash:cashPaid, card:cardPaid, transfer:transferPaid, check:checkAmount};
-      Object.keys(summaries).forEach(function(method){
-        const el = document.querySelector(`[data-payment-summary="${method}"]`);
-        if(el) el.textContent = summaries[method] ? toman(summaries[method]) + ' ت' : '';
-      });
     }
     function closeInvPaymentPanels(){
       document.querySelectorAll('.inv-payment-panel').forEach(panel=>panel.hidden = true);
@@ -2747,18 +2892,9 @@ function openInvoiceForm(cid, editInv){
       updateSummary();
     });
     document.getElementById('f-discount-type').addEventListener('change', e=>{
-      const discountInput = document.getElementById('f-discount');
-      const selectionStart = discountInput && typeof discountInput.selectionStart === 'number' ? discountInput.selectionStart : null;
-      const selectionEnd = discountInput && typeof discountInput.selectionEnd === 'number' ? discountInput.selectionEnd : null;
       discountType = e.target.value;
       if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
-      if(discountInput){
-        discountInput.value = discount || '';
-        if(selectionStart != null){
-          try{ discountInput.setSelectionRange(Math.min(selectionStart, discountInput.value.length), Math.min(selectionEnd == null ? selectionStart : selectionEnd, discountInput.value.length)); }catch(_e){}
-        }
-      }
-      updateSummary();
+      renderSheet();
     });
 
     document.getElementById('save-invoice').addEventListener('click', async (e)=>{
@@ -3304,7 +3440,7 @@ function openSupplierDetail(sid){
         const realIdx = (s.payments||[]).indexOf(p);
         if(realIdx<0) throw new Error('validation');
         const label = p.method==='check' ? ('چک'+(p.checkNumber?(' #'+p.checkNumber):'')) : 'پرداخت';
-        if(!(await appConfirm('«'+label+'» به مبلغ '+toman(p.method==='check'?(p.faceAmount||p.amount):p.amount)+' تومان حذف شود؟\nمانده حساب تامین‌کننده اصلاح می‌شود.','حذف پرداخت'))) throw new Error('validation');
+        if(!(await appConfirm('«'+label+'» به مبلغ '+toman(p.method==='check'?(p.faceAmount||p.amount):p.amount)+' تومان حذف شود؟\nمانده حساب تامین‌کننده اصلاح می‌شود.'))) throw new Error('validation');
         s.payments.splice(realIdx, 1);
         await saveData(); openSupplierDetail(sid); render(); showToast('حذف شد');
       });

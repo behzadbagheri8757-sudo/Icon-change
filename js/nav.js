@@ -238,11 +238,6 @@ function bindBottomNavMinimizeOnScroll(){
   }, {passive:true});
 
   bindBottomNavMinimizeOnScroll.setProgress = setProgress;
-  bindBottomNavMinimizeOnScroll.syncTo = function(y, immediate){
-    lastY = y;
-    var target = (y <= 8) ? 0 : 1;
-    setProgress(target, immediate !== false);
-  };
 }
 
 function ensureBottomNavPinned(){
