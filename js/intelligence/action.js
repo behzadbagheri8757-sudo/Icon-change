@@ -251,6 +251,21 @@
     };
     if (Array.isArray(visit.offeredProducts) && visit.offeredProducts.length) {
       _recordProductAcks(cid, visit.offeredProducts.map(function (x) { return x && x.productId; }), details);
+
+      // A no-order visit that included offered products also acknowledges the
+      // customer-level decline/pattern topics — only for the exact persisted
+      // no-order result, and never when the visit subject is explicitly about
+      // payment/collection/invoice/information gathering. Ordered visits keep
+      // product/family-only acknowledgements.
+      var result = String(visit.result || '').trim();
+      var note = String(visit.note || '').trim();
+      var nextAction = String(visit.nextAction || '').trim();
+      var text = [result, note, nextAction].join(' ').toLowerCase();
+      var paymentLike = /(پرداخت|وصول|چک|فاکتور|مطالبات|اطلاعات.?گیر|اطلاعات.?گیری|ثبت.?اطلاعات|پیگیری.?فاکتور|پیگیری.?چک)/i.test(text);
+      if (result === 'سفارش گرفته نشد' && !paymentLike) {
+        _actionAckWrite(cid, 'purchase_decline', details);
+        _actionAckWrite(cid, 'behind_pattern', details);
+      }
     } else {
       _visitWithoutProductTopics(visit).forEach(function (topic) { _actionAckWrite(cid, topic, details); });
     }
