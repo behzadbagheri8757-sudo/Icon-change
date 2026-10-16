@@ -16,16 +16,7 @@
   let fabHandler = null;
 
   function navigateToCustomer(cid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/customer', { id: cid });
-    } else {
-      location.href = '#/customer?id=' + encodeURIComponent(cid);
-    }
+    AppRouter.navigate('/customer', { id: cid });
   }
 
   function invoicePaidAmount(inv) {
@@ -73,6 +64,10 @@
     else if (invSort === 'amountAsc') rows.sort((a,b)=> (a.inv.total||0)-(b.inv.total||0));
     else rows.sort((a,b)=> (b.inv.date||'').localeCompare(a.inv.date||'') || String(b.inv.number).localeCompare(String(a.inv.number)));
 
+    // Presentation only: result count next to the sort control (reads the already-filtered rows).
+    const countEl = document.getElementById('invoice-count');
+    if (countEl) countEl.textContent = rows.length ? enToFaDigits(String(rows.length)) + ' فاکتور' : '';
+
     if (!rows.length) {
       listEl.innerHTML = `<div class="empty">${(data.invoices||[]).length?'موردی پیدا نشد':'هنوز فاکتوری ثبت نشده. با + فاکتور جدید بزنید.'}</div>`;
     } else {
@@ -85,13 +80,12 @@
           <span class="name invoice-row-main">
             <span class="tx-row-title">#${esc(String(inv.number||''))} · ${esc(custName)}</span>
             <span class="sub">${faDate(inv.date)} — <span class="${st.cls}">${st.label}</span></span>
-            ${remain > 0.5 || paid > 0 ? `<span class="sub">پرداخت‌شده ${toman(paid)} ت</span>` : ''}
           </span>
           <span class="filler"></span>
           <span class="amount tx-row-amount invoice-row-summary">
             <span class="invoice-row-total"><span class="invoice-row-label">جمع فاکتور</span><span class="tx-row-total">${toman(inv.total)} ت</span></span>
             ${remain > 0.5 ? `<span class="invoice-row-remain"><span class="invoice-row-label">مانده</span>${remainBit}</span>` : ''}
-            ${paid > 0 ? `<span class="invoice-row-paid"><span class="invoice-row-label">پرداخت‌شده</span><span class="tx-row-meta accent-olive">${toman(paid)} ت</span></span>` : ''}
+            ${(paid > 0 && remain > 0.5) ? `<span class="invoice-row-paid"><span class="invoice-row-label">پرداخت‌شده</span><span class="tx-row-meta accent-olive">${toman(paid)} ت</span></span>` : ''}
           </span>
         </a>`;
       }).join('');
@@ -104,7 +98,7 @@
         <div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>`);
       return;
     }
-    const opts = data.customers.slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
+    const opts = data.customers.filter(c => c.active !== false).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
       .map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
     openSheet(`
       <h3>فاکتور جدید</h3>
@@ -129,7 +123,8 @@
         ${chip('paid','پرداخت‌شده')}
         ${chip('debt','بدهکار')}
       </div>
-      <div class="tx-toolbar">
+      <div class="tx-toolbar cl-tools">
+        <span id="invoice-count" class="cl-count" aria-live="polite"></span>
         <label class="tx-toolbar-label" for="invoice-sort">مرتب‌سازی</label>
         <select id="invoice-sort" class="tx-toolbar-select">
           <option value="newest" ${invSort==='newest'?'selected':''}>جدیدترین</option>

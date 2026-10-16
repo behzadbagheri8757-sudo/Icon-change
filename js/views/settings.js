@@ -18,6 +18,7 @@
   let pinClearHandler = null;
   let pinLockNowHandler = null;
   let techInfoHandler = null;
+  let themeChangeHandler = null;
   let autoBackupHandlers = [];
   function countCustomerVisits() {
     return (data.customers || []).reduce(function (s, c) {
@@ -55,7 +56,7 @@
 
     let autoHtml = '';
     if (!autoList.length) {
-      autoHtml = '<div class="empty settings-empty">هنوز بکاپ خودکاری ذخیره نشده (هر ۱۲ ساعت حداکثر یک نسخه، تا ۵ نسخه).</div>';
+      autoHtml = '<div class="empty settings-empty">هنوز نسخه پشتیبان خودکاری ذخیره نشده (هر ۱۲ ساعت حداکثر یک نسخه، تا ۵ نسخه).</div>';
     } else {
       autoHtml = autoList.slice().reverse().map(function (item) {
         const when = item.ts ? new Date(item.ts).toLocaleString('fa-IR') : '—';
@@ -70,13 +71,28 @@
       <p class="tx-hint">مدیریت داده‌ها، پشتیبان‌گیری و امنیت برنامه.</p>
 
       <div class="mgmt-section">
-        <h3 class="mgmt-section-title">داده و بکاپ</h3>
+        <h3 class="mgmt-section-title">ظاهر برنامه</h3>
+        <div class="settings-section">
+          <div class="field">
+            <label for="theme-select">حالت نمایش</label>
+            <select id="theme-select">
+              <option value="system">سیستمی</option>
+              <option value="light">روشن</option>
+              <option value="dark">تیره</option>
+            </select>
+          </div>
+          <div class="sub settings-description">در حالت سیستمی، ظاهر برنامه با حالت روشن/تیره دستگاه هماهنگ می‌شود.</div>
+        </div>
+      </div>
+
+      <div class="mgmt-section">
+        <h3 class="mgmt-section-title">داده و پشتیبان‌گیری</h3>
         <div class="settings-section">
           <div class="settings-warn">
             فایل JSON را در جایی امن نگه دارید (Files / ابر). روی iPhone معمولاً Share → Save to Files.
           </div>
           <div class="btn-row tx-actions-primary">
-            <button type="button" class="btn" id="export-json">دریافت Backup (JSON)</button>
+            <button type="button" class="btn" id="export-json">دریافت فایل پشتیبان</button>
             <button type="button" class="btn secondary settings-action-link" id="export-excel">خروجی اکسل</button>
           </div>
         </div>
@@ -88,7 +104,7 @@
           <div class="settings-warn">
             بازیابی اطلاعات فعلی را <b>جایگزین</b> می‌کند؛ قبلش نسخهٔ برگشت ذخیره می‌شود.
           </div>
-          <div class="field"><label>انتخاب فایل بکاپ JSON</label>
+          <div class="field"><label>انتخاب فایل پشتیبان JSON</label>
             <input type="file" id="import-file" accept="application/json,.json">
           </div>
           <div class="btn-row">
@@ -106,10 +122,10 @@
       </div>
 
       <div class="mgmt-section">
-        <h3 class="mgmt-section-title">بکاپ خودکار داخلی</h3>
+        <h3 class="mgmt-section-title">پشتیبان خودکار داخلی</h3>
         <div class="settings-section">
           <div class="sub settings-description">
-            برنامه در صورت استفاده، حداکثر هر ۱۲ ساعت یک نسخه از داده‌های CRM، FIFO، هدف فروش، ProspectScout و Intelligence داخل IndexedDB نگه می‌دارد (تا ۵ نسخه). این جایگزین Backup فایل JSON نیست.
+            برنامه در صورت استفاده، حداکثر هر ۱۲ ساعت یک نسخه از داده‌های CRM، FIFO، هدف فروش، ProspectScout و Intelligence داخل IndexedDB نگه می‌دارد (تا ۵ نسخه). این جایگزین فایل پشتیبان JSON نیست.
           </div>
           <div class="card">${autoHtml}</div>
         </div>
@@ -144,7 +160,7 @@
         <h3 class="mgmt-section-title">امنیت — قفل PIN</h3>
         <div class="settings-section">
           <div class="sub settings-description">
-            با فعال‌سازی PIN، بعد از خروج از برنامه یا رفتن به پس‌زمینه، برای ورود دوباره باید کد شش‌رقمی را وارد کنید. PIN روی همین دستگاه در localStorage ذخیره می‌شود (هش‌شده) و داخل Backup نیست.
+            با فعال‌سازی PIN، بعد از خروج از برنامه یا رفتن به پس‌زمینه، برای ورود دوباره باید کد شش‌رقمی را وارد کنید. PIN روی همین دستگاه در localStorage ذخیره می‌شود (هش‌شده) و داخل فایل پشتیبان نیست.
           </div>
           <div id="pin-settings-status" class="card pin-status"></div>
           <div class="btn-row">
@@ -179,7 +195,7 @@
     const exportJsonBtn = document.getElementById('export-json');
     exportJsonHandler = function () {
       if (typeof exportBackupJSON === 'function') exportBackupJSON();
-      else showToast('تابع بکاپ در دسترس نیست');
+      else showToast('تابع پشتیبان‌گیری در دسترس نیست');
     };
     exportJsonBtn.onclick = exportJsonHandler;
 
@@ -261,7 +277,7 @@
           <div class="card wide"><div class="label">نام</div>
              <div class="value">حبوبات و خشکبار باقری — دفتر حساب</div></div>
           <div class="card"><div class="label">نسخه معماری</div>
-             <div class="value">چندصفحه‌ای · فاز ۹</div></div>
+             <div class="value">تک‌صفحه‌ای (SPA)</div></div>
           <div class="card"><div class="label">schemaVersion</div>
             <div class="value">${esc(enToFaDigits(String(schema)))}</div></div>
           <div class="card wide"><div class="label">ذخیره‌سازی محلی</div>
@@ -271,11 +287,46 @@
           <div class="card"><div class="label">سری فاکتور</div><div class="value">${esc(enToFaDigits(String(seq)))}</div></div>
         </div>
         <div class="report-note settings-tech-note">
-          برنامه آفلاین است. داده‌ها روی همین دستگاه ذخیره می‌شوند. برای امنیت، به‌طور منظم Backup بگیرید.
+          برنامه آفلاین است. داده‌ها روی همین دستگاه ذخیره می‌شوند. برای امنیت، به‌طور منظم پشتیبان‌گیری کنید.
         </div>
       `);
     };
     techRow.onclick = techInfoHandler;
+
+    // Theme setting — presentation only; stored preference is system/light/dark.
+    (function bindThemeSettings() {
+      const select = document.getElementById('theme-select');
+      if (!select) return;
+
+      function readPreference() {
+        try {
+          if (window.BaqeriTheme && typeof window.BaqeriTheme.getPreference === 'function') {
+            return window.BaqeriTheme.getPreference();
+          }
+          const v = localStorage.getItem('baqeri_theme_v1');
+          return (v === 'light' || v === 'dark' || v === 'system') ? v : 'system';
+        } catch (e) {
+          return 'system';
+        }
+      }
+
+      select.value = readPreference();
+      themeChangeHandler = function () {
+        const value = select.value === 'light' || select.value === 'dark' ? select.value : 'system';
+        if (window.BaqeriTheme && typeof window.BaqeriTheme.setPreference === 'function') {
+          window.BaqeriTheme.setPreference(value);
+        } else {
+          try { localStorage.setItem('baqeri_theme_v1', value); } catch (e) {}
+          document.documentElement.setAttribute(
+            'data-theme',
+            value === 'dark' ? 'dark' :
+            value === 'light' ? 'light' :
+            (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+          );
+        }
+      };
+      select.onchange = themeChangeHandler;
+    })();
 
     // PIN settings — app-owned sheet UI (no browser dialog).
     (function bindPinSettings() {
@@ -377,7 +428,7 @@
 
       // Remove button handlers
       const btnIds = ['export-json', 'export-excel', 'do-import', 'undo-import', 'open-tech-info',
-        'pin-set-btn', 'pin-change-btn', 'pin-clear-btn', 'pin-lock-now-btn'];
+        'pin-set-btn', 'pin-change-btn', 'pin-clear-btn', 'pin-lock-now-btn', 'theme-select'];
       btnIds.forEach(function (id) {
         const el = document.getElementById(id);
         if (el) el.onclick = null;
@@ -385,6 +436,8 @@
 
       const importFile = document.getElementById('import-file');
       if (importFile) importFile.onchange = null;
+      const themeSelect = document.getElementById('theme-select');
+      if (themeSelect) themeSelect.onchange = null;
 
       exportJsonHandler = null;
       exportExcelHandler = null;
@@ -396,6 +449,7 @@
       pinClearHandler = null;
       pinLockNowHandler = null;
       techInfoHandler = null;
+      themeChangeHandler = null;
       root.innerHTML = '';
     };
   }

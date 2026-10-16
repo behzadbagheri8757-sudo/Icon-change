@@ -15,6 +15,7 @@
         transfer: 'انتقال',
         return: 'برگشت',
         check: 'چک',
+        discount: 'تخفیف',
         supplier: 'پرداخت به تامین‌کننده'
       };
       if (method == null || method === '') return '—';
@@ -29,16 +30,7 @@
   }
 
   function navigateToCustomer(cid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/customer', { id: cid });
-    } else {
-      location.href = '#/customer?id=' + encodeURIComponent(cid);
-    }
+    AppRouter.navigate('/customer', { id: cid });
   }
 
   function invoicePayStatus(inv) {
@@ -164,6 +156,7 @@
     competitor: 'رقیب',
     unavailable: 'ناموجود',
     no_need: 'عدم نیاز',
+    still_stock: 'موجود داشت',
     other: 'سایر'
   };
 
@@ -177,7 +170,7 @@
    * Only products with rejectedCount >= threshold are returned.
    * Pure / read-only — does not write DB or mutate CRM.
    */
-  function buildProductRejectionInsights(customerId, threshold) {
+  function buildProductRejectionInsights(customerId, threshold, ctx) {
     var out = [];
     if (!customerId || typeof customerBehavior !== 'function') return out;
     var thr = (threshold != null && Number.isFinite(Number(threshold)))
@@ -186,7 +179,7 @@
     if (thr < 1) thr = PRODUCT_REJECTION_THRESHOLD_DEFAULT;
 
     var b;
-    try { b = customerBehavior(customerId); } catch (e) { return out; }
+    try { b = customerBehavior(customerId, ctx); } catch (e) { return out; }
     if (!b || !Array.isArray(b.offeredProductStats)) return out;
 
     for (var i = 0; i < b.offeredProductStats.length; i++) {
@@ -225,7 +218,8 @@
         rejectedCount: rejected,
         rejectionRatio: ratio,
         topRejectionReason: topReason,
-        lastOfferedDate: st.lastOfferedDate || null
+        lastOfferedDate: st.lastOfferedDate || null,
+        stillStockSources: st.stillStockSources || null
       });
     }
 
@@ -237,49 +231,125 @@
     return out;
   }
 
-  function productRejectionInsightsHtml(customerId) {
+  /* Human cause phrase used after «به‌خاطر». Presentation text only. */
+  var REJECTION_CAUSE = {
+    price: 'قیمت', quality: 'کیفیت', competitor: 'خرید از رقیب',
+    unavailable: 'نبود موجودی', no_need: 'نیاز نداشتن', still_stock: 'داشتن موجودی'
+  };
+
+  function dominantStockSource(ss) {
+    if (!ss) return null;
+    var best = null, bn = 0;
+    ['competitor', 'ours', 'unknown'].forEach(function (k) {
+      var n = Number(ss[k]) || 0;
+      if (n > bn) { bn = n; best = k; }
+    });
+    return best;
+  }
+
+  /* One human sentence for a rejection insight.
+     short=true  -> single sentence for the top-of-page topic list.
+     short=false -> detail list: count/cause sentence + stock-source sentence when stored. */
+  function rejectionSentence(it, short) {
+    var P = global.BagheriPresent;
+    if (!P || !it) return '';
+    var src = dominantStockSource(it.stillStockSources);
+    var stockTxt = src ? P.stockSentence(src) : '';
+    if (short && stockTxt && it.topRejectionReason === 'still_stock') return stockTxt;
+    var cause = REJECTION_CAUSE[it.topRejectionReason];
+    var base = P.n0(it.rejectedCount) + ' بار از ' + P.n0(it.offeredCount) + ' پیشنهاد رد شده' + (cause ? '؛ بیشتر به‌خاطر ' + cause : '') + '.';
+    if (short) return base;
+    return stockTxt ? base + ' ' + stockTxt : base;
+  }
+
+  function productRejectionInsightsHtml(customerId, ctx) {
     var items = [];
     try {
-      items = buildProductRejectionInsights(customerId);
+      items = buildProductRejectionInsights(customerId, undefined, ctx);
     } catch (e) {
       return '';
     }
-    if (!items.length) return ''; // rule 15: hide section entirely
+    if (!items.length) return ''; // hide section entirely
+    var P = global.BagheriPresent;
 
     var rows = items.map(function (it) {
-      var reasonTxt = it.topRejectionReason
-        ? ('دلیل غالب: ' + rejectionReasonLabel(it.topRejectionReason))
-        : 'دلیل غالب: —';
       return '<div class="ledger-row customer-static-row">' +
         '<span class="name">' + esc(it.productName) +
-          '<span class="sub">' + reasonTxt + '</span></span>' +
+          '<span class="sub">' + esc(rejectionSentence(it, false)) + '</span></span>' +
         '<span class="filler"></span>' +
         '<span class="amount customer-static-value">' +
-          esc(String(it.rejectedCount)) + ' بار رد شده</span></div>';
+          esc(P ? P.n0(it.rejectedCount) : String(it.rejectedCount)) + ' بار رد شده</span></div>';
     }).join('');
 
-    return '<h3 class="sub-title">کالاهای ردشده توسط مشتری</h3>' +
-      '<div class="dash-activity customer-rejection-list">' + rows + '</div>';
+    return '<details class="customer-rejection-details">' +
+      '<summary class="customer-behavior-summary">کالاهای ردشده توسط مشتری (' + esc(P ? P.n0(items.length) : String(items.length)) + ')</summary>' +
+      '<div class="dash-activity customer-rejection-list">' + rows + '</div></details>';
   }
 
-  function intelligenceWatchHtml(cid) {
-    if (typeof extractCustomerSignals !== 'function' && typeof extractWatchObservations !== 'function' && typeof getActiveWatchOccurrences !== 'function') return '';
+  /* ============================================================
+     Delivery patch — Customer Detail presentation
+     Level 0: one human sentence.  Level 1: short list / summary.
+     Level 2: raw evidence inside a single «جزئیات» disclosure.
+     Nothing here generates, scores or resolves a Watch/Signal.
+     ============================================================ */
+  function levelClass(level) {
+    return level === 'critical' ? 'watch-level-critical' : level === 'high' ? 'watch-level-high' : level === 'medium' ? 'watch-level-medium' : 'watch-level-low';
+  }
+  function levelLabel(level) {
+    return level === 'critical' ? 'بحرانی' : level === 'high' ? 'زیاد' : level === 'medium' ? 'متوسط' : 'کم';
+  }
+
+  var POSITIVE_SIGNAL_CATEGORIES = ['PURCHASE_GROWTH'];
+
+  var CONFIRMED_TITLES = {
+    PURCHASE_DECLINE_MILD: 'خرید کمتر شده',
+    PURCHASE_DECLINE_SEVERE: 'خرید به‌طور محسوسی کمتر شده',
+    BEHIND_PATTERN: 'از زمان معمول خرید عقب افتاده',
+    BASKET_SHRINK: 'افت مقدار خرید',
+    KEY_PRODUCT_LOST: 'کالای کلیدی خریده نشده',
+    PAYMENT_OVERDUE: 'پرداخت معوق',
+    CHECK_BOUNCED: 'چک برگشتی',
+    CONSECUTIVE_NO_ORDER: 'ویزیت‌های اخیر بدون سفارش',
+    VISIT_CONVERSION_LOW: 'نرخ سفارش از ویزیت پایین است',
+    VISIT_OVERDUE: 'زمان ویزیت گذشته',
+    LONG_NO_VISIT: 'مدت زیادی ویزیت نشده',
+    SKU_DELAY: 'دیرتر از معمول خریده شده',
+    SKU_QUANTITY_DROP: 'مقدار خرید کمتر شده',
+    SKU_FREQUENCY_DROP: 'کمتر از قبل خریده می‌شود',
+    LINE_DROP: 'در سبد اخیر کم‌رنگ شده',
+    COMBINED_SKU_DETERIORATION: 'چند نشانه کاهش در یک کالا',
+    MULTI_SKU_DECLINE: 'کاهش هم‌زمان چند کالا',
+    SKU_CHURN: 'خرید این کالا متوقف شده'
+  };
+  /* Presentation-only grouping so the same subject (e.g. a Confirmed signal and its
+     earlier Watch) is shown once. Not a business rule; source data is never changed. */
+  var TOPIC_GROUPS = {
+    PURCHASE_DECLINE_MILD: 'volume', PURCHASE_DECLINE_SEVERE: 'volume', BASKET_SHRINK: 'volume',
+    MULTI_SKU_DECLINE: 'volume', PURCHASE_DECLINE_WATCH: 'volume', BASKET_SHRINK_WATCH: 'volume',
+    BEHIND_PATTERN: 'timing', BEHIND_PATTERN_WATCH: 'timing',
+    KEY_PRODUCT_LOST: 'keylost', KEY_PRODUCT_LOST_WATCH: 'keylost',
+    PAYMENT_OVERDUE: 'money', CHECK_BOUNCED: 'money',
+    CONSECUTIVE_NO_ORDER: 'visits', VISIT_CONVERSION_LOW: 'visits',
+    VISIT_OVERDUE: 'visitgap', LONG_NO_VISIT: 'visitgap'
+  };
+
+  /* Reads existing Truth only (same sources the page used before). */
+  function loadWatchData(cid, ctx) {
+    var out = { activeConfirmed: [], occs: [] };
+    if (typeof extractCustomerSignals !== 'function' && typeof extractWatchObservations !== 'function' && typeof getActiveWatchOccurrences !== 'function') return out;
 
     var confirmed = [];
     if (typeof extractCustomerSignals === 'function') {
-      try { confirmed = extractCustomerSignals(cid) || []; } catch (e) { confirmed = []; }
+      try { confirmed = extractCustomerSignals(cid, ctx) || []; } catch (e) { confirmed = []; }
     }
-    var activeConfirmed = confirmed.filter(function (s) { return s && s.status === 'active'; });
+    out.activeConfirmed = confirmed.filter(function (s) { return s && s.status === 'active'; });
 
-    // Lifecycle occurrences (preferred) — already reconciled by caller when possible
     var occs = [];
     if (typeof getActiveWatchOccurrences === 'function') {
       try { occs = getActiveWatchOccurrences(cid) || []; } catch (eOcc) { occs = []; }
     }
-    // Fallback to raw generation if lifecycle absent. Guarded against
-    // inactive customers too (W-BUG-02): this path bypasses
-    // reconcileWatchLifecycle's own active-customer check entirely, so an
-    // inactive customer must never reach it even as a display-only fallback.
+    // Fallback to raw generation if lifecycle absent. Guarded against inactive customers
+    // (W-BUG-02): this path bypasses reconcileWatchLifecycle's active-customer check.
     var custIsActive = true;
     if (typeof data !== 'undefined' && Array.isArray(data.customers)) {
       var custRec = data.customers.find(function (x) { return x && x.id === cid; });
@@ -287,8 +357,11 @@
     }
     if (!occs.length && custIsActive && typeof extractWatchObservations === 'function') {
       try {
-        var raw = extractWatchObservations(cid, confirmed) || [];
-        occs = raw.map(function (w, idx) {
+        var raw = extractWatchObservations(cid, confirmed, ctx) || [];
+        if (typeof filterSuppressedWatchObservations === 'function') {
+          try { raw = filterSuppressedWatchObservations(cid, raw, ctx) || []; } catch (eF) { /* fail-open */ }
+        }
+        occs = raw.map(function (w) {
           return {
             id: null,
             customerId: cid,
@@ -298,76 +371,277 @@
             level: w.level,
             generatedReason: w.reason,
             reason: null,
+            evidence: w.evidence || null,
+            watchComponents: w.watchComponents || null,
             status: 'active'
           };
         });
       } catch (e2) { occs = []; }
     }
+    // Presentation-level de-duplication (new array; source objects untouched).
+    var seen = Object.create(null);
+    out.occs = occs.filter(function (o) {
+      if (!o) return false;
+      var k = o.id || ((o.watchCategory || '') + '|' + (o.productId || ''));
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    });
+    return out;
+  }
 
+  function watchTitleText(o) {
+    var P = global.BagheriPresent;
+    var label = P ? P.watchLabel(o.watchCategory) : (o.generatedReason || '');
+    return o.productName ? (o.productName + ' · ' + label) : label;
+  }
+
+  /* ---- Pending follow-ups: surfaced near the top; raw evidence stays behind «جزئیات». ---- */
+  function pendingFollowUpHtml(cid) {
+    if (typeof getPendingWatchFollowUps !== 'function') return '';
+    var P = global.BagheriPresent;
+    var rows = [];
+    try { rows = getPendingWatchFollowUps(cid) || []; } catch (e) { rows = []; }
+    if (!rows.length) return '';
+    var html = rows.map(function (o) {
+      var sentence = P ? P.watchSentence(o) : (o.generatedReason || '');
+      return '<div class="watch-followup-row bp-followup" data-followup-id="' + esc(o.id) + '">' +
+        '<div class="watch-followup-main">' +
+          '<div class="bp-row-title">' + esc(o.productName || 'همان موضوع قبلی') + '</div>' +
+          (sentence ? '<div class="bp-row-text">' + esc(sentence) + '</div>' : '') +
+          (o.reason && o.reason.comment ? '<div class="bp-row-note">یادداشت قبلی: ' + esc(o.reason.comment) + '</div>' : '') +
+          (P ? P.detailsHtml(P.watchDetailLines(o)) : '') +
+        '</div>' +
+        '<div class="watch-followup-actions"><button type="button" class="btn secondary small" data-followup-complete="' + esc(o.id) + '">ثبت نتیجه</button>' +
+        '<button type="button" class="btn secondary small" data-followup-cancel="' + esc(o.id) + '">لغو پیگیری</button></div></div>';
+    }).join('');
+    return '<div class="card wide watch-followup-card"><div class="label">پیگیری‌های منتظر</div>' + html + '</div>';
+  }
+
+  /* ---- P0: a few genuinely different, important topics. Hidden when there are none. ---- */
+  function customerFocusHtml(cid, ctx, wd) {
+    var P = global.BagheriPresent;
+    var result = { html: '', groups: {} };
+    if (!P) return result;
+    var cands = [];
+    var order = 0;
+
+    wd.activeConfirmed.forEach(function (sg) {
+      if (!sg || sg.type !== 'risk') return;
+      var grp = TOPIC_GROUPS[sg.category];
+      var key = sg.productId ? 'p:' + sg.productId : 'c:' + (grp || sg.category);
+      var label = CONFIRMED_TITLES[sg.category] || 'نیاز به بررسی';
+      cands.push({
+        key: key, group: grp || null, order: order++, src: 2,
+        rank: P.lvRank(sg.severity), level: sg.severity,
+        title: sg.productName ? (sg.productName + ' · ' + label) : label,
+        text: sg.reason || '', occId: null,
+        lowConf: (typeof sg.confidence === 'number' && sg.confidence < 0.5)
+      });
+    });
+    wd.occs.forEach(function (o) {
+      var grp = TOPIC_GROUPS[o.watchCategory];
+      var key = o.productId ? 'p:' + o.productId : 'c:' + (grp || o.watchCategory);
+      cands.push({
+        key: key, group: grp || null, order: order++, src: 1,
+        rank: P.lvRank(o.level), level: o.level,
+        title: watchTitleText(o), text: P.watchSentence(o), occId: o.id || null, lowConf: false
+      });
+    });
+    var rejItems = [];
+    try { rejItems = buildProductRejectionInsights(cid, undefined, ctx) || []; } catch (eR) { rejItems = []; }
+    rejItems.forEach(function (it) {
+      cands.push({
+        key: 'rej:' + it.productId, group: null, order: order++, src: 0,
+        rank: 1, level: 'low',
+        title: it.productName + ' · چند بار رد شده',
+        text: rejectionSentence(it, true), occId: null, lowConf: false
+      });
+    });
+
+    // Keep the strongest candidate per subject, then the top 3 overall.
+    var best = Object.create(null);
+    cands.forEach(function (c) {
+      var cur = best[c.key];
+      var score = c.rank * 10 + c.src;
+      if (!cur || score > cur.score) best[c.key] = { c: c, score: score };
+    });
+    // Fold a stored stock-source answer into the topic of the same product (one subject, one block).
+    var stockByPid = Object.create(null);
+    rejItems.forEach(function (it) {
+      var src = dominantStockSource(it.stillStockSources);
+      if (src) stockByPid[it.productId] = P.stockSentence(src);
+    });
+    var topics = Object.keys(best).map(function (k) { return best[k]; })
+      .sort(function (a, b) { return (b.score - a.score) || (a.c.order - b.c.order); })
+      .slice(0, 3)
+      .map(function (x) { return x.c; })
+      .filter(function (t) { return t.text || t.title; });
+    topics.forEach(function (t) {
+      var pid = t.key.indexOf('p:') === 0 ? t.key.slice(2) : (t.key.indexOf('rej:') === 0 ? t.key.slice(4) : null);
+      if (pid && stockByPid[pid] && t.text.indexOf(stockByPid[pid]) < 0) t.text = (t.text ? t.text + ' ' : '') + stockByPid[pid];
+    });
+    if (!topics.length) return result;
+
+    topics.forEach(function (t) { if (t.group) result.groups[t.group] = true; });
+    result.html = '<div class="bp-focus">' +
+      '<div class="bp-focus-head">الان مهم است</div>' +
+      '<div class="bp-focus-list">' + topics.map(function (t) {
+        var tap = !!t.occId;
+        return '<div class="bp-topic' + (tap ? ' is-tap' : '') + '"' + (tap ? ' data-watch-occ="' + esc(t.occId) + '" role="button" tabindex="0"' : '') + '>' +
+          '<span class="bp-topic-dot is-' + esc(t.level || 'low') + '" aria-hidden="true"></span>' +
+          '<div class="bp-topic-main">' +
+            '<div class="bp-topic-title">' + esc(t.title) + (t.lowConf ? ' <span class="bp-topic-flag">اطمینان پایین</span>' : '') + '</div>' +
+            (t.text ? '<div class="bp-topic-text">' + esc(t.text) + '</div>' : '') +
+          '</div>' +
+          (tap ? '<span class="bp-topic-chev" aria-hidden="true">›</span>' : '') +
+        '</div>';
+      }).join('') + '</div></div>';
+    return result;
+  }
+
+  /* ---- Level 2: full list of confirmed signals + early warnings, collapsed by default. ---- */
+  function intelligenceWatchHtml(cid, ctx, wd) {
+    wd = wd || loadWatchData(cid, ctx);
+    var P = global.BagheriPresent;
+    var activeConfirmed = wd.activeConfirmed, occs = wd.occs;
     if (!occs.length && !activeConfirmed.length) return '';
-
-    function levelClass(level) {
-      return level === 'critical' ? 'watch-level-critical' : level === 'high' ? 'watch-level-high' : level === 'medium' ? 'watch-level-medium' : 'watch-level-low';
-    }
-    function levelLabel(level) {
-      return level === 'critical' ? 'بحرانی' : level === 'high' ? 'زیاد' : level === 'medium' ? 'متوسط' : 'کم';
-    }
 
     var confirmedHtml = '';
     if (activeConfirmed.length) {
-      var crows = activeConfirmed.map(function (s) {
-        var label = (s.productName ? ('«' + esc(s.productName) + '» — ') : '') + esc(s.reason || '');
+      var crows = activeConfirmed.map(function (sg) {
+        /* فقط سیگنال‌هایی که واقعاً خبر خوب‌اند سبز می‌شوند. type==='opportunity'
+           به‌تنهایی کافی نیست: «مدت زیادی ویزیت نشده» و (در حالت بازطبقه‌بندی)
+           «کالای کلیدی خریده نشده/افت سبد» هم opportunity هستند ولی خبر خوب نیستند. */
+        var isGood = sg.type === 'opportunity' && POSITIVE_SIGNAL_CATEGORIES.indexOf(sg.category) !== -1;
+        var cls = isGood ? 'watch-level-opportunity' : levelClass(sg.severity);
+        var lbl = isGood ? 'فرصت' : levelLabel(sg.severity);
         return '<div class="watch-confirmed-row">' +
-          '<span>• ' + label + '</span>' +
-          '<span class="watch-level-label ' + levelClass(s.severity) + '">' + esc(levelLabel(s.severity)) + '</span>' +
+          '<span class="bp-conf-text">' + (sg.productName ? '<strong>' + esc(sg.productName) + '</strong> — ' : '') + esc(sg.reason || '') + '</span>' +
+          '<span class="watch-level-label ' + cls + '">' + esc(lbl) + '</span>' +
           '</div>';
       }).join('');
       confirmedHtml = '<div class="card wide watch-confirmed-card">' +
-        '<div class="label">هوش تجاری — تأییدشده</div>' +
+        '<div class="label">تأییدشده</div>' +
         '<div class="watch-confirmed-list">' + crows + '</div></div>';
     }
 
     var watchHtml = '';
     if (occs.length) {
       var wrows = occs.map(function (o) {
-        var label = (o.productName ? ('«' + esc(o.productName) + '» — ') : '') + esc(o.generatedReason || '');
-        var reviewed = !!(o.reason);
-        var badge = reviewed
-          ? '<span class="watch-reviewed">بررسی شده</span>'
-          : '<span class="watch-level-unreviewed">بررسی نشده</span>';
+        var sentence = P ? P.watchSentence(o) : (o.generatedReason || '');
+        var reviewed = !!o.reason;
         var reasonBit = '';
         if (reviewed && o.reason) {
           var rlabel = (typeof watchReasonLabel === 'function') ? watchReasonLabel(o.reason.code) : (o.reason.code || '');
-          reasonBit = '<div class="watch-reason">علت: ' + esc(rlabel) +
-            (o.reason.comment ? (' — ' + esc(o.reason.comment)) : '') + '</div>';
+          reasonBit = '<div class="bp-row-note">علت ثبت‌شده: ' + esc(rlabel) + (o.reason.comment ? (' — ' + esc(o.reason.comment)) : '') + '</div>';
         }
-        var clickable = o.id
-          ? (' data-watch-occ="' + esc(o.id) + '" role="button" tabindex="0"')
-          : '';
-        return '<div class="watch-occ-row"' + clickable + '>' +
-          '<div class="watch-occ-head">' +
-            '<span>• ' + label + '</span>' +
-            '<span class="watch-occ-status">' + badge +
-              '<div class="watch-level-label ' + levelClass(o.level) + '">' + esc(levelLabel(o.level)) + '</div>' +
-            '</span>' +
-          '</div>' + reasonBit +
+        var clickable = o.id ? (' data-watch-occ="' + esc(o.id) + '" role="button" tabindex="0"') : '';
+        return '<div class="watch-occ-item">' +
+          '<div class="watch-occ-row bp-occ"' + clickable + '>' +
+            '<div class="bp-occ-main">' +
+              '<div class="bp-row-title">' + esc(watchTitleText(o)) + '</div>' +
+              (sentence ? '<div class="bp-row-text">' + esc(sentence) + '</div>' : '') +
+              reasonBit +
+            '</div>' +
+            '<div class="bp-occ-side"><span class="watch-level-label ' + levelClass(o.level) + '">' + esc(levelLabel(o.level)) + '</span>' +
+              (reviewed ? '<span class="watch-reviewed">بررسی شده</span>' : '') + '</div>' +
+          '</div>' +
+          (P ? P.detailsHtml(P.watchDetailLines(o)) : '') +
         '</div>';
       }).join('');
       watchHtml = '<div class="card wide watch-lifecycle-card" id="watch-lifecycle-card">' +
         '<div class="label">هشدارهای زودهنگام</div>' +
-        '<div class="report-note watch-note">برای ثبت علت، روی مورد بزنید. ثبت علت، هشدار را حذف نمی‌کند.</div>' +
+        '<div class="report-note watch-note">برای ثبت پاسخ، روی هر مورد بزنید.</div>' +
         '<div class="watch-occ-list">' + wrows + '</div></div>';
     }
 
-    return confirmedHtml + watchHtml;
+    var total = occs.length + activeConfirmed.length;
+    return '<details class="customer-watch-details">' +
+      '<summary class="customer-behavior-summary">همه نشانه‌ها و هشدارها (' + esc(P ? P.n0(total) : String(total)) + ')</summary>' +
+      '<div class="customer-detail-watch-body">' + confirmedHtml + watchHtml + '</div></details>';
+  }
+
+  /* Short Level-1 glance for the behavior section. Uses only values customerBehavior() already returns. */
+  /* Presentation-only: compact 8-week customer purchase trend. */
+  function customerTrendChartHtml(cid, ctx, behavior) {
+    try {
+      const invs = (typeof customerInvoices === 'function' ? customerInvoices(cid, ctx) : []) || [];
+      if (!invs.length) return '';
+      const now = new Date(); now.setHours(0,0,0,0);
+      const vals = new Array(8).fill(0);
+      invs.forEach(function (inv) {
+        if (!inv || !inv.date) return;
+        const d = new Date(inv.date + 'T00:00:00'); if (isNaN(d.getTime())) return;
+        d.setHours(0,0,0,0);
+        const days = Math.floor((now - d) / 86400000);
+        if (days < 0 || days >= 56) return;
+        vals[7 - Math.floor(days / 7)] += Number(inv.total) || 0;
+      });
+      if (!vals.some(function (v) { return v > 0; })) return '';
+      const max = Math.max.apply(null, vals) || 1;
+      const pts = vals.map(function (v, i) {
+        const x = i * (100 / (vals.length - 1));
+        const y = 34 - (v / max) * 27;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      const area = '0,36 ' + pts + ' 100,36';
+      const last = pts.split(' ').pop();
+      const lastParts = last.split(',');
+      const firstHalf = vals.slice(0, 4).reduce(function (s, v) { return s + v; }, 0);
+      const secondHalf = vals.slice(4).reduce(function (s, v) { return s + v; }, 0);
+      let trendText = 'تقریباً ثابت';
+      if (firstHalf === 0 && secondHalf > 0) trendText = 'خرید اخیر بیشتر شده';
+      else if (firstHalf > 0 && secondHalf === 0) trendText = 'خرید اخیر کمتر شده';
+      else if (firstHalf > 0) {
+        const ratio = secondHalf / firstHalf;
+        if (ratio >= 1.15) trendText = 'خرید اخیر بیشتر شده';
+        else if (ratio <= 0.85) trendText = 'خرید اخیر کمتر شده';
+      }
+      return '<div class="customer-trend-card"><div class="customer-trend-head"><div><span class="label">روند خرید</span><span class="customer-trend-period">۸ هفته اخیر</span></div><span class="customer-trend-note">' + esc(trendText) + '</span></div><div class="customer-trend-chart" aria-label="روند خرید بر اساس مبلغ فاکتورها در ۸ هفته اخیر" style="position:relative;"><svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true"><polygon points="' + area + '" class="customer-trend-area"></polygon><polyline points="' + pts + '" class="customer-trend-line" vector-effect="non-scaling-stroke"></polyline></svg><i class="customer-trend-dot" style="left:' + parseFloat(lastParts[0]) + '%;top:' + ((parseFloat(lastParts[1]) / 40) * 100) + '%;"></i></div></div>';
+    } catch (e) { return ''; }
+  }
+
+  function behaviorGlanceHtml(b, groups) {
+    var P = global.BagheriPresent;
+    if (!P || !b) return '';
+    var lines = [];
+    if (b.amountTrend === 'up') lines.push('خرید ۳۰ روز اخیر نسبت به ۳۰ روز قبل بیشتر شده.');
+    else if (b.amountTrend === 'down' && !groups.volume) lines.push('خرید ۳۰ روز اخیر نسبت به ۳۰ روز قبل کمتر شده.');
+    if (b.behindPattern === true && !groups.timing && b.daysSinceLast != null && b.avgIntervalDays != null) {
+      lines.push(P.n0(b.daysSinceLast) + ' روز از آخرین خرید گذشته؛ این مشتری معمولاً هر ' + P.n0(b.avgIntervalDays) + ' روز خرید می‌کند.');
+    }
+    var vis = b.visitInvoiceStats;
+    if (vis && vis.linkedInvoiceCount > 0 && b.visitCount > 0) {
+      var line = 'از ' + P.n0(b.visitCount) + ' ویزیت ثبت‌شده، ' + P.n0(vis.linkedInvoiceCount) + ' فاکتور از همان ویزیت صادر شده';
+      if (vis.avgDaysBetweenVisitAndInvoice != null) {
+        line += vis.avgDaysBetweenVisitAndInvoice < 0.5 ? '؛ معمولاً همان روز.' : '؛ معمولاً حدود ' + P.n1(vis.avgDaysBetweenVisitAndInvoice) + ' روز بعد.';
+      } else line += '.';
+      lines.push(line);
+    }
+    if (b.lastNextAction) lines.push('اقدام بعدی از ویزیت قبل: ' + b.lastNextAction);
+    if (b.topProducts && b.topProducts.length) {
+      lines.push('کالاهای اصلی: ' + b.topProducts.slice(0, 3).map(function (x) { return x.name; }).join('، '));
+    }
+    if (!lines.length) return '';
+    return '<div class="bp-glance">' + lines.map(function (l) { return '<div class="bp-glance-line">' + esc(l) + '</div>'; }).join('') + '</div>';
+  }
+
+  function watchSheetContextHtml(o) {
+    var P = global.BagheriPresent;
+    if (!P || !o) return '';
+    var sentence = P.watchSentence(o);
+    return (sentence ? '<div class="bp-row-text bp-sheet-text">' + esc(sentence) + '</div>' : '') + P.detailsHtml(P.watchDetailLines(o));
   }
 
   function openWatchReasonSheet(occurrenceId, onDone) {
     if (!occurrenceId || typeof recordWatchReason !== 'function') return;
-    var options = (typeof WATCH_REASON_OPTIONS !== 'undefined' && Array.isArray(WATCH_REASON_OPTIONS))
+    var options = (typeof getWatchResponseOptions === 'function')
+      ? getWatchResponseOptions(occurrenceId)
+      : (typeof WATCH_REASON_OPTIONS !== 'undefined' && Array.isArray(WATCH_REASON_OPTIONS))
       ? WATCH_REASON_OPTIONS
       : [
-          { code: 'still_stock', label: 'موجودی مشتری هنوز کافی است' },
+          { code: 'still_stock', label: 'هنوز موجودی دارد' },
           { code: 'price', label: 'قیمت' },
           { code: 'competitor', label: 'خرید از رقیب' },
           { code: 'no_need', label: 'فعلاً نیاز ندارد' },
@@ -381,7 +655,7 @@
     if (typeof openSheet !== 'function') return;
     openSheet(
       '<div class="sheet-title">ثبت علت هشدار</div>' +
-      '<div class="report-note" style="margin-bottom:10px;">علت فقط مشاهده است و هشدار را حل‌شده نمی‌کند.</div>' +
+      '<div class="report-note" style="margin-bottom:10px;">سه پاسخ اول هشدار را می‌بندند و همان مورد را فوراً برنمی‌گردانند؛ سایر علت‌ها فقط ثبت می‌شوند.</div>' +
       '<div id="watch-reason-list">' + optsHtml + '</div>' +
       '<div class="field" style="margin-top:10px;"><label>یادداشت (اختیاری)</label>' +
       '<input type="text" id="watch-reason-note" autocomplete="off" placeholder="توضیح کوتاه..."></div>' +
@@ -429,6 +703,63 @@
     }
   }
 
+  function openWatchFollowUpSheet(occurrenceId, cid, onDone) {
+    if (!occurrenceId || typeof getPendingWatchFollowUps !== 'function' || typeof openSheet !== 'function') return;
+    var pending = [];
+    try { pending = getPendingWatchFollowUps(cid) || []; } catch (e) { pending = []; }
+    var occ = pending.find(function (x) { return x && x.id === occurrenceId; });
+    if (!occ) return;
+    var options = [
+      { code: 'still_stock', label: 'هنوز موجودی دارد' },
+      { code: 'not_wanted', label: 'این محصول را نمی‌خواهد' },
+      { code: 'dismiss', label: 'بررسی شد، فعلاً پیگیری نمی‌خواهم' },
+      { code: 'price', label: 'قیمت' },
+      { code: 'competitor', label: 'خرید از رقیب' },
+      { code: 'no_need', label: 'فعلاً نیاز ندارد' },
+      { code: 'quality', label: 'مشکل کیفیت' },
+      { code: 'other', label: 'سایر' }
+    ].filter(function (x) { return x.code !== 'not_wanted' || !!occ.productId; });
+    var buttons = options.map(function (o) { return '<button type="button" class="btn secondary small" data-followup-result="' + esc(o.code) + '" style="width:100%;margin-bottom:6px;text-align:right;">' + esc(o.label) + '</button>'; }).join('');
+    openSheet('<div class="sheet-title">ثبت نتیجه پیگیری</div>' + watchSheetContextHtml(occ) + '<div id="watch-followup-results">' + buttons + '</div>' + '<div class="field" style="margin-top:10px;"><label>یادداشت (اختیاری)</label><input id="watch-followup-note" type="text" autocomplete="off"></div>' + '<div class="btn-row" style="margin-top:10px;"><button type="button" class="btn secondary" id="watch-followup-cancel-sheet">انصراف</button></div>');
+    var cancel = document.getElementById('watch-followup-cancel-sheet');
+    if (cancel) cancel.onclick = function () { if (typeof closeModal === 'function') closeModal(); };
+    var list = document.getElementById('watch-followup-results');
+    if (list) list.addEventListener('click', function (e) {
+      var btn = e.target.closest('[data-followup-result]'); if (!btn) return;
+      var note = document.getElementById('watch-followup-note');
+      var code = btn.getAttribute('data-followup-result');
+      var result = null;
+      if (code === 'dismiss') {
+        // Explicit completion of the pending follow-up; do not turn it into not_wanted.
+        result = typeof completeWatchFollowUp === 'function' ? completeWatchFollowUp(occurrenceId, 'dismiss', note ? note.value : '') : null;
+      } else if (typeof completeWatchFollowUp === 'function') {
+        result = completeWatchFollowUp(occurrenceId, code, note ? note.value : '');
+      }
+      if (typeof showToast === 'function') showToast(result ? 'نتیجه پیگیری ثبت شد' : 'ثبت نتیجه ممکن نشد');
+      if (typeof closeModal === 'function') closeModal();
+      if (typeof onDone === 'function') onDone();
+    });
+  }
+
+  function bindWatchFollowUps(root, cid) {
+    if (!root) return;
+    root.querySelectorAll('[data-followup-complete]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        openWatchFollowUpSheet(el.getAttribute('data-followup-complete'), cid, function () { drawCustomerPage(rootEl || root); });
+      });
+    });
+    root.querySelectorAll('[data-followup-cancel]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        if (typeof reverseWatchDecision !== 'function') return;
+        var id = el.getAttribute('data-followup-cancel');
+        var ok = false;
+        try { ok = !!reverseWatchDecision(id); } catch (e) { ok = false; }
+        if (typeof showToast === 'function') showToast(ok ? 'پیگیری لغو شد' : 'لغو پیگیری ممکن نشد');
+        drawCustomerPage(rootEl || root);
+      });
+    });
+  }
+
   function bindWatchLifecycleRows(root) {
     if (!root) return;
     root.querySelectorAll('[data-watch-occ]').forEach(function (el) {
@@ -441,7 +772,7 @@
     });
   }
 
-  function drawCustomerPage(root) {
+  function drawCustomerPage(root, ctx) {
     if (!root) return;
     root.classList.add('customer-detail-view'); // UPDATED: Added for CSS scoping
 
@@ -467,8 +798,12 @@
       return;
     }
 
-    const t = customerTotals(c.id);
-    const profit = customerProfit(c.id);
+    if (typeof setHeaderTitle === 'function') {
+      setHeaderTitle(c.name, { isRoot: false });
+    }
+
+    const t = customerTotals(c.id, ctx);
+    const profit = customerProfit(c.id, ctx);
     const word = balanceStatusWord(t.balance);
     const color = t.balance > 0 ? 'accent-rust' : t.balance < 0 ? 'accent-olive' : 'accent-olive';
     const balanceLine = t.balance === 0 ? word : word + ': ' + toman(Math.abs(t.balance)) + ' ت';
@@ -481,32 +816,48 @@
        (the same functions power the Dashboard Action Queue). */
     let unifiedSummaryHtml = '';
     let recommendedAction = null;
+    let customerRiskLevel = null;
+    let customerHealthLabel = 'وضعیت عادی';
     {
       let priority = null, action = null;
-      try { if (typeof calculateCustomerPriority === 'function') priority = calculateCustomerPriority(c.id); } catch (eP) { priority = null; }
-      try { if (typeof calculateCustomerAction === 'function') action = calculateCustomerAction(c.id); } catch (eA) { action = null; }
+      try { if (typeof calculateCustomerPriority === 'function') priority = calculateCustomerPriority(c.id, { ctx: ctx }); } catch (eP) { priority = null; }
+      try { if (typeof calculateCustomerAction === 'function') action = calculateCustomerAction(c.id, priority, { ctx: ctx }); } catch (eA) { action = null; }
       recommendedAction = action && action.actionType !== 'no_action' ? action : null;
       const riskLevel = priority ? priority.riskLevel : null;
+      customerRiskLevel = riskLevel;
+      customerHealthLabel = riskLevel === 'critical' ? 'نیاز به رسیدگی فوری' : riskLevel === 'high' ? 'نیاز به توجه' : riskLevel === 'medium' ? 'قابل بررسی' : 'وضعیت عادی';
       const storyText = (priority && priority.customerStory && priority.customerStory.summary) ? priority.customerStory.summary : '';
       if (storyText) {
         unifiedSummaryHtml =
           '<div class="cust-summary ' + (riskLevel ? 'radar-risk-' + esc(riskLevel) : '') + '">' +
-          '<div class="cust-summary-story">' + esc(storyText) + '</div>' +
+          '<div class="cust-summary-label">خلاصه وضعیت</div><div class="cust-summary-story">' + esc(storyText) + '</div>' +
           '</div>';
       }
     }
 
-    const invs = customerInvoices(c.id)
+    // P0 (what matters now) + follow-ups waiting for this customer — presentation of existing Truth.
+    const watchData = loadWatchData(c.id, ctx);
+    var attRow = null;
+    try {
+      if (ctx && typeof ctx.receivableAttention === 'function') {
+        var attData = ctx.receivableAttention();
+        attRow = (attData.byCustomerId && attData.byCustomerId[c.id]) ? attData.byCustomerId[c.id] : null;
+      }
+    } catch (eAtt) { attRow = null; }
+    const focus = customerFocusHtml(c.id, ctx, watchData);
+    const followUpTopHtml = pendingFollowUpHtml(c.id);
+
+    const invs = customerInvoices(c.id, ctx)
       .slice()
       .sort(function (a, b) {
         return (b.date || '').localeCompare(a.date || '') || String(b.number).localeCompare(String(a.number));
       });
-    const pays = customerPayments(c.id)
+    const pays = customerPayments(c.id, ctx)
       .slice()
       .sort(function (a, b) {
         return (b.date || '').localeCompare(a.date || '');
       });
-    const chks = customerChecks(c.id)
+    const chks = customerChecks(c.id, ctx)
       .slice()
       .sort(function (a, b) {
         return (b.dueDate || '').localeCompare(a.dueDate || '');
@@ -600,7 +951,7 @@
             if (Array.isArray(v.tags) && v.tags.length) extraBits.push('برچسب: ' + v.tags.join('، '));
             if (Array.isArray(v.offeredProducts) && v.offeredProducts.length) {
               var rxMap = { accepted: 'قبول', rejected: 'رد', deferred: 'بعداً' };
-              var rrMap = { price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'ناموجود', no_need: 'عدم نیاز', other: 'سایر' };
+              var rrMap = { price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'ناموجود', no_need: 'عدم نیاز', still_stock: 'موجود داشت', other: 'سایر' };
               var bits = v.offeredProducts.map(function (op) {
                 var prod = (data.products || []).find(function (p) { return p.id === op.productId; });
                 var name = prod ? prod.name : (op.productId || '—');
@@ -641,7 +992,7 @@
 
     let behaviorHtml = '';
     if (typeof customerBehavior === 'function') {
-      const b = customerBehavior(c.id);
+      const b = customerBehavior(c.id, ctx);
       // customerBehaviorSummary's own bullet lines now render lower on the
       // page, inside "جزئیات کامل رفتار خرید" progressive disclosure —
       // the headline decision (risk/opportunity + next action) already
@@ -686,7 +1037,7 @@
             ? '<div style="font-size:.85rem;line-height:1.9;margin-top:8px;padding-top:8px;border-top:1px dotted var(--line);color:var(--ink);">' +
               extraLines
                 .map(function (x) {
-                  return '🔹 ' + esc(x);
+                  return esc(x);
                 })
                 .join('<br>') +
               '</div>'
@@ -754,14 +1105,11 @@
             ? '—'
             : 'ویزیتی ثبت نشده';
 
-      const watchHtmlBlock = intelligenceWatchHtml(c.id);
       behaviorHtml =
         '<h3 class="sub-title">رفتار خرید و هوش تجاری</h3>' +
-        (watchHtmlBlock
-          ? '<details open class="customer-watch-details">' +
-            '<summary class="customer-behavior-summary">نشانه‌ها و هشدارها</summary>' +
-            '<div class="customer-detail-watch-body">' + watchHtmlBlock + '</div></details>'
-          : '') +
+        customerTrendChartHtml(c.id, ctx, b) +
+        behaviorGlanceHtml(b, focus.groups) +
+        intelligenceWatchHtml(c.id, ctx, watchData) +
         '<details class="customer-behavior-details">' +
         '<summary class="customer-behavior-summary">تحلیل رفتار خرید</summary>' +
         summaryHtml +
@@ -826,6 +1174,11 @@
         '</details>';
     }
 
+    /* Presentation helper: one labelled row of the identity block (label muted, value primary). */
+    function cdMeta(label, value) {
+      return '<div class="cd-meta-row"><span class="cd-meta-k">' + label + '</span><span class="cd-meta-v">' + esc(String(value)) + '</span></div>';
+    }
+
     root.innerHTML =
       '<div class="btn-row" style="margin-bottom:10px;">' +
       '<a class="btn secondary small" href="' +
@@ -836,23 +1189,38 @@
       esc(c.name) +
       '</div>' +
       '<div class="customer-identity-meta">' +
-      (c.ownerName ? '<div>مسئول فروشگاه: ' + esc(c.ownerName) + '</div>' : '') +
-      (c.phone ? '<div>تلفن: ' + esc(c.phone) + '</div>' : '') +
+      (c.ownerName ? cdMeta('مسئول فروشگاه', c.ownerName) : '') +
+      (c.phone ? cdMeta('تلفن', c.phone) : '') +
       (c.locationId
-        ? '<div>موقعیت: ' + esc(getLocationDisplayString(c.locationId)) + '</div>'
-        : ((c.region ? '<div>منطقه: ' + esc(c.region) + '</div>' : '') +
-           (c.route ? '<div>مسیر: ' + esc(c.route) + '</div>' : ''))) +
-      (c.address ? '<div>آدرس: ' + esc(c.address) + '</div>' : '') +
-      (c.note ? '<div>یادداشت: ' + esc(c.note) + '</div>' : '') +
+        ? cdMeta('موقعیت', getLocationDisplayString(c.locationId))
+        : ((c.region ? cdMeta('منطقه', c.region) : '') +
+           (c.route ? cdMeta('مسیر', c.route) : ''))) +
+      (c.address ? cdMeta('آدرس', c.address) : '') +
+      (c.note ? cdMeta('یادداشت', c.note) : '') +
       '</div>' +
+      '<div class="bp-customer-health"><span class="bp-customer-health-label">وضعیت مشتری</span><span class="bp-customer-health-value ' + (customerRiskLevel ? 'radar-risk-' + esc(customerRiskLevel) : '') + '">' + esc(customerHealthLabel) + '</span></div>' +
       '<div class="customer-balance-block">' +
       '<div class="label">مانده حساب</div>' +
       '<div class="value ' +
       color +
       ' customer-balance-value">' +
       balanceLine +
-      '</div></div></div>' +
+      '</div></div>' +
+      (attRow
+        ? '<div class="bp-customer-attention">' +
+            '<span class="bp-attention-icon" aria-hidden="true"></span>' +
+            '<span>نیازمند پیگیری — ' +
+              toman(attRow.balance) + ' ت' +
+              (attRow.refKind === 'no_payment_history'
+                ? '، ' + toman(attRow.daysSince) + ' روز از آخرین فاکتور، بدون پرداخت'
+                : '، ' + toman(attRow.daysSince) + ' روز از آخرین پرداخت') +
+            '</span>' +
+          '</div>'
+        : '') +
       unifiedSummaryHtml +
+      '</div>' +
+      focus.html +
+      followUpTopHtml +
       (recommendedAction
         ? '<div class="cust-recommended-action">' +
           '<div class="cust-recommended-action-label">اقدام پیشنهادی</div>' +
@@ -866,14 +1234,16 @@
       '<button type="button" class="btn secondary" id="act-pay">ثبت پرداخت</button>' +
       '<button type="button" class="btn secondary" id="act-visit">ثبت ویزیت</button>' +
       '</div>' +
+      '<details class="bp-customer-secondary-actions"><summary>سایر عملیات</summary>' +
       '<div class="btn-row cust-actions-secondary" style="margin-bottom:16px;">' +
       '<button type="button" class="btn small secondary" id="act-check">ثبت چک</button>' +
       '<button type="button" class="btn small secondary" id="act-edit">ویرایش مشتری</button>' +
       '<button type="button" class="btn small secondary" id="act-location">اختصاص موقعیت</button>' +
-      '<button type="button" class="btn small secondary" id="act-print-statement">🖨️ صورت‌حساب</button>' +
+      '<button type="button" class="btn small secondary" id="act-print-statement">صورت‌حساب</button>' +
       '<button type="button" class="btn small secondary" id="act-toggle-active">' + (c.active === false ? 'فعال‌سازی مشتری' : 'غیرفعال‌سازی مشتری') + '</button>' +
-      '</div>' +
-      '<div class="cards" style="margin-bottom:14px;">' +
+      '</div></details>' +
+      '<h3 class="sub-title">خلاصه مالی</h3>' +
+      '<div class="cards cust-metrics">' +
       '<div class="card"><div class="label">مجموع خرید (فاکتورها)</div><div class="value">' +
       toman(t.invTotal) +
       ' ت</div></div>' +
@@ -889,12 +1259,12 @@
       '<div class="card"><div class="label">تعداد فاکتور</div><div class="value">' +
       invs.length +
       '</div></div>' +
-      '<div class="card"><div class="label">سود مشتری</div><div class="value accent-amber">' +
+      '<div class="card"><div class="label">سود مشتری</div><div class="value">' +
       toman(profit) +
       ' ت</div></div>' +
       '</div>' +
       behaviorHtml +
-      productRejectionInsightsHtml(c.id) +
+      productRejectionInsightsHtml(c.id, ctx) +
       '<h3 class="sub-title">فاکتورها (' +
       invs.length +
       ')</h3>' +
@@ -967,7 +1337,7 @@
           // For action types without a dedicated existing form (e.g. investigate,
           // manager_review, call), expose the existing explanation rather than
           // inventing a new workflow.
-          const target = root.querySelector('details');
+          const target = root.querySelector('.customer-behavior-details');
           if (target) target.open = true;
           if (target && typeof target.scrollIntoView === 'function') {
             target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -993,6 +1363,113 @@
       };
     }
     bindWatchLifecycleRows(root);
+    bindWatchFollowUps(root, id);
+  }
+
+
+  /* Central quick view for the Customers list. Presentation-only: it reuses
+     the frozen Priority/Watch/Balance outputs and existing action APIs. */
+  function openCustomerQuickView(cid) {
+    var c = (data.customers || []).find(function (x) { return x && x.id === cid; });
+    if (!c) return;
+    var ctx = typeof createComputationContext === 'function'
+      ? createComputationContext({ data: data })
+      : { aggregatePairMapCache: Object.create(null) };
+    var totals = customerTotals(cid, ctx) || { balance: 0 };
+    var priority = null;
+    try { priority = typeof calculateCustomerPriority === 'function' ? calculateCustomerPriority(cid, { ctx: ctx }) : null; } catch (e) { priority = null; }
+    var story = priority && priority.customerStory && priority.customerStory.summary ? priority.customerStory.summary : '';
+    var riskLevel = priority ? priority.riskLevel : null;
+    var health = riskLevel === 'critical' ? 'نیاز به رسیدگی فوری' : riskLevel === 'high' ? 'نیاز به توجه' : riskLevel === 'medium' ? 'قابل بررسی' : 'وضعیت عادی';
+    var watchData = loadWatchData(cid, ctx);
+    var focus = customerFocusHtml(cid, ctx, watchData).html || '';
+    // Quick View is deliberately non-destructive: no occurrence opens from here.
+    focus = focus
+      .replace(/\sdata-watch-occ="[^"]*"/g, '')
+      .replace(/\srole="button"/g, '')
+      .replace(/\stabindex="0"/g, '')
+      .replace(/\sclass="bp-topic is-tap"/g, ' class="bp-topic"')
+      .replace(/<span class="bp-topic-chev"[^>]*>.*?<\/span>/g, '');
+
+    var overlay = document.createElement('div');
+    overlay.className = 'bp-qv-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.innerHTML =
+      '<div class="bp-qv-card" role="document">' +
+        '<button type="button" class="bp-qv-close" aria-label="بستن">×</button>' +
+        '<div class="bp-qv-head">' +
+          '<div class="bp-qv-name">' + esc(c.name || 'مشتری') + '</div>' +
+          (c.ownerName ? '<div class="bp-qv-meta">' + esc(c.ownerName) + '</div>' : '') +
+          (c.phone ? '<div class="bp-qv-meta">' + esc(c.phone) + '</div>' : '') +
+          '<div class="bp-qv-balance ' + (totals.balance > 0 ? 'is-debt' : '') + '">' + esc(balanceStatusWord(totals.balance)) + (totals.balance !== 0 ? ': ' + toman(Math.abs(totals.balance)) + ' ت' : '') + '</div>' +
+          '<div class="bp-qv-health radar-risk-' + esc(riskLevel || 'normal') + '">' + esc(health) + '</div>' +
+        '</div>' +
+        (story ? '<div class="bp-qv-story"><div class="bp-qv-section-label">خلاصه وضعیت</div><div>' + esc(story) + '</div></div>' : '') +
+        (focus ? '<div class="bp-qv-focus">' + focus + '</div>' : '') +
+        '<div class="bp-qv-actions">' +
+          '<button type="button" class="btn primary" data-action="visit">ثبت ویزیت</button>' +
+          '<button type="button" class="btn secondary" data-action="invoice">ثبت فاکتور</button>' +
+          '<button type="button" class="btn secondary" data-action="payment">ثبت پرداخت</button>' +
+        '</div>' +
+        '<button type="button" class="bp-qv-full">مشاهده پروفایل کامل ›</button>' +
+      '</div>';
+    var modalRoot = document.getElementById('modalRoot');
+    if (!modalRoot) return;
+    modalRoot.innerHTML = '';
+    modalRoot.appendChild(overlay);
+    try { document.body.classList.add('modal-open'); } catch(_e) {}
+
+    var card = overlay.querySelector('.bp-qv-card');
+    var previousFocus = document.activeElement;
+    var closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      overlay.classList.add('is-closing');
+      setTimeout(function () {
+        try { document.body.classList.remove('modal-open'); } catch(_e) {}
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+      }, 180);
+      document.removeEventListener('keydown', onKeydown);
+    }
+    function onKeydown(e) { if (e.key === 'Escape') { e.preventDefault(); close(); } }
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay || e.target.closest('.bp-qv-close')) { e.preventDefault(); close(); return; }
+      var action = e.target.closest('[data-action]');
+      if (action) {
+        e.preventDefault();
+        var type = action.getAttribute('data-action');
+        close();
+        setTimeout(function () {
+          if (type === 'visit' && typeof openAddVisit === 'function') openAddVisit(cid);
+          else if (type === 'invoice' && typeof openAddInvoice === 'function') openAddInvoice(cid);
+          else if (type === 'payment' && typeof openAddTransaction === 'function') openAddTransaction(cid);
+        }, 185);
+        return;
+      }
+      if (e.target.closest('.bp-qv-full') || e.target.closest('.bp-topic')) {
+        e.preventDefault();
+        close();
+        setTimeout(function () { if (typeof AppRouter !== 'undefined' && AppRouter.navigate) AppRouter.navigate('/customer', { id: cid }); }, 185);
+      }
+    });
+    document.addEventListener('keydown', onKeydown);
+    requestAnimationFrame(function () { overlay.classList.add('is-open'); });
+    var closeBtn = overlay.querySelector('.bp-qv-close');
+    if (closeBtn) closeBtn.focus();
+
+    // Lightweight downward swipe-to-close; no document-level gesture handling.
+    var startY = null;
+    if (card) {
+      card.addEventListener('touchstart', function (e) { if (e.touches && e.touches[0]) startY = e.touches[0].clientY; }, { passive: true });
+      card.addEventListener('touchend', function (e) {
+        if (startY == null || !e.changedTouches || !e.changedTouches[0]) return;
+        if (e.changedTouches[0].clientY - startY > 70) close();
+        startY = null;
+      }, { passive: true });
+    }
   }
 
   function mount(root, params) {
@@ -1005,11 +1482,19 @@
 
     currentCustomerId = params && params.id ? params.id : null;
     function refreshCustomer() {
-      function paint() { drawCustomerPage(rootEl || root); }
+      // Per-cycle, RAM-only Context: shared only so that reconcileWatchLifecycle's
+      // Watch-observation pass and the subsequent Priority/Signals pass (both of
+      // which independently derive the same per-customer SKU aggregation) don't
+      // recompute _aggregatePairMap twice for the same data snapshot. Discarded
+      // after this refreshCustomer() call; never persisted, never reused elsewhere.
+      var ctx = typeof createComputationContext === 'function'
+        ? createComputationContext({ data: data })
+        : { aggregatePairMapCache: Object.create(null) };
+      function paint() { drawCustomerPage(rootEl || root, ctx); }
       // Paint immediately so the page is never blank if lifecycle reconcile hangs.
       paint();
       if (typeof reconcileWatchLifecycle === 'function' && currentCustomerId) {
-        reconcileWatchLifecycle(currentCustomerId).then(paint).catch(function () { paint(); });
+        reconcileWatchLifecycle(currentCustomerId, ctx).then(paint).catch(function () { paint(); });
       }
     }
     refreshCustomer();
@@ -1026,6 +1511,7 @@
   }
 
   global.CustomerView = { mount: mount, unmount: function () {} };
+  global.openCustomerQuickView = openCustomerQuickView;
   // Test / settings seams for Product Rejection Insight (UI-only)
   global.getProductRejectionThreshold = getProductRejectionThreshold;
   global.setProductRejectionThreshold = setProductRejectionThreshold;

@@ -7,7 +7,7 @@
 (function (global) {
   let custQuery = '';
   let custFilter = 'all'; // all | debt | settled | credit
-  let custSortByDebt = false;
+  let custSortBy = 'name'; // name | debt | last_visit | priority
   let locFilter = { regionId: '', routeId: '', neighborhoodId: '', unassigned: false };
 
   let searchHandler = null;
@@ -17,22 +17,11 @@
   let locFilterHandler = null;
   let locUnassignedHandler = null;
   function customerHref(cid) {
-    return typeof isSpaShell === 'function' && isSpaShell()
-      ? '#/customer?id=' + encodeURIComponent(cid)
-      : '#/customer?id=' + encodeURIComponent(cid);
+    return '#/customer?id=' + encodeURIComponent(cid);
   }
 
   function navigateToCustomer(cid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/customer', { id: cid });
-    } else {
-      location.href = '#/customer?id=' + encodeURIComponent(cid);
-    }
+    AppRouter.navigate('/customer', { id: cid });
   }
 
   /* Priority/story lookup — cached for the current view state and only
@@ -41,13 +30,48 @@
      Read-only use of the existing frozen Priority Engine; no new
      scoring, no new thresholds (see spec §9.6 performance rule). */
   let custPriorityMap = null;
+  let custCtx = null;
   function buildPriorityLookup() {
     const map = Object.create(null);
     if (typeof calculateAllCustomerPriorities !== 'function') return map;
     let list = [];
-    try { list = calculateAllCustomerPriorities() || []; } catch (e) { return map; }
+    try { list = calculateAllCustomerPriorities(custCtx) || []; } catch (e) { return map; }
     list.forEach(function (p) { if (p && p.customerId) map[p.customerId] = p; });
     return map;
+  }
+
+  /* Presentation-only: compact 8-week customer purchase sparkline.
+     The chart intentionally uses the same invoice-total basis as the
+     customer detail trend: it is a visual shape of purchase activity,
+     not a new accounting/Intelligence metric. */
+  function customerSparklineHtml(cid, ctx) {
+    try {
+      const invs = (typeof customerInvoices === 'function' ? customerInvoices(cid, ctx) : []) || [];
+      if (!invs.length) return '';
+      const now = new Date(); now.setHours(0,0,0,0);
+      const vals = new Array(8).fill(0);
+      invs.forEach(function (inv) {
+        if (!inv || !inv.date) return;
+        const d = new Date(inv.date + 'T00:00:00'); if (isNaN(d.getTime())) return;
+        d.setHours(0,0,0,0);
+        const days = Math.floor((now - d) / 86400000);
+        if (days < 0 || days >= 56) return;
+        vals[7 - Math.floor(days / 7)] += Number(inv.total) || 0;
+      });
+      if (!vals.some(function (v) { return v > 0; })) return '';
+      const max = Math.max.apply(null, vals) || 1;
+      const left = 5, right = 91;
+      const pts = vals.map(function (v, i) {
+        const x = left + i * ((right - left) / (vals.length - 1));
+        const y = 18 - (v / max) * 13;
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      const last = pts.split(' ').pop();
+      const lastParts = last.split(',');
+      const dotLeftPct = parseFloat(lastParts[0]);
+      const dotTopPct = (parseFloat(lastParts[1]) / 20) * 100;
+      return '<span class="customer-row-spark" aria-label="روند خرید، ۸ هفته اخیر"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="' + pts + '" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polyline></svg><i class="customer-row-spark-dot" style="left:' + dotLeftPct + '%;top:' + dotTopPct + '%;"></i></span>';
+    } catch (e) { return ''; }
   }
 
   function renderCustomerListOnly() {
@@ -71,7 +95,7 @@
     }
 
     rows = rows.map(function (c) {
-      return { c: c, t: customerTotals(c.id) };
+      return { c: c, t: customerTotals(c.id, custCtx) };
     });
 
     if (custFilter === 'debt') rows = rows.filter(function (x) { return x.t.balance > 0; });
@@ -92,11 +116,32 @@
       rows = rows.filter(function (x) { return x.c.locationId && (routeIds.indexOf(x.c.locationId) !== -1 || neighIds.indexOf(x.c.locationId) !== -1); });
     }
 
-    if (custSortByDebt) {
-      rows.sort(function (a, b) { return b.t.balance - a.t.balance; });
+    function lastVisitTime(c) {
+      const visits = Array.isArray(c.visits) ? c.visits : [];
+      if (!visits.length) return 0;
+      const v = visits.slice().sort(function (a, b) {
+        return (b.date || '').localeCompare(a.date || '') || (b.time || '').localeCompare(a.time || '');
+      })[0];
+      const d = v && v.date ? new Date(v.date + (v.time ? 'T' + v.time : 'T00:00:00')).getTime() : 0;
+      return Number.isFinite(d) ? d : 0;
+    }
+    if (custSortBy === 'debt') {
+      rows.sort(function (a, b) { return b.t.balance - a.t.balance || (a.c.name || '').localeCompare(b.c.name || '', 'fa'); });
+    } else if (custSortBy === 'last_visit') {
+      rows.sort(function (a, b) { return lastVisitTime(b.c) - lastVisitTime(a.c) || (a.c.name || '').localeCompare(b.c.name || '', 'fa'); });
+    } else if (custSortBy === 'priority') {
+      rows.sort(function (a, b) {
+        const ap = priorityMap[a.c.id] ? Number(priorityMap[a.c.id].priorityScore) || 0 : 0;
+        const bp = priorityMap[b.c.id] ? Number(priorityMap[b.c.id].priorityScore) || 0 : 0;
+        return bp - ap || (a.c.name || '').localeCompare(b.c.name || '', 'fa');
+      });
     } else {
       rows.sort(function (a, b) { return (a.c.name || '').localeCompare(b.c.name || '', 'fa'); });
     }
+
+    // Presentation only: result count under the filters (reads the already-computed rows).
+    const countEl = document.getElementById('customer-count');
+    if (countEl) countEl.textContent = rows.length ? enToFaDigits(String(rows.length)) + ' مشتری' : '';
 
     if (!rows.length) {
       listEl.innerHTML =
@@ -121,25 +166,25 @@
         const riskLevel = pr ? pr.riskLevel : null;
         const riskCls = riskLevel ? 'radar-risk-' + riskLevel : '';
         const behavior = (typeof customerBehavior === 'function')
-          ? (function(){ try { return customerBehavior(c.id) || {}; } catch(e){ return {}; } })()
+          ? (function(){ try { return customerBehavior(c.id, custCtx) || {}; } catch(e){ return {}; } })()
           : {};
         const watchCount = (typeof getActiveWatchOccurrences === 'function')
           ? (function(){ try { return (getActiveWatchOccurrences(c.id) || []).length; } catch(e){ return 0; } })()
           : 0;
-        const status = (typeof customerStatus === 'function') ? customerStatus(c.id) : null;
+        const status = (typeof customerStatus === 'function') ? customerStatus(c.id, custCtx) : null;
 
-        let badgeLabel = 'فعال';
+        let badgeLabel = '';
         let badgeTone = 'neutral';
-        if (riskLevel === 'critical') { badgeLabel = 'فوری'; badgeTone = 'danger'; }
+        if (c.active === false) { badgeLabel = 'غیرفعال شده'; badgeTone = 'muted'; }
+        else if (riskLevel === 'critical') { badgeLabel = 'فوری'; badgeTone = 'danger'; }
         else if (riskLevel === 'high') { badgeLabel = 'پیگیری'; badgeTone = 'warning'; }
         else if (behavior.behindPattern === true) { badgeLabel = 'عقب‌افتاده'; badgeTone = 'warning'; }
         else if (status === 'lost') { badgeLabel = 'از دست رفته'; badgeTone = 'muted'; }
-        else if (status === 'inactive') { badgeLabel = 'غیرفعال'; badgeTone = 'muted'; }
+        else if (status === 'inactive') { badgeLabel = 'سرد شده'; badgeTone = 'muted'; }
         else if (status === 'new') { badgeLabel = 'جدید'; badgeTone = 'neutral'; }
-        else if (status === 'active') { badgeLabel = 'فعال'; badgeTone = 'success'; }
 
         const days = (typeof customerStats === 'function')
-          ? (function(){ try { return customerStats(c.id).daysSinceLast; } catch(e){ return Infinity; } })()
+        ? (function(){ try { return customerStats(c.id, custCtx).daysSinceLast; } catch(e){ return Infinity; } })()
           : Infinity;
         const daysText = Number.isFinite(days)
           ? ('آخرین خرید: ' + Math.max(0, Math.round(days)) + ' روز پیش')
@@ -156,9 +201,12 @@
           '<span class="customer-row-main">' +
           '<span class="customer-row-title-line">' +
           '<span class="customer-row-name tx-row-title">' + esc(c.name) + '</span>' +
+          customerSparklineHtml(c.id, custCtx) +
           '</span>' +
           '<span class="customer-row-meta-line">' +
-          '<span class="customer-row-status badge tone-' + badgeTone + '">' + esc(badgeLabel) + '</span>' +
+          (badgeLabel
+            ? '<span class="customer-row-status badge tone-' + badgeTone + '">' + esc(badgeLabel) + '</span>'
+            : '') +
           '<span class="customer-row-meta">' + esc(daysText) + '</span>' +
           (watchCount > 0
             ? '<span class="customer-row-watch" aria-label="هشدار فعال" title="' + esc(watchTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>'
@@ -170,7 +218,9 @@
           '<span class="customer-row-balance-value">' +
           (t.balance !== 0 ? toman(Math.abs(t.balance)) + ' ت' : '') +
           '</span>' +
-          '</span></a>'
+          '</span>' +
+          '<button type="button" class="customer-row-detail-hitarea" data-customer-detail="' + esc(c.id) + '" aria-label="مشاهده جزئیات مشتری" title="مشاهده جزئیات مشتری"></button>' +
+          '</a>'
         );
       })
       .join('');
@@ -261,11 +311,21 @@
     root.innerHTML =
       '<div class="field"><input id="customer-search" placeholder="جستجوی نام، آدرس، تلفن، منطقه و…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
       '<div class="chip-row" id="customer-chips">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
-      '<div class="btn-row" style="margin-bottom:8px;align-items:center;flex-wrap:wrap;">' +
-      '<button type="button" class="btn small secondary" id="customer-filter">فیلتر</button>' +
-      '<button type="button" class="btn small secondary" id="sort-debt">' + (custSortByDebt ? '✓ ' : '') + 'مرتب‌سازی بر اساس بدهی</button>' +
+      '<div class="bp-customer-secondary-filters">' +
+      '<div class="btn-row cl-tools">' +
+      '<button type="button" class="btn small secondary" id="customer-filter">فیلتر منطقه</button>' +
+      '<label class="bp-sort-label" for="customer-sort">مرتب‌سازی</label>' +
+      '<select class="tx-toolbar-select" id="customer-sort">' +
+      '<option value="priority" ' + (custSortBy === 'priority' ? 'selected' : '') + '>اولویت</option>' +
+      '<option value="last_visit" ' + (custSortBy === 'last_visit' ? 'selected' : '') + '>آخرین ویزیت</option>' +
+      '<option value="debt" ' + (custSortBy === 'debt' ? 'selected' : '') + '>بدهی</option>' +
+      '<option value="name" ' + (custSortBy === 'name' ? 'selected' : '') + '>نام</option>' +
+      '</select>' +
+      '</div>' +
       '</div>' +
       '<div id="customer-filter-indicator" class="customer-filter-indicator" aria-live="polite"></div>' +
+      '<div id="customer-count" class="cl-count" aria-live="polite"></div>' +
+      '<div class="customer-list-trend-hint"><span class="customer-list-trend-sample"><i></i><b></b></span><span>روند خرید · ۸ هفته اخیر</span></div>' +
       '<div id="customer-list"></div>';
 
     const searchEl = document.getElementById('customer-search');
@@ -285,15 +345,25 @@
     const filterBtn = document.getElementById('customer-filter');
     filterBtn.addEventListener('click', renderLocationFilterSheet);
 
-    const sortBtn = document.getElementById('sort-debt');
-    sortHandler = function () { custSortByDebt = !custSortByDebt; sortBtn.textContent = (custSortByDebt ? '✓ ' : '') + 'مرتب‌سازی بر اساس بدهی'; renderCustomerListOnly(); };
-    sortBtn.addEventListener('click', sortHandler);
+    const sortEl = document.getElementById('customer-sort');
+    sortHandler = function (e) { custSortBy = e.target.value; renderCustomerListOnly(); };
+    if (sortEl) sortEl.addEventListener('change', sortHandler);
 
     const list = document.getElementById('customer-list');
     listClickHandler = function (e) {
+      const detailButton = e.target.closest('[data-customer-detail]');
+      if (detailButton) {
+        e.preventDefault();
+        e.stopPropagation();
+        navigateToCustomer(detailButton.getAttribute('data-customer-detail'));
+        return;
+      }
       const row = e.target.closest('[data-open-customer]');
       if (!row) return;
-      if (typeof isSpaShell === 'function' && isSpaShell()) { e.preventDefault(); navigateToCustomer(row.getAttribute('data-open-customer')); }
+      if (typeof isSpaShell === 'function' && isSpaShell()) {
+        e.preventDefault();
+        if (typeof openCustomerQuickView === 'function') openCustomerQuickView(row.getAttribute('data-open-customer'));
+      }
     };
     list.addEventListener('click', listClickHandler);
     updateLocationFilterIndicator();
@@ -315,8 +385,11 @@
 
     custQuery = '';
     custFilter = (params && ['debt', 'settled', 'credit'].indexOf(params.filter) !== -1) ? params.filter : 'all';
-    custSortByDebt = false;
+    custSortBy = 'priority';
     locFilter = { regionId: '', routeId: '', neighborhoodId: '', unassigned: false };
+    custCtx = typeof createComputationContext === 'function'
+      ? createComputationContext({ data: data })
+      : null;
     custPriorityMap = null; // fresh on entering the page
     drawCustomersPage(root);
 
@@ -324,6 +397,9 @@
     // change risk/story output — invalidate the cache then, not on every
     // keystroke render.
     refreshToken = ViewHost.setRefresh(function () {
+      custCtx = typeof createComputationContext === 'function'
+        ? createComputationContext({ data: data })
+        : null;
       custPriorityMap = null;
       renderCustomerListOnly();
     });
@@ -332,6 +408,7 @@
     return function unmount() {
       ViewHost.clearRefresh(refreshToken);
       refreshToken = null;
+      custCtx = null;
       if (searchHandler) {
         const se = document.getElementById('customer-search');
         if (se) se.removeEventListener('input', searchHandler);
@@ -346,8 +423,8 @@
       chipHandlers = [];
 
       if (sortHandler) {
-        const sb = document.getElementById('sort-debt');
-        if (sb) sb.removeEventListener('click', sortHandler);
+        const sb = document.getElementById('customer-sort');
+        if (sb) sb.removeEventListener('change', sortHandler);
       }
       sortHandler = null;
 

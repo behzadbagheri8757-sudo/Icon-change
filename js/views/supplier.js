@@ -17,16 +17,7 @@
   }
 
   function navigateToSupplier(sid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/supplier', { id: sid });
-    } else {
-      location.href = '#/supplier?id=' + encodeURIComponent(sid);
-    }
+    AppRouter.navigate('/supplier', { id: sid });
   }
 
   function renderSupplierPurchaseReturn(s) {
@@ -286,7 +277,7 @@
             </select>
           </div>
           <div class="btn-row"><button class="btn" id="save-sup-check-edit">ذخیره</button></div>
-        `);
+        `, {dirtyCheck:true});
         document.getElementById('save-sup-check-edit').addEventListener('click', async function () {
           const amount = numVal(document.getElementById('f-amount'));
           if (amount <= 0) { showToast('مبلغ رو وارد کن'); return; }
@@ -500,7 +491,7 @@
       </div>
       <div class="field"><label>توضیح (اختیاری)</label><input id="f-note"></div>
       <div class="btn-row"><button class="btn" id="save-suppay">ثبت</button></div>
-    `);
+    `, {dirtyCheck:true});
 
     const methodEl = document.getElementById('f-method');
     const checkFields = document.getElementById('check-fields');
@@ -554,7 +545,7 @@
         <input id="f-opening" type="text" inputmode="decimal" value="${s.openingBalance || ''}">
       </div>
       <div class="btn-row"><button class="btn" id="save-sup-edit">ذخیره</button></div>
-    `);
+    `, {dirtyCheck:true});
     document.getElementById('save-sup-edit').addEventListener('click', async function (ev) {
       await withSubmitGuard(ev.currentTarget, async () => {
         const name = document.getElementById('f-name').value.trim();
@@ -610,7 +601,28 @@
       const retBtn = canReturn
         ? '<button type="button" class="btn secondary small tx-status-btn" data-return-purchase="' + esc(p.id) + '">برگشت</button>'
         : '';
-      return `<div class="ledger-row tx-row">
+      // Itemised purchases: expandable list of lines (name, qty + unit, unit price, line total).
+      // Display only — reads p.items / data.products, never writes. Legacy single-product
+      // and description-only purchases keep their previous title and have no details.
+      const lineItems = Array.isArray(p.items) ? p.items.filter(it => it) : [];
+      const itemsDetails = lineItems.length
+        ? '<details class="row-details"><summary>مشاهده اقلام</summary><div class="row-details-list">' +
+            lineItems.map(it => {
+              const prod = data.products.find(x => x.id === it.productId) || {};
+              const qty = Number(it.qty) || 0;
+              const unitCost = Number(it.unitCost) || 0;
+              const unit = prod.packageWeight ? 'بسته' : 'واحد';
+              const pkg = prod.packageWeight ? ' (وزن بسته ' + enToFaDigits(String(prod.packageWeight)) + ')' : '';
+              return '<div class="row-details-item">' +
+                '<span class="row-details-name">' + esc(it.name || prod.name || 'کالا') + '</span>' +
+                '<span class="row-details-total">' + toman(qty * unitCost) + ' ت</span>' +
+                '<span class="row-details-meta">' + enToFaDigits(String(qty)) + ' ' + unit + pkg +
+                  ' × ' + toman(unitCost) + ' ت</span>' +
+              '</div>';
+            }).join('') +
+          '</div></details>'
+        : '';
+      return `<div class="ledger-row tx-row${itemsDetails ? ' row-details-wrap' : ''}">
         <span class="name">
           <span class="tx-row-title">${esc(String(itemsHint))}</span>
           <span class="sub">${faDate(p.date)}${ret ? ' · برگشت ' + toman(ret) + ' ت' : ''}</span>
@@ -620,6 +632,7 @@
           <span class="tx-row-total">${toman(net)} ت</span>
           ${retBtn}
         </span>
+        ${itemsDetails}
       </div>`;
     }).join('') : '<div class="empty" style="padding:12px 0;">خریدی ثبت نشده</div>';
 
@@ -662,7 +675,7 @@
 
       <!-- IDENTITY -->
       <div class="tx-identity card">
-        <div class="tx-identity-title">${esc(s.name)}${s.active === false ? ' <span class="badge pending">غیرفعال</span>' : ''}</div>
+        <div class="tx-identity-title">${esc(s.name)}${s.active === false ? ' <span class="badge tone-muted">غیرفعال</span>' : ''}</div>
         <div class="tx-identity-meta">
           ${s.phone ? '<span>تلفن: ' + esc(s.phone) + '</span>' : '<span class="sub">بدون تلفن</span>'}
         </div>

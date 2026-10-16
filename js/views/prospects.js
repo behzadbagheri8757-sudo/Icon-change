@@ -10,7 +10,7 @@
 (function (global) {
   let pQuery = '';
   let pFilter = 'all'; // all | active | converted | A+ | A | B
-  let pSort = 'score_desc'; // score_desc | score_asc | name | newest
+  let pSort = 'score_desc'; // score_desc | score_asc | name | newest | last_evaluation
   let pLocFilter = { regionId: '', routeId: '', neighborhoodId: '', unassigned: false };
 
   let searchHandler = null;
@@ -26,31 +26,12 @@
   }
 
   function navigateToProspect(id) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/prospect', { id: id });
-    } else {
-      location.href = '#/prospect?id=' + encodeURIComponent(id);
-    }
+    AppRouter.navigate('/prospect', { id: id });
   }
 
   function navigateToEvaluation(shopId) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      const params = shopId ? { shopId: shopId } : {};
-      AppRouter.navigate('/evaluation', params);
-    } else {
-      const url = shopId ? '#/evaluation?shopId=' + encodeURIComponent(shopId) : '#/evaluation';
-      location.href = url;
-    }
+    const params = shopId ? { shopId: shopId } : {};
+    AppRouter.navigate('/evaluation', params);
   }
 
   function renderTargetCard() {
@@ -151,10 +132,10 @@
 
     if (pSort === 'score_asc') rows.sort((a,b) => a.latestScore - b.latestScore);
     else if (pSort === 'name') rows.sort((a,b) => (a.name || '').localeCompare(b.name || '', 'fa'));
-    else if (pSort === 'newest') rows.sort((a,b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    else if (pSort === 'newest' || pSort === 'last_evaluation') rows.sort((a,b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     else rows.sort((a,b) => b.latestScore - a.latestScore);
 
-    sum.innerHTML = `<div class="card"><div class="label">تعداد</div><div class="value">${rows.length}</div></div>
+    sum.innerHTML = `<div class="card"><div class="label">تعداد مغازه (فیلتر)</div><div class="value">${rows.length}</div></div>
       <div class="card"><div class="label">کل مغازه‌ها</div><div class="value">${prospectState.shops.length}</div></div>`;
 
     if (!rows.length) {
@@ -221,7 +202,7 @@
           <option value="score_desc" ${pSort === 'score_desc' ? 'selected' : ''}>بیشترین امتیاز</option>
           <option value="score_asc" ${pSort === 'score_asc' ? 'selected' : ''}>کمترین امتیاز</option>
           <option value="name" ${pSort === 'name' ? 'selected' : ''}>نام</option>
-          <option value="newest" ${pSort === 'newest' ? 'selected' : ''}>جدیدترین</option>
+          <option value="last_evaluation" ${pSort === 'last_evaluation' ? 'selected' : ''}>آخرین ارزیابی</option>
         </select>
       </div>
       <div id="prospect-summary" class="cards" style="margin-bottom:10px;"></div>
@@ -318,16 +299,7 @@
     });
     root.querySelector('[data-nav-routes]').addEventListener('click', function (e) {
       e.preventDefault();
-      if (
-        typeof isSpaShell === 'function' &&
-        isSpaShell() &&
-        typeof AppRouter !== 'undefined' &&
-        AppRouter.navigate
-      ) {
-        AppRouter.navigate('/locations');
-      } else {
-        location.href = '#/locations';
-      }
+      AppRouter.navigate('/locations');
     });
 
     // Delegated list click — once per draw (same pattern as Customers/Checks)

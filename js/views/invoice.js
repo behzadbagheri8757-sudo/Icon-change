@@ -12,42 +12,15 @@
   let actionHandlersBound = false;
 
   function navigateToInvoices() {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/invoices');
-    } else {
-      location.href = '#/invoices';
-    }
+    AppRouter.navigate('/invoices');
   }
 
   function navigateToCustomer(cid) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/customer', { id: cid });
-    } else {
-      location.href = '#/customer?id=' + encodeURIComponent(cid);
-    }
+    AppRouter.navigate('/customer', { id: cid });
   }
 
   function navigateToInvoice(invId) {
-    if (
-      typeof isSpaShell === 'function' &&
-      isSpaShell() &&
-      typeof AppRouter !== 'undefined' &&
-      AppRouter.navigate
-    ) {
-      AppRouter.navigate('/invoice', { id: invId });
-    } else {
-      location.href = '#/invoice?id=' + encodeURIComponent(invId);
-    }
+    AppRouter.navigate('/invoice', { id: invId });
   }
 
   function invoicePaidAmount(inv) {
@@ -82,6 +55,10 @@
       root.innerHTML = `<div class="empty">فاکتور پیدا نشد (احتمالاً حذف شده).</div>
         <div class="btn-row"><a class="btn secondary" href="#/invoices">بازگشت به فاکتورها</a></div>`;
       return;
+    }
+
+    if (typeof setHeaderTitle === 'function') {
+      setHeaderTitle('#' + (inv.number || '—'), { isRoot: false });
     }
 
     const cust = data.customers.find(c => c.id === inv.customerId);
@@ -129,15 +106,15 @@
 
     const hist = (inv.editHistory && inv.editHistory.length) ? `
       <h3 class="sub-title">تاریخچه ویرایش</h3>
-      ${inv.editHistory.slice().reverse().map(function (h) {
+      <div class="inv-surface">${inv.editHistory.slice().reverse().map(function (h) {
         return `<div class="ledger-row" style="display:block;cursor:default;">
           <span class="sub" style="display:block;margin-bottom:4px;">${faDate(String(h.editedAt).slice(0, 10)) + ' ' + String(h.editedAt).slice(11, 16)}</span>
           <span class="name" style="font-weight:400;">جمع قبل: ${toman(h.before && h.before.total)} ت ← جمع بعد: ${toman(h.after && h.after.total)} ت</span>
         </div>`;
-      }).join('')}
+      }).join('')}</div>
     ` : '';
 
-    root.innerHTML = `
+    root.innerHTML = `<div class="inv-detail">
       <div class="btn-row" style="margin-bottom:10px;">
         <a class="btn secondary small" href="#/invoices">← فاکتورها</a>
         ${cust ? `<a class="btn secondary small" href="#/customer?id=${encodeURIComponent(cust.id)}">مشتری</a>` : ''}
@@ -181,24 +158,88 @@
 
       <!-- ITEMS -->
       <h3 class="sub-title">اقلام</h3>
-      <div class="tx-items">${itemRows}</div>
+      <div class="tx-items inv-surface">${itemRows}</div>
 
       <!-- PAYMENT DETAILS (progressive) -->
       <details class="tx-details">
         <summary>جزئیات پرداخت و سود</summary>
         <div class="cards" style="margin-top:10px;margin-bottom:8px;">
           ${inv.discount ? `<div class="card"><div class="label">تخفیف فاکتور${inv.discountType === 'percent' ? ' (%)' : ''}</div><div class="value">${toman(inv.discount)}${inv.discountType === 'percent' ? ' %' : ' ت'}</div></div>` : ''}
-          <div class="card"><div class="label">نقد</div><div class="value" style="font-size:1rem;">${toman(inv.cashPaid || 0)}</div></div>
-          <div class="card"><div class="label">کارت</div><div class="value" style="font-size:1rem;">${toman(inv.cardPaid || 0)}</div></div>
-          <div class="card"><div class="label">انتقال</div><div class="value" style="font-size:1rem;">${toman(inv.transferPaid || 0)}</div></div>
-          <div class="card"><div class="label">چک</div><div class="value" style="font-size:1rem;">${toman(inv.checkPaid || 0)}</div></div>
+          ${inv.cashPaid ? `<div class="card"><div class="label">نقد</div><div class="value" style="font-size:1rem;">${toman(inv.cashPaid)} ت</div></div>` : ''}
+          ${inv.cardPaid ? `<div class="card"><div class="label">کارت</div><div class="value" style="font-size:1rem;">${toman(inv.cardPaid)} ت</div></div>` : ''}
+          ${inv.transferPaid ? `<div class="card"><div class="label">انتقال</div><div class="value" style="font-size:1rem;">${toman(inv.transferPaid)} ت</div></div>` : ''}
+          ${inv.checkPaid ? `<div class="card"><div class="label">چک</div><div class="value" style="font-size:1rem;">${toman(inv.checkPaid)} ت</div></div>` : ''}
           ${hasSnapshot ? `
             <div class="card"><div class="label">مانده قبلی مشتری</div><div class="value" style="font-size:1rem;">${toman(inv.prevBalance)} ت</div></div>
             <div class="card"><div class="label">مانده بعد از فاکتور</div><div class="value" style="font-size:1rem;">${toman(Math.abs(inv.newBalance || 0))} ت ${balanceStatusWord(inv.newBalance || 0)}</div></div>
           ` : ''}
-          <div class="card wide"><div class="label">سود اقلام این فاکتور</div><div class="value accent-amber">${toman(invProfit)} ت</div></div>
+          <div class="card wide"><div class="label">سود اقلام این فاکتور</div><div class="value">${toman(invProfit)} ت</div></div>
         </div>
       </details>
+
+      ${(() => {
+        let tr = null;
+        try {
+          tr = typeof invoiceAllocationTrace === 'function' ? invoiceAllocationTrace(inv.id) : null;
+        } catch (e) {
+          tr = null;
+        }
+        if (!tr) return '';
+
+        const fmtDate = function(d){ return typeof faDate === 'function' ? faDate(d) : (d || '—'); };
+        const escText = function(x){ return esc(x == null ? '' : String(x)); };
+        const incomingRows = tr.incoming.map(function(x){
+          let label = '';
+          if(x.path === 'linked') label = 'پرداخت ثبت‌شده برای همین فاکتور';
+          else if(x.path === 'overflow') label = 'مازاد پرداخت فاکتور #' + escText(x.fromInvoiceNumber);
+          else if(x.path === 'unlinked') label = 'پرداخت بدون مقصد مشتری';
+          else if(x.path === 'linkedReturn') label = 'برگشت از فروش لینک‌شده';
+          const badge = x.path === 'linkedReturn' ? '<span class="sub accent-amber" style="margin-right:6px;">نه دریافت نقدی</span>' : '';
+          return '<div class="ledger-row ' + (x.path === 'linkedReturn' ? 'accent-amber' : 'accent-olive') + '" style="cursor:default;">' +
+            '<span class="name">' + label + '<span class="sub">' + escText(fmtDate(x.date)) + ' · ' + escText(x.kind) + ' · ' + escText(x.eventId) + '</span></span>' +
+            '<span class="filler"></span>' + badge + '<span class="amount">' + toman(x.amount) + ' ت</span></div>';
+        }).join('');
+        const outgoingRows = tr.outgoing.map(function(x){
+          const labels = x.destinations.map(function(d){
+            if(d.type === 'invoice') return 'به فاکتور #' + escText(d.invoiceNumber);
+            if(d.type === 'opening') return 'به مانده افتتاحیه';
+            return 'به اعتبار مشتری';
+          }).join(', ');
+          return '<div class="ledger-row accent-amber" style="cursor:default;">' +
+            '<span class="name">' + escText(fmtDate(x.date)) + '<span class="sub">' + labels + '</span></span>' +
+            '<span class="filler"></span><span class="amount">' + toman(x.amount) + ' ت</span></div>';
+        }).join('');
+        const legacyText = tr.legacyOnInvoice > 0 ?
+          '<div class="ledger-row accent-rust" style="display:block;cursor:default;">' +
+          '<span class="name">مبلغ ثبت‌شده بدون ریزتراکنش: ' + toman(tr.legacyOnInvoice) + ' ت</span>' +
+          '<span class="sub" style="display:block;margin-top:4px;">— بخشی از مبلغ روی فاکتور ثبت شده است، اما ریزتراکنش قابل‌نمایش آن در داده‌های فعلی موجود نیست.</span>' +
+          '</div>' : '';
+        const finalRows = '<div class="ledger-row" style="cursor:default;"><span class="label">مبلغ تسویه‌شده فاکتور</span><span class="filler"></span><span class="amount">' + toman(tr.effectivePaid) + ' ت</span></div>' +
+          '<div class="ledger-row" style="cursor:default;"><span class="label">مانده فاکتور</span><span class="filler"></span><span class="amount">' + toman(tr.remain) + ' ت</span></div>';
+
+        let body = '';
+        if(tr.onRecord === 0 && tr.incomingTotal === 0 && tr.legacyOnInvoice === 0){
+          body = '<div class="empty" style="padding:8px 0;">هنوز پرداختی به این فاکتور تخصیص نیافته است.</div>';
+        } else if(tr.incomingTotal === 0 && tr.legacyOnInvoice > 0){
+          body = '<div class="ledger-row" style="cursor:default;"><span class="label">پرداخت ثبت‌شده روی فاکتور</span><span class="filler"></span><span class="amount">' + toman(tr.onRecord) + ' ت</span></div>' + finalRows + legacyText;
+        } else if(tr.outgoingTotal > 0){
+          body = '<div class="ledger-row" style="cursor:default;"><span class="label">پرداخت ثبت‌شده روی فاکتور</span><span class="filler"></span><span class="amount">' + toman(tr.onRecord) + ' ت</span></div>' +
+            '<div class="ledger-row accent-olive" style="cursor:default;"><span class="label">تخصیص‌یافته برای همین فاکتور</span><span class="filler"></span><span class="amount">' + toman(tr.incomingLinkedTotal) + ' ت</span></div>' +
+            '<div class="ledger-row accent-amber" style="cursor:default;"><span class="label">مبالغ منتقل‌شده به بدهی‌های دیگر</span><span class="filler"></span><span class="amount">' + toman(tr.outgoingTotal) + ' ت</span></div>' +
+            '<div class="sub" style="display:block;margin:8px 0 4px;">جزئیات مبالغ منتقل‌شده:</div>' + outgoingRows +
+            (tr.incomingLinkedReturnTotal > 0 ? '<div class="ledger-row accent-amber" style="cursor:default;"><span class="label">برگشت از فروش لینک‌شده <span class="sub">نه دریافت نقدی</span></span><span class="filler"></span><span class="amount">' + toman(tr.incomingLinkedReturnTotal) + ' ت</span></div>' : '') +
+            finalRows + legacyText;
+        } else {
+          body = '<div class="sub-title" style="margin:8px 0;">مبالغ مؤثر در تسویه</div>' + incomingRows +
+            (tr.incomingTotal === tr.effectivePaid ? finalRows : '<div class="ledger-row" style="cursor:default;"><span class="label">جمع مبالغ مؤثر در تسویه</span><span class="filler"></span><span class="amount">' + toman(tr.incomingTotal) + ' ت</span></div>' + finalRows) + legacyText;
+        }
+
+        return '<details class="tx-details">' +
+          '<summary>ریز تسویه فاکتور</summary>' +
+          '<div style="margin-top:10px;margin-bottom:8px;">' + body + '</div>' +
+          '<div class="sub" style="display:block;line-height:1.7;margin-top:10px;">این مسیر بر اساس داده‌ها و قواعد تخصیص فعلی محاسبه شده است.<br>با ویرایش یا حذف اسناد و تراکنش‌های گذشته، یا ثبت سندی با تاریخ گذشته،<br>ممکن است تغییر کند؛ ثبت فاکتور جدید با تاریخ آینده آن را تغییر نمی‌دهد.</div>' +
+          '</details>';
+      })()}
 
       <!-- SECONDARY: visit link -->
       <details class="tx-details">
@@ -226,8 +267,7 @@
       </details>
 
       ${hist}
-    
-    `;
+    </div>`;
 
     // Action buttons (delegated)
     if (!actionHandlersBound) {
@@ -280,6 +320,7 @@
                 drawInvoicePage(rootEl || root);
               } catch (err) {
                 console.error(err);
+                drawInvoicePage(rootEl || root);
                 showToast('ذخیره نشد');
               }
             })();
@@ -307,6 +348,10 @@
               if (typeof revertInvoiceStockEffects === 'function') revertInvoiceStockEffects(inv);
               if (typeof revertInvoicePayments === 'function') revertInvoicePayments(inv);
               data.invoices = data.invoices.filter(function (x) { return x.id !== inv.id; });
+              // این فاکتور دیگر وجود ندارد — اگر دریافت بدون‌مقصدی قبلاً بخشی از خودش را
+              // به همین فاکتور تخصیص داده بود، آن بخش را «بدون‌مقصد» علامت می‌زند تا به یک
+              // شناسهٔ حذف‌شده اشاره نکند (تخصیص‌های بقیهٔ فاکتورها دست‌نخورده می‌ماند).
+              if (typeof releaseDebtAllocationsForDeletedInvoice === 'function') releaseDebtAllocationsForDeletedInvoice(inv.id);
               try {
                 await saveData();
               } catch (saveErr) {

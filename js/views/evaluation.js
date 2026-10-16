@@ -39,6 +39,17 @@
 
   let handlers = []; // {el, type, fn} — all cleared on unmount
 
+  function setEvaluationDirty(){
+    if (typeof window.__setRouteDirtyState === 'function') {
+      window.__setRouteDirtyState(true, function(){
+        if (typeof window.__setRouteDirtyState === 'function') window.__setRouteDirtyState(false);
+      });
+    }
+  }
+  function clearEvaluationDirty(){
+    if (typeof window.__setRouteDirtyState === 'function') window.__setRouteDirtyState(false);
+  }
+
   // Working context for NEW evaluations only. This is UI/session preference data,
   // not Prospect data, so keep it outside IndexedDB and outside the Prospect schema.
   const EVAL_WORKING_LOCATION_KEY = 'baqeri_evaluation_working_location_v1';
@@ -68,11 +79,7 @@
 
   function navigateToProspect(id, opts) {
     const justCreated = !!(opts && opts.justCreated);
-    if (typeof isSpaShell === 'function' && isSpaShell() && typeof AppRouter !== 'undefined' && AppRouter.navigate) {
-      AppRouter.navigate('/prospect', justCreated ? { id: id, justCreated: '1' } : { id: id });
-    } else {
-      location.href = '#/prospect?id=' + encodeURIComponent(id) + (justCreated ? '&justCreated=1' : '');
-    }
+    AppRouter.navigate('/prospect', justCreated ? { id: id, justCreated: '1' } : { id: id });
   }
 
   function currentQuestions() {
@@ -173,13 +180,14 @@
       <div class="btn-row" style="margin-top:14px;">
         <button type="button" class="btn" id="eval-summary-name-save">ذخیره نام</button>
       </div>
-    `);
+    `, {dirtyCheck:true});
 
     const input = document.getElementById('eval-summary-name');
     const saveBtn = document.getElementById('eval-summary-name-save');
     if (input) input.focus();
     if (saveBtn) saveBtn.addEventListener('click', function () {
       formState.name = input ? input.value : formState.name;
+      setEvaluationDirty();
       closeModal();
       drawEvaluation(root);
     });
@@ -201,7 +209,7 @@
       <div class="btn-row" style="margin-top:14px;">
         <button type="button" class="btn" id="eval-summary-answer-save">ثبت تغییر</button>
       </div>
-    `);
+    `, {dirtyCheck:true});
 
     let selectedValue = currentValue;
     document.querySelectorAll('#eval-summary-edit-options [data-summary-edit-value]').forEach(function (btn) {
@@ -215,7 +223,7 @@
 
     const saveBtn = document.getElementById('eval-summary-answer-save');
     if (saveBtn) saveBtn.addEventListener('click', function () {
-      if (selectedValue != null) formState.answers[q.id] = selectedValue;
+      if (selectedValue != null) { formState.answers[q.id] = selectedValue; setEvaluationDirty(); }
       closeModal();
       drawEvaluation(root);
     });
@@ -300,7 +308,7 @@
       <div class="btn-row" style="margin-bottom:10px;">
         <a class="btn secondary small" href="#/prospects">← لیست</a>
       </div>
-      <h2 class="section-title">ارزیابی مشتری بالقوه</h2>
+      <h2 class="section-title">ارزیابی مغازه</h2>
       ${stepBodyHtml()}
     `;
 
@@ -309,6 +317,7 @@
     if (formState.step === STEP_PROFILE) {
       on(document.getElementById('eval-shop-name'), 'input', function (e) {
         formState.name = e.target.value;
+        setEvaluationDirty();
       });
       on(document.getElementById('eval-change-location'), 'click', function () {
         const idPrefix = 'eval-context-loc';
@@ -326,6 +335,7 @@
           if (!locationId) return;
           applyLocationToFormState(locationId);
           setWorkingEvaluationLocation(locationId);
+          setEvaluationDirty();
           const label = document.querySelector('.eval-location-context-text');
           if (label) label.textContent = getLocationDisplayString(locationId);
         };
@@ -337,6 +347,7 @@
         on(btn, 'click', function () {
           const newProfile = btn.getAttribute('data-profile');
           if (formState.profile !== newProfile) {
+            setEvaluationDirty();
             // Switching profile invalidates the previous question set
             // (spec §19: Retail answers must never mix with Food Service).
             formState.profile = newProfile;
@@ -354,6 +365,7 @@
       });
       root.querySelectorAll('[data-biztype]').forEach(function (btn) {
         on(btn, 'click', function () {
+          setEvaluationDirty();
           formState.businessType = btn.getAttribute('data-biztype');
           root.querySelectorAll('[data-biztype]').forEach(function (b) {
             b.classList.toggle('selected', b === btn);
@@ -381,6 +393,7 @@
       });
       root.querySelectorAll('[data-tag]').forEach(function (btn) {
         on(btn, 'click', function () {
+          setEvaluationDirty();
           const value = btn.getAttribute('data-tag');
           const i = formState.tags.indexOf(value);
           if (i >= 0) formState.tags.splice(i, 1); else formState.tags.push(value);
@@ -393,6 +406,7 @@
         on(saveBtn, 'click', function () {
           if (saveBtn.disabled) return;
           saveBtn.disabled = true;
+          window.__sheetSaveInFlight = (window.__sheetSaveInFlight || 0) + 1;
           (async function () {
             try {
               const shop = await createProspectShopV2({
@@ -408,12 +422,15 @@
               if (typeof queueProspectTargetMilestoneMessage === 'function') {
                 queueProspectTargetMilestoneMessage(prospectState.dailyTarget);
               }
+              clearEvaluationDirty();
               showToast('مغازه ثبت شد');
               navigateToProspect(shop.id, { justCreated: true });
             } catch (e) {
               console.error(e);
               showToast('خطا در ذخیره');
               saveBtn.disabled = false;
+            } finally {
+              window.__sheetSaveInFlight = Math.max(0, (window.__sheetSaveInFlight || 1) - 1);
             }
           })();
         });
@@ -427,6 +444,7 @@
       });
       root.querySelectorAll('.eval-q-opt').forEach(function (btn) {
         on(btn, 'click', function () {
+          setEvaluationDirty();
           const qid = btn.getAttribute('data-qid');
           const value = btn.getAttribute('data-value');
           formState.answers[qid] = value;
@@ -455,6 +473,7 @@
     // This view only creates NEW prospects (spec §4, §13: re-visiting an
     // existing prospect is a lightweight Follow-up Visit, handled from the
     // Prospect Detail view instead of here).
+    clearEvaluationDirty();
     formState = {
       name: '',
       routeId: null,
@@ -472,6 +491,7 @@
     refreshToken = ViewHost.setRefresh(function () { drawEvaluation(root); });
 
     return function unmount() {
+      clearEvaluationDirty();
       ViewHost.clearRefresh(refreshToken);
       refreshToken = null;
       clearHandlers();
