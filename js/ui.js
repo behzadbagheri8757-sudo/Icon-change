@@ -47,11 +47,13 @@ function normalizeVisibleDigits(root){
     const observer = new MutationObserver(function(mutations){
       mutations.forEach(function(m){
         m.addedNodes && Array.from(m.addedNodes).forEach(function(n){
-          if(n.nodeType === 1 || n.nodeType === 3) normalizeVisibleDigits(n.nodeType === 1 ? n : n.parentElement);
+          if(n.nodeType === 1 || n.nodeType === 3) {
+            normalizeVisibleDigits(n.nodeType === 1 ? n : n.parentElement);
+          }
         });
       });
     });
-    observer.observe(target, {childList:true,subtree:true});
+    observer.observe(target, {childList:true, subtree:true});
     normalizeVisibleDigits(target);
   }
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true});
@@ -144,6 +146,210 @@ function isLiveAmountInput(el){
     }
   }
 })();
+/* iOS-style clear (×) button for editable text/numeric inputs (UI-only).
+   One shared floating button, positioned over the focused input, so it works
+   for dynamically (re)rendered forms without touching any form markup.
+   Clearing sets value='' and fires a normal bubbling 'input' event, exactly
+   like the user deleting the text, so existing live formatting / invoice
+   calculations / dirty-tracking run unchanged. Opt out with data-no-clear. */
+(function bindInputClearButton(){
+  if(typeof document === 'undefined') return;
+  var OK_TYPES = ['text','tel','number','email','url'];
+  // Fields narrower than NARROW get the compact 22px button + 26px end
+  // padding (has-input-clear-sm). Covers the invoice qty field (74-76px) and
+  // the price field at <=360px (88px); the price field at 96px keeps 30px/34px.
+  var SIZE = 30, SIZE_SM = 22, NARROW = 90, MIN_W = 40;
+  // Follow loop: runs only while the button may still be moving, and stops
+  // once the geometry has been identical for `need` consecutive frames.
+  // Viewport-driven changes (iOS keyboard show/hide, focus) use the longer
+  // window because the keyboard animation outlasts the short one and can
+  // move things without emitting further events; both are bounded.
+  var STABLE_FRAMES = 10, STABLE_FRAMES_VIEWPORT = 40;
+  var need = STABLE_FRAMES;
+  var btn = null, cur = null, mo = null, loop = 0, stable = 0, lastKey = '';
+  // Measured difference between where position:fixed actually renders the
+  // button and where we asked for it (iOS visual-viewport quirks); see place().
+  var corrX = 0, corrY = 0;
+
+  function eligible(el){
+    if(!el || el.tagName !== 'INPUT') return false;
+    var t = (el.getAttribute('type') || 'text').toLowerCase();
+    if(OK_TYPES.indexOf(t) === -1) return false;
+    if(el.readOnly || el.disabled) return false;
+    if(el.getAttribute('inputmode') === 'none') return false;
+    if(el.hasAttribute('data-no-clear') || el.hasAttribute('data-shamsi-field') || el.classList.contains('pin-input-real')) return false;
+    return true;
+  }
+
+  function ensureBtn(){
+    if(btn) return btn;
+    btn = document.createElement('span');
+    btn.className = 'input-clear-btn';
+    btn.setAttribute('role', 'button');
+    btn.setAttribute('aria-label', 'پاک کردن');
+    btn.hidden = true;
+    btn.innerHTML = '<svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="9" fill="#8E8E93"/><path d="M6.2 6.2l5.6 5.6M11.8 6.2l-5.6 5.6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" fill="none"/></svg>';
+    // Keep focus/keyboard on the input: block focus-stealing default actions.
+    function keep(e){ e.preventDefault(); }
+    btn.addEventListener('mousedown', keep);
+    btn.addEventListener('touchstart', keep, {passive:false});
+    btn.addEventListener('pointerdown', function(e){ e.preventDefault(); clearCurrent(); });
+    btn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); });
+    document.body.appendChild(btn);
+    return btn;
+  }
+
+  // Hard hide: input lost focus / eligibility / value, or was removed.
+  function hide(){
+    if(loop){ cancelAnimationFrame(loop); loop = 0; }
+    stable = 0; lastKey = ''; need = STABLE_FRAMES; corrX = corrY = 0;
+    if(cur){ cur.classList.remove('has-input-clear'); cur.classList.remove('has-input-clear-sm'); }
+    if(btn) btn.hidden = true;
+    if(mo) mo.disconnect();
+  }
+
+  function clipped(el, r){
+    // true when the input is scrolled out of view inside any clipping ancestor
+    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    var top = 0, left = 0, bottom = window.innerHeight, right = window.innerWidth;
+    // Visible area may extend past the layout viewport while the visual
+    // viewport is panned/offset (iOS keyboard). Only ever widen the bounds:
+    // a transient viewport change must not soft-hide a valid input.
+    var vv = window.visualViewport;
+    if(vv){
+      bottom = Math.max(bottom, vv.offsetTop + vv.height);
+      right = Math.max(right, vv.offsetLeft + vv.width);
+    }
+    for(var p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement){
+      var cs = getComputedStyle(p);
+      if(cs.overflowY === 'visible' && cs.overflowX === 'visible') continue;
+      var pr = p.getBoundingClientRect();
+      if(pr.top > top) top = pr.top;
+      if(pr.left > left) left = pr.left;
+      if(pr.bottom < bottom) bottom = pr.bottom;
+      if(pr.right < right) right = pr.right;
+    }
+    return cy < top || cy > bottom || cx < left || cx > right;
+  }
+
+  // Positions the button from the input's CURRENT rect. Returns a geometry
+  // key (used to detect when movement has settled) or null after a hard hide.
+  // A transiently clipped / off-screen / collapsed input only hides the
+  // button softly: state, observer and follow loop stay alive so it comes
+  // back on its own when the input reappears (sheet/row animations).
+  function update(){
+    var el = cur;
+    if(!el || !el.isConnected || document.activeElement !== el){
+      var a = document.activeElement;
+      if(a && a !== el && eligible(a)){
+        if(el){ el.classList.remove('has-input-clear'); el.classList.remove('has-input-clear-sm'); }
+        el = cur = a;
+      } else { hide(); return null; }
+    }
+    if(el.value === ''){ hide(); return null; }
+    // Apply the end-padding class BEFORE measuring: for auto-width inputs it
+    // changes the box, and the button must be placed against the final rect.
+    el.classList.add('has-input-clear');
+    var r = el.getBoundingClientRect();
+    var narrow = r.width < NARROW;
+    el.classList.toggle('has-input-clear-sm', narrow);
+    var b = ensureBtn();
+    if(!mo && typeof MutationObserver !== 'undefined') mo = new MutationObserver(follow);
+    if(mo) mo.observe(document.body, {childList:true, subtree:true}); // idempotent
+    var vk = '';
+    var vv = window.visualViewport;
+    if(vv) vk = '|' + Math.round(vv.offsetTop) + '|' + Math.round(vv.offsetLeft) + '|' + Math.round(vv.height) + '|' + Math.round(vv.width) + '|' + Math.round(vv.scale * 100);
+    var key = Math.round(r.top * 2) + '|' + Math.round(r.left * 2) + '|' + Math.round(r.width * 2) + '|' + Math.round(r.height * 2) + vk;
+    if(r.width < MIN_W || r.height < 20 || clipped(el, r)){
+      b.hidden = true;
+      return 'h|' + key;
+    }
+    var size = narrow ? SIZE_SM : SIZE;
+    var rtl = getComputedStyle(el).direction === 'rtl';
+    b.style.width = b.style.height = size + 'px';
+    b.hidden = false;
+    place(b, rtl ? r.left + 2 : r.right - size - 2, r.top + (r.height - size) / 2);
+    return 's|' + Math.round(corrX * 2) + '|' + Math.round(corrY * 2) + '|' + key;
+  }
+
+  // Put the button's rect at (x, y) in getBoundingClientRect() space, the
+  // same space the input was measured in. position:fixed and that space can
+  // disagree while the visual viewport is offset/animating (iOS keyboard), so
+  // instead of trusting the CSS coordinates we read back where the button
+  // really landed and fold the difference into a correction. The first write
+  // reuses the last known correction, so a steady state costs one write + one
+  // read; a residual (< 0.5px is ignored) triggers a single re-write.
+  function place(b, x, y){
+    b.style.left = (x + corrX) + 'px';
+    b.style.top = (y + corrY) + 'px';
+    var br = b.getBoundingClientRect();
+    var ex = br.left - x, ey = br.top - y;
+    if(Math.abs(ex) > 0.5 || Math.abs(ey) > 0.5){
+      corrX -= ex; corrY -= ey;
+      b.style.left = (x + corrX) + 'px';
+      b.style.top = (y + corrY) + 'px';
+    }
+  }
+
+  function tick(){
+    loop = 0;
+    var key = update();
+    if(key === null) return;                 // hard hide: loop ends
+    if(key === lastKey) stable++; else { stable = 0; lastKey = key; }
+    if(stable < need) loop = requestAnimationFrame(tick);
+    else need = STABLE_FRAMES;               // settled: loop ends, window resets
+  }
+
+  // (Re)start following. Never creates a second loop: an already-running
+  // loop just has its stability counter reset. Pass exactly `true` for
+  // viewport-driven triggers (keyboard) to use the longer settle window —
+  // strict compare because this is also used directly as an event/observer
+  // callback, which passes an Event/record list as the first argument.
+  function follow(long){
+    stable = 0;
+    if(long === true) need = STABLE_FRAMES_VIEWPORT;
+    if(!loop) loop = requestAnimationFrame(tick);
+  }
+
+  function clearCurrent(){
+    var el = cur;
+    if(!el || !el.isConnected) { follow(); return; }
+    if(el.value !== ''){
+      el.value = '';
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+    }
+    // A handler may have re-rendered the field; update() re-adopts the focused one.
+    try{ if(el.isConnected && document.activeElement !== el) el.focus({preventScroll:true}); }catch(_e){}
+    update();
+    follow();
+  }
+
+  document.addEventListener('focusin', function(e){
+    var t = e.target;
+    if(eligible(t) && cur !== t){
+      // New input: drop the previous input's state and never show the button
+      // at the previous input's coordinates, even for one frame.
+      if(cur){ cur.classList.remove('has-input-clear'); cur.classList.remove('has-input-clear-sm'); }
+      if(btn) btn.hidden = true;
+      cur = t;
+      lastKey = '';
+    }
+    if(cur) update();   // position immediately from the current rect
+    follow(true);       // ...then keep following (through the iOS keyboard animation)
+  }, true);
+  document.addEventListener('focusout', function(){ follow(true); }, true);
+  document.addEventListener('input', function(e){ if(e.target === cur) follow(); }, true);
+  document.addEventListener('scroll', function(){ if(cur) follow(); }, {capture:true, passive:true});
+  ['transitionrun','transitionstart','transitionend'].forEach(function(n){
+    document.addEventListener(n, function(){ if(cur) follow(); }, true);
+  });
+  window.addEventListener('resize', function(){ if(cur) follow(); });
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', function(){ if(cur) follow(true); });
+    window.visualViewport.addEventListener('scroll', function(){ if(cur) follow(true); });
+  }
+})();
+
 function esc(s){
   return String(s===undefined||s===null?'':s)
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -529,6 +735,8 @@ function openShamsiPicker(fieldEl){
     }, 340);
   }
 
+  overlay.__closeFn = function(){ close(false); };
+
   overlay.addEventListener('click', function(e){
     if(e.target === overlay) close(false);
   });
@@ -604,12 +812,14 @@ function daysAgo(iso){
   if(isNaN(d)) return Infinity;
   return Math.floor((Date.now()-d.getTime())/86400000);
 }
-function showToast(msg){
+function showToast(msg, opts){
+  opts = opts || {};
   const t = document.getElementById('toast');
   t.textContent = msg;
+  t.classList.toggle('error', opts.type === 'error');
   t.classList.add('show');
   clearTimeout(showToast._h);
-  showToast._h = setTimeout(()=>t.classList.remove('show'), 2000);
+  showToast._h = setTimeout(()=>t.classList.remove('show'), opts.type === 'error' ? 4500 : 2000);
 }
 
 
@@ -672,6 +882,7 @@ function bindSheetDragToDismiss(sheetEl, handleEl, dismissFn){
     startY = lastY = e.touches[0].clientY;
     startT = lastT = e.timeStamp;
     velocity = 0;
+    deltaY = 0; // a previous cancelled gesture must not leak into this one
     sheetEl.style.transition = 'none';
   }, {passive:true});
   handleEl.addEventListener('touchmove', function(e){
@@ -699,16 +910,23 @@ function bindSheetDragToDismiss(sheetEl, handleEl, dismissFn){
     if(shouldDismiss) dismissFn();
     deltaY = 0; velocity = 0;
   });
+  // OS-interrupted gesture: touchend never fires. Same cleanup as the
+  // non-dismiss path of touchend; never dismisses.
+  handleEl.addEventListener('touchcancel', function(){
+    if(!dragging) return;
+    dragging = false;
+    sheetEl.style.transition = '';
+    sheetEl.style.transform = '';
+    deltaY = 0; velocity = 0;
+  }, {passive:true});
 }
 
 let _modalHideTimer = null;
-let __activeConfirmFinish = null;
 
 /* In-app confirmation layer. It sits above an existing sheet when needed, so
    destructive actions can be confirmed without replacing/dismissing an
    in-flight form or changing its state. */
 function appConfirm(message, confirmLabel, cancelLabel){
-  if(typeof __activeConfirmFinish === 'function') __activeConfirmFinish(false);
   confirmLabel = confirmLabel || 'تأیید';
   cancelLabel = cancelLabel || 'انصراف';
   return new Promise(function(resolve){
@@ -718,86 +936,111 @@ function appConfirm(message, confirmLabel, cancelLabel){
     layer.className = 'confirm-overlay';
     layer.setAttribute('role','alertdialog');
     layer.setAttribute('aria-modal','true');
-    layer.innerHTML = '<div class="confirm-card"><div class="confirm-message"></div><div class="btn-row"><button type="button" class="btn secondary" data-confirm-cancel>'+esc(cancelLabel)+'</button><button type="button" class="btn danger" data-confirm-ok>'+esc(confirmLabel)+'</button></div></div>';
+    layer.innerHTML = '<div class="confirm-card"><div class="confirm-message"></div><div class="btn-row"><button type="button" class="btn secondary" data-confirm-cancel></button><button type="button" class="btn danger" data-confirm-ok></button></div></div>';
     layer.querySelector('.confirm-message').textContent = String(message || 'ادامه می‌دهید؟');
+    layer.querySelector('[data-confirm-cancel]').textContent = String(cancelLabel);
+    layer.querySelector('[data-confirm-ok]').textContent = String(confirmLabel);
     root.appendChild(layer);
     let settled = false;
     function finish(value){
       if(settled) return;
       settled = true;
-      if(__activeConfirmFinish === finish) __activeConfirmFinish = null;
       layer.remove();
       resolve(value);
     }
-    __activeConfirmFinish = finish;
     layer.querySelector('[data-confirm-cancel]').addEventListener('click', function(){ finish(false); });
     layer.querySelector('[data-confirm-ok]').addEventListener('click', function(){ finish(true); });
     layer.addEventListener('click', function(e){ if(e.target === layer) finish(false); });
     requestAnimationFrame(function(){
-      const ok = layer.querySelector('[data-confirm-ok]');
+      const ok = layer.querySelector('[data-confirm-cancel]');
       if(ok) ok.focus();
     });
   });
 }
 
-
-/* Optional navigation guard for in-progress forms. */
-window.__navigationGuard = null;
-function setNavigationGuard(fn){
-  window.__navigationGuard = (typeof fn === 'function') ? fn : null;
+/* Central dirty-form guard. Only forms explicitly opened with dirtyCheck:true
+   participate; informational/filter sheets stay clean and keep their old UX. */
+let _dirtyGuardRoute = null;
+let _dirtyExitPromise = null;
+let _dirtyBeforeUnloadBound = false;
+function _dirtyBeforeUnloadHandler(e){
+  if(typeof window.__getAppDirtyState !== 'function') return;
+  if(!window.__getAppDirtyState()) return;
+  e.preventDefault();
+  e.returnValue = '';
 }
-function clearNavigationGuard(){
-  window.__navigationGuard = null;
-}
-function canLeaveCurrentContext(){
-  const guard = window.__navigationGuard;
-  if(typeof guard !== 'function') return Promise.resolve(true);
-  try{
-    const result = guard();
-    if(result && typeof result.then === 'function') return result.then(Boolean).catch(function(){ return true; });
-    return Promise.resolve(Boolean(result));
-  }catch(e){
-    return Promise.resolve(true);
+function _syncDirtyBeforeUnload(){
+  const dirty = typeof window.__getAppDirtyState === 'function' && !!window.__getAppDirtyState();
+  if(dirty && !_dirtyBeforeUnloadBound){
+    window.addEventListener('beforeunload', _dirtyBeforeUnloadHandler);
+    _dirtyBeforeUnloadBound = true;
+  } else if(!dirty && _dirtyBeforeUnloadBound){
+    window.removeEventListener('beforeunload', _dirtyBeforeUnloadHandler);
+    _dirtyBeforeUnloadBound = false;
   }
 }
+function _getActiveDirtySheet(){
+  const sheet = document.querySelector('#modalRoot .overlay.show .sheet');
+  if(!sheet || sheet.dataset.dirtyCheck !== '1' || sheet.dataset.dirty !== '1') return null;
+  return sheet;
+}
+function _setRouteDirtyState(dirty, clearFn){
+  _dirtyGuardRoute = dirty ? { clear: typeof clearFn === 'function' ? clearFn : function(){} } : null;
+  _syncDirtyBeforeUnload();
+}
+function _getAppDirtyState(){
+  return !!(_getActiveDirtySheet() || _dirtyGuardRoute);
+}
+window.__getAppDirtyState = _getAppDirtyState;
+window.__setRouteDirtyState = _setRouteDirtyState;
+window.__syncDirtyBeforeUnload = _syncDirtyBeforeUnload;
+window.__requestAppExit = function(reason){
+  if(_dirtyExitPromise) return _dirtyExitPromise;
+  if(window.__sheetSaveInFlight > 0) return Promise.resolve(false);
+  const sheet = _getActiveDirtySheet();
+  const routeDirty = _dirtyGuardRoute;
+  if(!sheet && !routeDirty){ _syncDirtyBeforeUnload(); return Promise.resolve(true); }
+  _dirtyExitPromise = appConfirm('تغییرات ذخیره نشده‌اند. می‌خواهید بدون ذخیره خارج شوید؟', 'خروج بدون ذخیره', 'ادامه ویرایش').then(function(ok){
+    if(!ok) return false;
+    if(sheet) sheet.dataset.dirty = '0';
+    if(routeDirty && typeof routeDirty.clear === 'function') routeDirty.clear();
+    _dirtyGuardRoute = null;
+    _syncDirtyBeforeUnload();
+    return true;
+  }).finally(function(){ _dirtyExitPromise = null; });
+  return _dirtyExitPromise;
+};
 
-/* Optional modal-dismiss guard used by in-progress full-screen forms. */
-let __modalCloseGuard = null;
-function setModalCloseGuard(fn){ __modalCloseGuard = (typeof fn === 'function') ? fn : null; }
-function clearModalCloseGuard(){ __modalCloseGuard = null; }
-function requestModalClose(){ closeModal(); }
-
-function closeModalForce(){
-  __modalCloseGuard = null;
-  try{ if(typeof __activeConfirmFinish === 'function') __activeConfirmFinish(false); }catch(_e){}
-  try{
-    if(typeof window.__invoiceStickyViewportCleanup === 'function') window.__invoiceStickyViewportCleanup();
-  }catch(_e){}
+function closeModal(){
   const overlay = document.getElementById('overlay');
   const root = document.getElementById('modalRoot');
-  if(!overlay){ if(root) root.innerHTML=''; try{ document.body.classList.remove('modal-open'); }catch(_e){} return; }
+  if(!overlay){ if(root) root.innerHTML=''; return; }
+  const invoiceBottomNav = document.getElementById('bottom-nav');
+  if (invoiceBottomNav && invoiceBottomNav.dataset.invoiceHiddenPrev != null) {
+    invoiceBottomNav.hidden = invoiceBottomNav.dataset.invoiceHiddenPrev === '1';
+    delete invoiceBottomNav.dataset.invoiceHiddenPrev;
+  }
   overlay.classList.remove('show');
   const sheetEl = overlay.querySelector('.sheet');
   if(sheetEl) sheetEl.classList.remove('show');
+  try{ document.body.classList.remove('modal-open'); }catch(_e){}
+  const closedSheet = sheetEl;
+  if(closedSheet && closedSheet.__escapeHandler){
+    document.removeEventListener('keydown', closedSheet.__escapeHandler);
+    closedSheet.__escapeHandler = null;
+  }
+  if(closedSheet && closedSheet.dataset.dirtyCheck === '1') closedSheet.dataset.dirty = '0';
+  _syncDirtyBeforeUnload();
   if(_modalHideTimer){ clearTimeout(_modalHideTimer); }
   _modalHideTimer = setTimeout(() => {
     _modalHideTimer = null;
     root.innerHTML = '';
-    try{ document.body.classList.remove('modal-open'); }catch(_e){}
     if(window.scrollX) window.scrollTo(0, window.scrollY);
-  }, 240);
+  }, 300);
 }
 
-function closeModal(){
-  const guard = __modalCloseGuard;
-  if(typeof guard === 'function'){
-    try { Promise.resolve(guard()).catch(function(){}); } catch(e) {}
-    return;
-  }
-  closeModalForce();
-}
-
-function openSheet(html){
+function openSheet(html, opts){
+  opts = opts || {};
   const root = document.getElementById('modalRoot');
 
   // Generic sheets can also re-render in response to a control change.
@@ -856,14 +1099,32 @@ function openSheet(html){
   try{ document.body.classList.add('modal-open'); }catch(_e){}
   const overlay = document.getElementById('overlay');
   const sheet = overlay.querySelector('.sheet');
+  const escapeHandler = function(e){
+    if(e.key !== 'Escape' || !overlay.classList.contains('show')) return;
+    if(document.querySelector('#modalRoot .confirm-overlay')) return;
+    e.preventDefault();
+    Promise.resolve(window.__requestAppExit('escape')).then(function(ok){ if(ok) closeModal(); });
+  };
+  sheet.__escapeHandler = escapeHandler;
+  document.addEventListener('keydown', escapeHandler);
+  if (opts.dirtyCheck) {
+    sheet.dataset.dirtyCheck = '1';
+    sheet.dataset.dirty = '0';
+    const markDirty = function(){
+      sheet.dataset.dirty = '1';
+      _syncDirtyBeforeUnload();
+    };
+    sheet.addEventListener('input', markDirty);
+    sheet.addEventListener('change', markDirty);
+  }
   requestAnimationFrame(() => {
     overlay.classList.add('show');
     sheet.classList.add('show');
   });
-  overlay.addEventListener('click', (e)=>{ if(e.target.id==='overlay') requestModalClose(); });
+  overlay.addEventListener('click', async (e)=>{ if(e.target.id==='overlay'){ if(await window.__requestAppExit('backdrop')) closeModal(); } });
   overlay.addEventListener('touchmove', function(e){
     if(!e.target.closest('.sheet')) e.preventDefault();
   }, {passive:false});
-  document.getElementById('closeX').addEventListener('click', requestModalClose);
-  bindSheetDragToDismiss(sheet, sheet.querySelector('.sheet-handle'), requestModalClose);
+  document.getElementById('closeX').addEventListener('click', async function(){ if(await window.__requestAppExit('close')) closeModal(); });
+  bindSheetDragToDismiss(sheet, sheet.querySelector('.sheet-handle'), async function(){ if(await window.__requestAppExit('drag')) closeModal(); });
 }

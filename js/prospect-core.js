@@ -36,7 +36,9 @@ function daysSinceLastEvaluation(shopId){
   if(!shop || !Array.isArray(shop.visits) || !shop.visits.length) return null;
   let latest = null;
   for(let i = 0; i < shop.visits.length; i++){
-    const d = shop.visits[i] && shop.visits[i].date;
+    const visit = shop.visits[i];
+    if(!visit || visit.type === 'snapshot_edit') continue;
+    const d = visit.date;
     if(!d) continue;
     if(latest == null || String(d) > String(latest)) latest = d;
   }
@@ -76,6 +78,10 @@ async function createProspectShop(payload){
   });
   await persistProspectShop(shop);
   prospectState.shops.push(shop);
+  if ((payload.tags || []).includes('became_customer') && !shop.linkedCustomerId) {
+    try { await convertProspectToCustomer(shop.id); }
+    catch (e) { console.error('Prospect conversion failed:', e); }
+  }
   await registerProspectVisitForTarget();
   // Game Center hook (derived only — never rolls back CRM)
   if (typeof gameOnEvaluation === 'function') {
@@ -105,6 +111,10 @@ async function addProspectVisit(shopId, payload){
   shop.latestRank = rank;
   if((payload.tags||[]).includes('became_customer')) shop.status = 'converted';
   await persistProspectShop(shop);
+  if ((payload.tags || []).includes('became_customer') && !shop.linkedCustomerId) {
+    try { await convertProspectToCustomer(shop.id); }
+    catch (e) { console.error('Prospect conversion failed:', e); }
+  }
   await registerProspectVisitForTarget();
   // Game Center hook (derived only — never rolls back CRM)
   if (typeof gameOnEvaluation === 'function') {
@@ -166,6 +176,10 @@ async function createProspectShopV2(payload){
   });
   await persistProspectShop(shop);
   prospectState.shops.push(shop);
+  if ((payload.tags || []).includes('became_customer') && !shop.linkedCustomerId) {
+    try { await convertProspectToCustomer(shop.id); }
+    catch (e) { console.error('Prospect conversion failed:', e); }
+  }
   await registerProspectVisitForTarget();
   // Game Center hook (derived only — never rolls back CRM)
   if (typeof gameOnEvaluation === 'function') {
@@ -266,7 +280,13 @@ async function addFollowUpVisit(shopId, payload){
   shop.visits.push(visit);
   if((payload.tags || []).includes('became_customer')) shop.status = 'converted';
   await persistProspectShop(shop);
-  await registerProspectVisitForTarget();
+  if ((payload.tags || []).includes('became_customer') && !shop.linkedCustomerId) {
+    try { await convertProspectToCustomer(shop.id); }
+    catch (e) { console.error('Prospect conversion failed:', e); }
+  }
+  if (visit.type === 'followup' && !snapshotEditRecord) {
+    await registerProspectVisitForTarget();
+  }
   // Game Center hook (derived only — never rolls back CRM)
   if (typeof gameOnEvaluation === 'function') {
     try {
@@ -527,37 +547,4 @@ async function convertProspectToCustomer(shopId){
   await persistProspectShop(shop);
 
   return { customerId: customer.id, created: true, customer };
-}
-
-async function bootProspectPage(activeNavId, afterLoad){
-  try{
-    /* PIN gate (minimal): unlock before any CRM/prospect render. Does not touch data/FIFO. */
-    try{
-      var pinConfigured = false;
-      try{ pinConfigured = !!(localStorage.getItem('baqeri_pin_lock_v1')); }catch(_e){}
-      if(pinConfigured){
-        if(!window.pinLock || typeof window.pinLock.ensureUnlocked !== 'function'){
-          document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">قفل PIN فعال است اما ماژول قفل بارگذاری نشد. صفحه را دوباره باز کنید.</div>';
-          return;
-        }
-        await window.pinLock.ensureUnlocked();
-      } else if(window.pinLock && typeof window.pinLock.ensureUnlocked === 'function'){
-        await window.pinLock.ensureUnlocked();
-      }
-    }catch(pinErr){
-      console.error('pin lock gate failed', pinErr);
-      document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">خطا در قفل PIN. صفحه را دوباره باز کنید.</div>';
-      return;
-    }
-    if(typeof loadData==='function') await loadData();
-    if(typeof renderSharedNav==='function') renderSharedNav(activeNavId);
-    if(typeof renderBottomNav==='function') renderBottomNav(activeNavId);
-    if(typeof ensureAppBackButton==='function') ensureAppBackButton(activeNavId);
-    await loadProspectData();
-    if(typeof afterLoad==='function') await afterLoad();
-    if(typeof flushProspectPendingToast==='function') flushProspectPendingToast();
-  }catch(e){
-    console.error('bootProspectPage failed', e);
-    if(typeof showToast==='function') showToast('خطا در بارگذاری ارزیابی مغازه‌ها');
-  }
 }

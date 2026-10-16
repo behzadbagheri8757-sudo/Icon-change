@@ -37,22 +37,23 @@ const NAV_ITEMS = [
 const BOTTOM_NAV_ITEMS = [
   { id: 'dashboard', href: '#/dashboard', spaPath: '/dashboard', label: 'داشبورد',  iconKey: 'home' },
   { id: 'customers', href: '#/customers', spaPath: '/customers', label: 'مشتریان',  iconKey: 'users' },
-  { id: 'products',  href: '#/products',  spaPath: '/products',  label: 'اجناس',    iconKey: 'cube' },
+  { id: 'reports',   href: '#/reports',   spaPath: '/reports',   label: 'گزارش‌ها', iconKey: 'chartBar' },
   { id: 'invoices',  href: '#/invoices',  spaPath: '/invoices',  label: 'فاکتورها', iconKey: 'invoice' },
   { id: 'more',      href: '#/more',      spaPath: '/more',      label: 'بیشتر',    iconKey: 'more' },
 ];
 
 /** Secondary destinations opened from «بیشتر». iconKey references js/icons.js. */
 const MORE_NAV_ITEMS = [
+  { id: 'watches',   href: '#/watches',   label: 'هشدارهای زودهنگام', spaPath: '/watches', iconKey: 'checklist' },
   { id: 'inventory', href: '#/inventory', label: 'انبار', spaPath: '/inventory', iconKey: 'warehouse' },
+  { id: 'products',  href: '#/products',  label: 'اجناس', spaPath: '/products', iconKey: 'cube' },
   { id: 'suppliers', href: '#/suppliers', label: 'تأمین‌کنندگان', spaPath: '/suppliers', iconKey: 'truck' },
   { id: 'payments',  href: '#/payments',  label: 'پرداخت‌ها', spaPath: '/payments', iconKey: 'banknotes' },
   { id: 'checks',    href: '#/checks',    label: 'چک‌ها', spaPath: '/checks', iconKey: 'cheque' },
   { id: 'visits',    href: '#/visits',    label: 'ویزیت مشتریان', spaPath: '/visits', iconKey: 'visit' },
   { id: 'prospects', href: '#/prospects', label: 'ارزیابی مغازه‌ها', spaPath: '/prospects', iconKey: 'buildingStorefront' },
   { id: 'game',      href: '#/game',      label: 'مرکز بازی فروش', spaPath: '/game', iconKey: 'trophy' },
-  { id: 'reports',   href: '#/reports',   label: 'گزارش‌ها', spaPath: '/reports', iconKey: 'chartBar' },
-  { id: 'settings',  href: '#/settings',  label: 'تنظیمات و Backup', spaPath: '/settings', iconKey: 'cog' },
+  { id: 'settings',  href: '#/settings',  label: 'تنظیمات و پشتیبان', spaPath: '/settings', iconKey: 'cog' },
 ];
 
 /** Renders an icon by key via the central AppIcons registry, falling back to
@@ -138,23 +139,7 @@ function isMoreSectionActive(activeId){
 function pinBottomNav(){
   const el = document.getElementById('bottom-nav');
   if(!el) return;
-  try{
-    if(window.visualViewport){
-      const vv = window.visualViewport;
-      const keyboardHeight = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      // Only apply inline positioning when keyboard is actually open
-      if(keyboardHeight > 80){
-        el.style.setProperty('bottom', keyboardHeight + 'px', 'important');
-      } else {
-        // Clear inline bottom so CSS safe-area rule takes over
-        el.style.removeProperty('bottom');
-      }
-    }else{
-      el.style.removeProperty('bottom');
-    }
-  }catch(e){
-    /* ignore — bar still uses CSS bottom:0 */
-  }
+  try{ el.style.removeProperty('bottom'); }catch(e){}
 }
 
 /* iOS 26-style tab-bar minimization: hide secondary labels while the user
@@ -167,10 +152,18 @@ function bindBottomNavMinimizeOnScroll(){
   var lastY = window.scrollY || window.pageYOffset || 0;
   var progress = 0;
   var ticking = false;
-  var travel = 52;
-  var directionThreshold = 1;
-  /* No automatic restore on scroll idle: the bar stays at its current
-     scroll-linked progress until the user scrolls upward (or taps a tab). */
+
+  /* Directional hysteresis: collapse needs a larger accumulated downward
+     movement than expansion needs upward movement. This makes the bar behave
+     like iOS 26 `onScrollDown`: once collapsed it re-opens from a deliberate
+     upward gesture, without reacting to small finger jitter. */
+  var collapseThreshold = 50;
+  var expandThreshold = 20;
+  var direction = 0;
+  var directionDistance = 0;
+
+  var navigationResyncPending = false;
+  var navigationResyncToken = 0;
 
   function reduceMotion(){
     try{
@@ -180,6 +173,7 @@ function bindBottomNavMinimizeOnScroll(){
 
   function setProgress(next, immediate){
     progress = Math.max(0, Math.min(1, next));
+    if(progress === 0) directionDistance = 0;
     var bar = document.getElementById('bottom-nav');
     if(!bar) return;
     bar.style.setProperty('--bn-minimize-progress', progress.toFixed(3));
@@ -196,24 +190,80 @@ function bindBottomNavMinimizeOnScroll(){
     ticking = false;
     var bar = document.getElementById('bottom-nav');
     if(!bar) return;
+
     var y = window.scrollY || window.pageYOffset || 0;
     var dy = y - lastY;
+    lastY = y;
 
     if(y <= 8){
+      direction = 0;
+      directionDistance = 0;
       setProgress(0, false);
-    }else if(Math.abs(dy) >= directionThreshold){
-      /* Continuous scroll-linked collapse: unlike a binary class toggle,
-         every small scroll sample moves the bar toward/away from its
-         minimized state. This mirrors iOS 26's fluid content-first motion. */
-      setProgress(progress + (dy / travel), false);
+      return;
     }
-    lastY = y;
+
+    if(Math.abs(dy) < 1) return;
+
+    var nextDirection = dy > 0 ? 1 : -1;
+
+    /* A direction change starts a fresh hysteresis window. We deliberately
+       do not carry distance across the reversal: otherwise a few pixels of
+       opposite movement could consume the remainder of the old direction's
+       threshold and cause a visible flicker. */
+    if(nextDirection !== direction){
+      direction = nextDirection;
+      directionDistance = 0;
+    }
+
+    directionDistance += Math.abs(dy);
+
+    if(nextDirection > 0){
+      /* Downward scroll: collapse only after ~50px of accumulated travel. */
+      if(progress < 0.98 && directionDistance >= collapseThreshold){
+        directionDistance = 0;
+        setProgress(1, false);
+      }
+    }else{
+      /* Upward scroll: reopen after ~20px, regardless of how far down the
+         page is. This is the key onScrollDown direction-reversal behavior. */
+      if(progress > 0 && directionDistance >= expandThreshold){
+        directionDistance = 0;
+        setProgress(0, false);
+      }
+    }
   }
 
   function schedule(){
     if(ticking) return;
     ticking = true;
     requestAnimationFrame(apply);
+  }
+
+  /* Navigation can rebuild the bottom bar before router.js restores the
+     destination page's scroll position. A single rAF here is therefore too
+     early: renderBottomNav() queues first, router.scrollTo() queues second.
+     resetAfterNavigation uses a two-rAF settle point so the minimize state is
+     corrected only after that scroll restoration has actually landed. The
+     correction is intentionally coupled to the indicator reposition call in
+     renderBottomNav(), so the indicator never measures the old minimized
+     geometry and then gets corrected underneath its travel animation. */
+  function resetAfterNavigation(){
+    navigationResyncPending = true;
+    var token = ++navigationResyncToken;
+
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        if(token !== navigationResyncToken || !navigationResyncPending) return;
+        navigationResyncPending = false;
+
+        var y = window.scrollY || window.pageYOffset || 0;
+        lastY = y;
+        /* A route change is a fresh interaction context: always restore the
+           full navigation bar before the destination indicator is measured.
+           Subsequent user scrolling immediately resumes from the real y. */
+        setProgress(0, false);
+      });
+    });
   }
 
   function expandFromInteraction(){
@@ -238,6 +288,7 @@ function bindBottomNavMinimizeOnScroll(){
   }, {passive:true});
 
   bindBottomNavMinimizeOnScroll.setProgress = setProgress;
+  bindBottomNavMinimizeOnScroll.resetAfterNavigation = resetAfterNavigation;
 }
 
 function ensureBottomNavPinned(){
@@ -258,10 +309,8 @@ function ensureBottomNavPinned(){
     });
   }
   window.addEventListener('resize', schedule, {passive:true});
-  window.addEventListener('scroll', schedule, {passive:true});
   if(window.visualViewport){
     window.visualViewport.addEventListener('resize', schedule, {passive:true});
-    window.visualViewport.addEventListener('scroll', schedule, {passive:true});
   }
   window.addEventListener('pageshow', schedule, {passive:true});
   window.addEventListener('orientationchange', function(){
@@ -458,6 +507,11 @@ function _bnEaseOutCubic(t){
   return 1 - u*u*u;
 }
 
+function _bnEaseOutQuad(t){
+  var u = 1 - (t < 0 ? 0 : (t > 1 ? 1 : t));
+  return 1 - u * u;
+}
+
 /* Reads the indicator's actual rendered transform (translate + scale)
    straight off its computed matrix. Used only when a travel animation is
    interrupted mid-flight by another tap: without this, the new travel would
@@ -496,9 +550,11 @@ function _bnAnimateIndicatorToItem(bar, item){
 
   var barRect = bar.getBoundingClientRect();
   var targetRect = item.getBoundingClientRect();
-  // PHASE 1 geometry — width equals the active item's real width, height 48px.
+  /* Use the destination item's live rendered box. During minimization this
+     is smaller than the rest-state box; hard-coding 48px makes the jelly jump
+     vertically when its container changes height. */
   var targetW = Math.round(targetRect.width);
-  var targetH = 48;
+  var targetH = Math.round(targetRect.height);
   var targetLeft = targetRect.left - barRect.left + (targetRect.width - targetW)/2;
   var targetTop = targetRect.top - barRect.top + (targetRect.height - targetH)/2;
 
@@ -534,7 +590,7 @@ function _bnAnimateIndicatorToItem(bar, item){
   /* Responsive first: just long enough for take-off/stretch/jump/landing to
      each register as part of one continuous event, not a slow-motion
      replay. */
-  var durationMs = Math.round(300 + 60 * distanceRatio);
+  var durationMs = Math.round(260 + 180 * distanceRatio);
 
   /* If this travel inherited a non-1.00 scale from an animation that was
      just interrupted, fold that discrepancy out smoothly over the first
@@ -556,8 +612,26 @@ function _bnAnimateIndicatorToItem(bar, item){
     var tx = offsetX * (1 - pos);
     var ty = offsetY * (1 - pos) + liftY;
 
+    /* Subtle dynamic depth cue, sampled on the exact same t used for the
+       geometry above so it is deterministic and locked to this travel's
+       own lifecycle: 0 at take-off (t=0) and 0 at arrival (t=1), peaking
+       at the travel's midpoint. Only the two OUTER shadow layers' alpha
+       and blur radius are perturbed; their y-offsets (1px / 5px) and every
+       inset layer stay exactly as authored in CSS and are never touched. */
+    var shadowT = _bnBump(t, 2, 2);
+    var nearAlpha = (0.10 + 0.06 * shadowT).toFixed(3);
+    var farAlpha = (0.08 + 0.06 * shadowT).toFixed(3);
+    var nearBlur = (2 + 2 * shadowT).toFixed(2);
+    var farBlur = (12 + 4 * shadowT).toFixed(2);
+    var shadow =
+      '0 1px ' + nearBlur + 'px rgba(15, 23, 42, ' + nearAlpha + '), ' +
+      '0 5px ' + farBlur + 'px rgba(15, 23, 42, ' + farAlpha + '), ' +
+      'inset 0 1px 0 rgba(255, 255, 255, 0.60), ' +
+      'inset 0 -1px 0 rgba(15, 23, 42, 0.06)';
+
     frames.push({
       transform:'translate3d(' + tx.toFixed(2) + 'px,' + ty.toFixed(2) + 'px,0) scaleX(' + sx.toFixed(4) + ') scaleY(' + sy.toFixed(4) + ')',
+      boxShadow: shadow,
       offset:t
     });
   }
@@ -590,6 +664,11 @@ function _bnAnimateIndicatorToItem(bar, item){
     if(ind._bnAnim === anim) ind._bnAnim = null;
     ind.style.transform = 'translate3d(0,0,0) scaleX(1) scaleY(1)';
     ind.style.scale = '1';
+    /* The last sampled frame already equals the exact base shadow, but
+       commitStyles() just pinned that as an inline value; remove it so
+       control reverts to the normal CSS classes (is-settling, then idle)
+       instead of leaving a permanent inline box-shadow override. */
+    ind.style.removeProperty('box-shadow');
     ind.classList.remove('is-traveling');
     ind.classList.add('is-settling');
     if(ind._bnSettleTimer) clearTimeout(ind._bnSettleTimer);
@@ -601,6 +680,7 @@ function _bnAnimateIndicatorToItem(bar, item){
   };
   anim.oncancel = function(){
     if(ind._bnAnim === anim) ind._bnAnim = null;
+    ind.style.removeProperty('box-shadow');
     ind.classList.remove('is-traveling');
   };
 }
@@ -620,18 +700,13 @@ function bindBottomNavIndicatorGestures(bar){
     var targetKey = _bnTargetKey(item);
     _bnIndicatorState.pointer = { id:e.pointerId, activeKey:activeKey, targetKey:targetKey };
 
-    if(targetKey && targetKey !== activeKey){
-      /* Switching tabs: _bnAnimateIndicatorToItem owns the transform channel
-         end to end, including its own take-off grow (see
-         _bnJellyEnvelope) — engaging the separate press-lift here would be
-         a second, competing transform source on the same element while
-         it's in flight. */
-      _bnAnimateIndicatorToItem(bar, item);
-    } else {
+    if(targetKey && targetKey === activeKey){
       /* Same-tab tap: no travel is happening, so the lightweight press
          acknowledgment (CSS `scale`, independent of `transform`) is safe. */
       _bnLiftIndicator(ind);
     }
+    /* Cross-tab pointerdown intentionally does not move the indicator.
+       Indicator moves after the actual route/render transition. */
   }, {passive:true});
 
   function release(e){
@@ -661,22 +736,113 @@ function positionBnIndicator(bar, animate){
      destination, do not kill that animation when the router re-renders. */
   var active = bar.querySelector('.bottom-nav-item.active');
   if(!active){
+    if(ind._bnTransitionCleanup){
+      try{ ind._bnTransitionCleanup(); }catch(_e0){}
+      ind._bnTransitionCleanup = null;
+    }
+    ind._bnTransitionToken = (ind._bnTransitionToken || 0) + 1;
     ind.style.opacity = '0';
     return;
   }
   var activeKey = _bnTargetKey(active);
-  if(ind._bnAnim && ind._bnTargetKey === activeKey){
-    return;
+  var preserveCurrentAnimation = !!(ind._bnAnim && ind._bnTargetKey === activeKey);
+
+  if(ind._bnTransitionCleanup){
+    try{ ind._bnTransitionCleanup(); }catch(_e){}
+    ind._bnTransitionCleanup = null;
+  }
+  var activeStyle = null, barStyle = null;
+  try{ activeStyle = getComputedStyle(active); }catch(_e2){}
+  try{ barStyle = getComputedStyle(bar); }catch(_e3){}
+  if((activeStyle || barStyle) && !_bnReduceMotion()){
+    /* Geometry can settle through either the active item or its parent bar:
+       the item owns min-height/padding, while the bar owns min-height/padding
+       that also changes the item's final position/available width. Listen to
+       both official transition sources instead of assuming the child alone
+       owns the complete geometry transition. */
+    var geometryProps = {
+      'min-height': true,
+      'height': true,
+      'padding-top': true,
+      'padding-bottom': true,
+      'padding-block': true,
+      'padding-block-start': true,
+      'padding-block-end': true
+    };
+    var transitionNodes = [active, bar];
+    var listeners = [];
+    var transitionToken = (ind._bnTransitionToken || 0) + 1;
+    ind._bnTransitionToken = transitionToken;
+    var hasGeometryTransition = false;
+
+    function transitionHasGeometry(style){
+      if(!style) return false;
+      var props = String(style.transitionProperty || '').split(',');
+      var durations = String(style.transitionDuration || '').split(',');
+      for(var ti=0; ti<props.length; ti++){
+        var prop = String(props[ti] || '').trim();
+        var dur = parseFloat(durations[ti % Math.max(1, durations.length)] || '0');
+        if(dur > 0 && geometryProps[prop]) return true;
+      }
+      return false;
+    }
+
+    hasGeometryTransition = transitionHasGeometry(activeStyle) || transitionHasGeometry(barStyle);
+    if(hasGeometryTransition){
+      var onGeometryTransitionEnd = function(ev){
+        if(ind._bnTransitionToken !== transitionToken) return;
+        if(ev && !geometryProps[ev.propertyName]) return;
+        if(ind._bnTransitionCleanup){
+          try{ ind._bnTransitionCleanup(); }catch(_e4){}
+          ind._bnTransitionCleanup = null;
+        }
+        requestAnimationFrame(function(){
+          if(ind._bnTransitionToken !== transitionToken) return;
+          if(!bar.isConnected || !active.isConnected) return;
+          var currentActive = bar.querySelector('.bottom-nav-item.active');
+          if(currentActive !== active) return;
+          var br = bar.getBoundingClientRect();
+          var ar = active.getBoundingClientRect();
+          var rw = Math.round(ar.width);
+          var rh = Math.round(ar.height);
+          ind.style.left = (ar.left - br.left + (ar.width-rw)/2) + 'px';
+          ind.style.top = (ar.top - br.top + (ar.height-rh)/2) + 'px';
+          ind.style.width = rw + 'px';
+          ind.style.height = rh + 'px';
+        });
+      };
+      for(var tn=0; tn<transitionNodes.length; tn++){
+        var node = transitionNodes[tn];
+        if(!node) continue;
+        node.addEventListener('transitionend', onGeometryTransitionEnd);
+        listeners.push(node);
+      }
+      ind._bnTransitionCleanup = function(){
+        for(var li=0; li<listeners.length; li++){
+          try{ listeners[li].removeEventListener('transitionend', onGeometryTransitionEnd); }catch(_e5){}
+        }
+        listeners.length = 0;
+      };
+    }
   }
 
   var barRect = bar.getBoundingClientRect();
   var itemRect = active.getBoundingClientRect();
-  // PHASE 1 geometry — width equals the active item's real width, height 48px.
+  /* Geometry must follow the live item box. The item is scroll-linked and
+     changes height while the bar minimizes, so a fixed 48px indicator becomes
+     vertically misaligned during/after a scroll-linked resize. */
   var w = Math.round(itemRect.width);
-  var h = 48;
+  var h = Math.round(itemRect.height);
   var left = itemRect.left - barRect.left + (itemRect.width - w)/2;
   var top = itemRect.top - barRect.top + (itemRect.height - h)/2;
   var reduceMotion = _bnReduceMotion();
+
+  if(preserveCurrentAnimation){
+    /* The travel is already targeting this same tab. Do not restart it, but
+       keep the geometry-transition observer above alive so a concurrent
+       scroll-linked resize/minimize can still remeasure the final item box. */
+    return;
+  }
 
   if(!animate || reduceMotion || typeof ind.animate !== 'function'){
     if(ind._bnAnim){
@@ -739,7 +905,8 @@ function renderBottomNav(activeId){
     const ico = navIcon(t.iconKey, active);
     let href = t.href;
     if (spa && t.spaPath) href = '#' + t.spaPath;
-    return `<a class="${cls}" href="${href}" data-spa-path="${t.spaPath || ''}">
+    const ariaCurrent = active ? ' aria-current="page"' : '';
+    return `<a class="${cls}" href="${href}" data-spa-path="${t.spaPath || ''}"${ariaCurrent}>
       <span class="bn-ico">${ico}</span>
       <span class="bn-label">${t.label}</span>
     </a>`;
@@ -769,10 +936,20 @@ function renderBottomNav(activeId){
   bindBottomNavMinimizeOnScroll();
   pinBottomNav();
 
-  /* Position jelly indicator after layout. Animate only when tab actually changes. */
+  /* Route render happens before router.js queues its scrollTo(). Let the
+     navigation resync own the post-scroll settle point, and only then measure
+     the indicator. This prevents a minimized old page from producing a zero-
+     distance/incorrect-geometry travel on the destination tab. */
   var shouldAnimate = _bnIndicatorState.ready;
+  if(typeof bindBottomNavMinimizeOnScroll.resetAfterNavigation === 'function'){
+    bindBottomNavMinimizeOnScroll.resetAfterNavigation();
+  }
   requestAnimationFrame(function(){
-    positionBnIndicator(bar, shouldAnimate);
+    requestAnimationFrame(function(){
+      var current = document.getElementById('bottom-nav');
+      if(!current) return;
+      positionBnIndicator(current, shouldAnimate);
+    });
   });
 }
 
@@ -812,6 +989,7 @@ function openMoreSheet(activeId){
   const overlay = document.getElementById('more-overlay');
   const sheet = document.getElementById('more-sheet');
   if(!overlay || !sheet) return;
+  overlay.__closeFn = closeMoreSheet;
   // Cancel any pending hide-after-transition timer from a just-closed sheet —
   // otherwise a rapid close→reopen (tap close, immediately tap "بیشتر" again)
   // leaves that timer alive, and it later fires `hidden = true` on the sheet
@@ -840,7 +1018,7 @@ function closeMoreSheet(){
     _moreSheetHideTimer = null;
     if(overlay) overlay.hidden = true;
     if(sheet) sheet.hidden = true;
-  }, 200);
+  }, 280);
 }
 
 function isBackRoute(path){
@@ -887,6 +1065,10 @@ function goAppBack(e){
     const path = cur && cur.path ? cur.path : '/dashboard';
     if(!isBackRoute(path)) return;
     const target = routeBackTarget(path, cur.params || {});
+    if(typeof AppRouter !== 'undefined' && AppRouter.navigateBack){
+      AppRouter.navigateBack(target.path, target.params || null);
+      return;
+    }
     if(typeof AppRouter !== 'undefined' && AppRouter.navigate){
       AppRouter.navigate(target.path, target.params || null);
       return;
@@ -1066,6 +1248,7 @@ function bindPullToRefresh(){
     if(y > 0 || isBlocked(e.target)){ pulling = false; return; }
     pulling = true;
     dragging = false;
+    el.style.transition = 'none';
     startY = e.touches[0].clientY;
   }, {passive:true});
 
@@ -1089,6 +1272,7 @@ function bindPullToRefresh(){
     if(!dragging) return;
     dragging = false;
     const ready = el.classList.contains('ptr-ready');
+    el.style.transition = 'transform 160ms ease, opacity 160ms ease';
     if(ready){
       el.style.transform = 'translateY(0)';
       doRefresh();
@@ -1126,48 +1310,6 @@ function getQueryParam(name){
   }
 }
 
-async function bootPage(activeId, afterLoad){
-  try{
-    /* PIN gate (minimal): unlock before any CRM render. Does not touch data/FIFO. */
-    try{
-      var pinConfigured = false;
-      try{ pinConfigured = !!(localStorage.getItem('baqeri_pin_lock_v1')); }catch(_e){}
-      if(pinConfigured){
-        if(!window.pinLock || typeof window.pinLock.ensureUnlocked !== 'function'){
-          document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">قفل PIN فعال است اما ماژول قفل بارگذاری نشد. صفحه را دوباره باز کنید.</div>';
-          return;
-        }
-        await window.pinLock.ensureUnlocked();
-      } else if(window.pinLock && typeof window.pinLock.ensureUnlocked === 'function'){
-        await window.pinLock.ensureUnlocked();
-      }
-    }catch(pinErr){
-      console.error('pin lock gate failed', pinErr);
-      document.body.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">خطا در قفل PIN. صفحه را دوباره باز کنید.</div>';
-      return;
-    }
-    
-    // iOS Foundation: Setup Keyboard Guard
-    setupVisualViewportKeyboardGuard();
-
-    await loadData();
-    renderSharedNav(activeId);
-    renderBottomNav(activeId);
-    ensureAppBackButton(activeId);
-    if(typeof afterLoad === 'function'){
-      await afterLoad();
-    }
-  }catch(e){
-    console.error('bootPage failed', e);
-    if(typeof showToast === 'function'){
-      showToast('خطا در بارگذاری اطلاعات');
-    }
-    const main = document.getElementById('main');
-    if(main){
-      main.innerHTML = `<div class="empty" role="alert">خطا در بارگذاری اطلاعات. صفحه را دوباره باز کنید.</div>`;
-    }
-  }
-}
 
 function pageShellNote(title, detail){
   return `
@@ -1324,7 +1466,7 @@ async function bootSpaShell() {
       '/evaluation': 'ارزیابی مغازه',
       '/checks': 'چک‌ها',
       '/game': 'مرکز بازی فروش',
-      '/settings': 'تنظیمات و Backup',
+      '/settings': 'تنظیمات و پشتیبان',
       '/more': 'بیشتر',
       '/locations': 'مناطق و مسیرها',
       '/watches': 'واچ‌ها',

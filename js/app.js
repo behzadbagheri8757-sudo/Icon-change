@@ -2,13 +2,9 @@
    Phase 0 extract: no logic changes. Depends on models/db/calc/stock/backup/ui.
 */
 // ---------- submit guard (double-tap on mobile) ----------
-/** Disable mutation button for one run; re-enable only on failure/validation abort. */
-function focusValidationControl(btn, invoiceRowIndex){
+/** Disable mutation button for one run; always release the guard while the sheet remains open. */
+function focusValidationControl(btn){
   if(!btn) return;
-  if(btn.id === 'save-invoice' && Number.isInteger(invoiceRowIndex) && typeof btn.__invoiceFocusInvalidRow === 'function'){
-    btn.__invoiceFocusInvalidRow(invoiceRowIndex);
-    return;
-  }
   const id = btn.id || '';
   const root = btn.closest('.sheet') || document;
   let selectors = [];
@@ -44,307 +40,20 @@ async function withSubmitGuard(btn, fn){
     try{ btn.disabled = false; }catch(_e){}
   }finally{
     window.__sheetSaveInFlight = Math.max(0, (window.__sheetSaveInFlight || 1) - 1);
+    const sheet = btn.closest('.sheet');
+    const overlay = sheet && sheet.closest('.overlay');
+    if (sheet && sheet.isConnected && !sheet.hidden && overlay && overlay.classList.contains('show') && btn.disabled) {
+      try { btn.disabled = false; } catch(_e) {}
+    }
   }
 }
 
-// ---------- render ----------
-const tabs = [
-  {id:'dashboard', label:'داشبورد'},
-  {id:'customers', label:'مشتریان'},
-  {id:'products', label:'اجناس و انبار'},
-  {id:'suppliers', label:'تامین‌کننده‌ها'},
-  {id:'reports', label:'گزارش‌ها'},
-  {id:'backup', label:'بکاپ'},
-];
-
-function renderNav(){
-  const nav = document.getElementById('nav');
-  nav.innerHTML = tabs.map(t=>`<button data-tab="${t.id}" class="${activeTab===t.id?'active':''}">${t.label}</button>`).join('');
-  nav.querySelectorAll('button').forEach(b=>{
-    b.addEventListener('click', ()=>{ activeTab=b.dataset.tab; render(); });
-  });
-}
-
+// ---------- render (SPA refresh trigger; legacy MPA fallback removed —
+// isSpaShell() is always true in this single-shell app) ----------
 function render(){
   if (typeof isSpaShell === 'function' && isSpaShell() && typeof ViewHost !== 'undefined' && ViewHost.refreshCurrent) {
     ViewHost.refreshCurrent();
-    return;
   }
-  renderNav();
-  const main = document.getElementById('main');
-  const fab = document.getElementById('fab');
-  fab.style.display='none'; fab.onclick=null;
-  if(activeTab==='dashboard'){ renderDashboard(main); }
-  if(activeTab==='products'){ renderProducts(main); fab.style.display='block'; fab.onclick=()=>openAddProduct(); }
-  if(activeTab==='customers'){ renderCustomers(main); fab.style.display='block'; fab.onclick=()=>openAddCustomer(); }
-  if(activeTab==='suppliers'){ renderSuppliers(main); fab.style.display='block'; fab.onclick=()=>openAddSupplier(); }
-  if(activeTab==='reports'){ renderReports(main); }
-  if(activeTab==='backup'){ renderBackup(main); }
-}
-
-function renderDashboard(main){
-  const g = globalTotals();
-  const due = checksDueSoon();
-  const lowStock = lowStockProducts();
-  main.innerHTML = `
-    <div class="cards">
-      <div class="card"><div class="label">فروش امروز</div><div class="value accent-olive">${toman(g.todaySales)} ت</div><div class="sub">${g.todayCount} فاکتور</div></div>
-      <div class="card"><div class="label">فروش این ماه</div><div class="value accent-olive">${toman(g.monthSales)} ت</div><div class="sub">${g.monthCount} فاکتور</div></div>
-      <div class="card"><div class="label">جمع سود کل</div><div class="value accent-olive">${toman(g.totalProfit)} ت</div></div>
-      <div class="card"><div class="label">جمع دریافتی (نقد/کارت/انتقال)</div><div class="value">${toman(g.totalReceived)} ت</div></div>
-      <div class="card"><div class="label">چک‌های در جریان</div><div class="value accent-amber">${toman(g.outstandingChecks)} ت</div></div>
-      <div class="card"><div class="label">بدهی مشتریان به شما</div><div class="value accent-rust">${toman(g.customerDebt)} ت</div></div>
-      <div class="card"><div class="label">بدهی شما به تامین‌کننده‌ها</div><div class="value accent-red">${toman(g.supplierDebt)} ت</div></div>
-      <div class="card"><div class="label">ارزش ریالی انبار</div><div class="value">${toman(inventoryValue())} ت</div></div>
-    </div>
-    <h2 class="section-title">چک‌های نزدیک سررسید</h2>
-    ${due.length===0 ? `<div class="empty">فعلاً چکی نزدیک سررسید نیست</div>` : due.map(c=>{
-      const cust = data.customers.find(x=>x.id===c.customerId);
-      const overdue = new Date(c.dueDate) < new Date();
-      return `<div class="ledger-row">
-        <span class="name" style="color:${overdue?'var(--red)':'var(--amber)'}">${esc(cust?cust.name:'—')}</span>
-        <span class="filler"></span>
-        <span class="amount">${toman(c.amount)} ت
-          <span class="sub">${overdue?'سررسید گذشته':'سررسید'}: ${faDate(c.dueDate)}</span>
-        </span>
-      </div>`;
-    }).join('')}
-    ${lowStock.length? `
-      <h2 class="section-title">کالاهای رو به اتمام</h2>
-      ${lowStock.map(p=>`
-        <div class="ledger-row"><span class="name">${esc(p.name)}</span><span class="filler"></span>
-        <span class="amount accent-red">${p.stockQty} باقیمانده <span class="sub">حداقل: ${p.minStock}</span></span></div>
-      `).join('')}
-    ` : ''}
-  `;
-}
-
-function renderProducts(main){
-  main.innerHTML = `
-    <div class="field"><input id="product-search" placeholder="جستجوی کالا یا دسته‌بندی..."></div>
-    <div id="product-table-wrap"></div>
-  `;
-  function draw(filterText){
-    const q = (filterText||'').trim().toLowerCase();
-    let list = data.products.filter(p=> !q || (p.name||'').toLowerCase().includes(q) || (p.category||'').toLowerCase().includes(q));
-    list = list.slice().sort((a,b)=> ((a.active===false)?1:0) - ((b.active===false)?1:0) );
-    const wrap = document.getElementById('product-table-wrap');
-    if(data.products.length===0){ wrap.innerHTML = `<div class="empty">هنوز جنسی ثبت نشده. با دکمه + یکی اضافه کن.</div>`; return; }
-    if(list.length===0){ wrap.innerHTML = `<div class="empty">چیزی پیدا نشد</div>`; return; }
-    wrap.innerHTML = list.map(p=>{
-      const low = (p.minStock||0)>0 && (p.stockQty||0)<=p.minStock;
-      const isOff = p.active===false;
-      return `<div class="ledger-row" data-edit-product="${esc(p.id)}" style="${isOff?'opacity:.45;':''}">
-        <span class="name">${esc(p.name)}${p.category?` <span class="sub" style="display:inline;">(${esc(p.category)})</span>`:''}${isOff?' <span class="badge pending">غیرفعال</span>':''}</span>
-        <span class="filler"></span>
-        <span class="amount">موجودی: ${p.stockQty||0} ${low?'<span class="badge low">کم</span>':''}
-          <span class="sub">خرید (FIFO) ${toman(productFifoUnitCost(p.id))} / عمده ${toman(p.wholesale)} / مصرف‌کننده ${toman(p.retail)}</span>
-        </span>
-      </div>`;
-    }).join('');
-    wrap.querySelectorAll('[data-edit-product]').forEach(b=>{
-      b.addEventListener('click', ()=>openAddProduct(b.dataset.editProduct));
-    });
-  }
-  draw('');
-  document.getElementById('product-search').addEventListener('input', e=>draw(e.target.value));
-}
-
-function renderCustomers(main){
-  main.innerHTML = `
-    <div class="field"><input id="customer-search" placeholder="جستجوی مشتری، منطقه یا مسیر..."></div>
-    <div class="chip-row">
-      <button class="chip ${custFilter==='all'?'active':''}" data-f="all">همه</button>
-      <button class="chip ${custFilter==='debtor'?'active':''}" data-f="debtor">بدحساب</button>
-      <button class="chip ${custFilter==='active'?'active':''}" data-f="active">فعال</button>
-      <button class="chip ${custFilter==='inactive'?'active':''}" data-f="inactive">بدون خرید اخیر</button>
-      <button class="chip ${custFilter==='lost'?'active':''}" data-f="lost">از دست رفته</button>
-    </div>
-    <div class="btn-row" style="margin-bottom:10px;margin-top:-4px;">
-      <button class="btn small secondary" id="sort-debt">${custSortByDebt?'✓ ':''}مرتب‌سازی بر اساس بدهی</button>
-    </div>
-    <div id="customer-list"></div>
-  `;
-  function draw(filterText){
-    const q = (filterText||'').trim().toLowerCase();
-    let list = data.customers.filter(c=>{
-      if(!q) return true;
-      return (c.name||'').toLowerCase().includes(q) || (c.region||'').toLowerCase().includes(q) || (c.route||'').toLowerCase().includes(q);
-    });
-    if(custFilter==='debtor') list = list.filter(c=>customerTotals(c.id).balance>0);
-    if(custFilter==='active') list = list.filter(c=>customerStatus(c.id)==='active');
-    if(custFilter==='inactive') list = list.filter(c=>customerStatus(c.id)==='inactive');
-    if(custFilter==='lost') list = list.filter(c=>customerStatus(c.id)==='lost');
-    list = list.slice().sort((a,b)=>{
-      const aOff = (a.active===false)?1:0, bOff = (b.active===false)?1:0;
-      if(aOff!==bOff) return aOff-bOff;
-      if(custSortByDebt) return customerTotals(b.id).balance-customerTotals(a.id).balance;
-      return 0;
-    });
-
-    const wrap = document.getElementById('customer-list');
-    if(data.customers.length===0){ wrap.innerHTML = `<div class="empty">هنوز مشتری‌ای ثبت نشده. با دکمه + یکی اضافه کن.</div>`; return; }
-    if(list.length===0){ wrap.innerHTML = `<div class="empty">چیزی پیدا نشد</div>`; return; }
-    wrap.innerHTML = list.map(c=>{
-      const t = customerTotals(c.id);
-      const color = t.balance > 0 ? 'var(--rust)' : 'var(--olive-dark)';
-      const status = customerStatus(c.id);
-      const statusLabel = {new:'جدید', active:'فعال', inactive:'بدون خرید اخیر', lost:'از دست رفته'}[status];
-      const isOff = c.active===false;
-      return `<div class="ledger-row" data-open-customer="${esc(c.id)}" style="${isOff?'opacity:.45;':''}">
-        <span class="name">${esc(c.name)}${c.region?` <span class="sub" style="display:inline;">(${esc(c.region)}${c.route?' — '+esc(c.route):''})</span>`:''}${isOff?' <span class="badge pending">غیرفعال</span>':''}</span>
-        <span class="filler"></span>
-        <span class="amount" style="color:${color}">
-          ${balanceStatusText(t.balance, toman(Math.abs(t.balance))+' ت')}
-          <span class="sub">${statusLabel}${t.checkTotal>0?` — چک: ${toman(t.checkTotal)} ت`:''}</span>
-        </span>
-      </div>`;
-    }).join('');
-    wrap.querySelectorAll('[data-open-customer]').forEach(row=>{
-      row.addEventListener('click', ()=>openCustomerDetail(row.dataset.openCustomer));
-    });
-  }
-  draw('');
-  document.getElementById('customer-search').addEventListener('input', e=>draw(e.target.value));
-  main.querySelectorAll('.chip').forEach(ch=>{
-    ch.addEventListener('click', ()=>{ custFilter = ch.dataset.f; renderCustomers(main); });
-  });
-  document.getElementById('sort-debt').addEventListener('click', ()=>{
-    custSortByDebt = !custSortByDebt; renderCustomers(main);
-  });
-}
-
-function renderReports(main){
-  const g = globalTotals();
-  const tp = topProducts(5);
-  const tc = topCustomers(5);
-  const debtors = debtorList(10);
-  const inactives = inactiveCustomers();
-  const low = lowStockProducts();
-  main.innerHTML = `
-    <div class="cards">
-      <div class="card"><div class="label">فروش امروز</div><div class="value accent-olive">${toman(g.todaySales)} ت</div></div>
-      <div class="card"><div class="label">فروش این ماه</div><div class="value accent-olive">${toman(g.monthSales)} ت</div></div>
-      <div class="card"><div class="label">سود کل</div><div class="value accent-olive">${toman(g.totalProfit)} ت</div></div>
-      <div class="card"><div class="label">ارزش انبار</div><div class="value">${toman(inventoryValue())} ت</div></div>
-    </div>
-
-    <h2 class="section-title">پرفروش‌ترین کالاها</h2>
-    ${tp.length===0?`<div class="empty">هنوز فروشی ثبت نشده</div>`:tp.map(x=>`
-      <div class="ledger-row"><span class="name">${esc(x.name)}</span><span class="filler"></span>
-      <span class="amount">${x.qty} عدد <span class="sub">${toman(x.revenue)} ت</span></span></div>
-    `).join('')}
-
-    <h2 class="section-title">بهترین مشتریان</h2>
-    ${tc.length===0?`<div class="empty">هنوز فروشی ثبت نشده</div>`:tc.map(x=>`
-      <div class="ledger-row" data-open-customer="${esc(x.c.id)}"><span class="name">${esc(x.c.name)}</span><span class="filler"></span>
-      <span class="amount">${toman(x.t.invTotal)} ت</span></div>
-    `).join('')}
-
-    <h2 class="section-title">مشتریان بدهکار (به ترتیب بدهی)</h2>
-    ${debtors.length===0?`<div class="empty">بدهکاری ثبت نشده</div>`:debtors.map(x=>`
-      <div class="ledger-row" data-open-customer="${esc(x.c.id)}"><span class="name">${esc(x.c.name)}</span><span class="filler"></span>
-      <span class="amount accent-rust">${toman(x.t.balance)} ت</span></div>
-    `).join('')}
-
-    <h2 class="section-title">مشتریان بدون خرید اخیر / از دست رفته</h2>
-    ${inactives.length===0?`<div class="empty">همه‌ی مشتریان اخیراً خرید داشته‌اند</div>`:inactives.map(x=>`
-      <div class="ledger-row" data-open-customer="${esc(x.c.id)}"><span class="name">${esc(x.c.name)}</span><span class="filler"></span>
-      <span class="amount">${isFinite(x.st.daysSinceLast)? x.st.daysSinceLast+' روز پیش' : 'هرگز'}</span></div>
-    `).join('')}
-
-    <h2 class="section-title">کالاهای رو به اتمام</h2>
-    ${low.length===0?`<div class="empty">موجودی همه‌ی کالاها کافی است</div>`:low.map(p=>`
-      <div class="ledger-row"><span class="name">${esc(p.name)}</span><span class="filler"></span>
-      <span class="amount accent-red">${p.stockQty} از ${p.minStock}</span></div>
-    `).join('')}
-
-    <div class="btn-row"><button class="btn secondary" id="rep-excel">خروجی اکسل کامل</button></div>
-  `;
-  main.querySelectorAll('[data-open-customer]').forEach(row=>{
-    row.addEventListener('click', ()=>openCustomerDetail(row.dataset.openCustomer));
-  });
-  document.getElementById('rep-excel').addEventListener('click', exportExcel);
-}
-
-function renderBackup(main){
-  const stats = `${data.customers.length} مشتری، ${data.invoices.length} فاکتور، ${data.products.length} کالا، ${data.suppliers.length} تامین‌کننده`;
-  main.innerHTML = `
-    <h2 class="section-title">وضعیت فعلی</h2>
-    <div class="empty" style="padding:12px 0;">${stats}</div>
-
-    <h2 class="section-title">پشتیبان‌گیری</h2>
-    <div class="btn-row">
-      <button class="btn" id="export-json">دانلود بکاپ (JSON)</button>
-      <button class="btn secondary" id="export-excel">خروجی اکسل (گزارش)</button>
-    </div>
-
-    <h2 class="section-title">بازیابی از بکاپ</h2>
-    <div class="field">
-      <label>فایل بکاپ JSON رو انتخاب کن (از Files یا iCloud)</label>
-      <input type="file" id="import-file" accept="application/json">
-    </div>
-    <div class="confirm-box">
-      ⚠️ بازیابی، تمام اطلاعات فعلی رو با فایل بکاپ جایگزین می‌کنه. قبل از تایید یک نسخه از وضعیت فعلی به‌طور خودکار نگه‌داشته می‌شه و می‌تونی برش گردونی، ولی بهتره اگه چیز مهمی ثبت کردی، همین الان یک بکاپ دستی هم بگیری.
-    </div>
-    <div class="btn-row">
-      <button class="btn danger" id="do-import">بازیابی و جایگزینی اطلاعات فعلی</button>
-      <button class="btn secondary" id="undo-import">برگشت به قبل از آخرین بازیابی</button>
-    </div>
-
-    <h2 class="section-title">بکاپ‌های خودکار (داخل همین دستگاه)</h2>
-    <div class="empty" style="padding:0 0 8px;text-align:right;">هر حدود ۱۲ ساعت یک نسخه خودکار از داده‌های CRM، FIFO، هدف فروش، ProspectScout و Intelligence گرفته می‌شه و فقط ۵ نسخه‌ی آخر نگه داشته می‌شه. اینا جایگزین بکاپ دستی (بالا) نیستن، فقط یه شبکه‌ی ایمنی اضافه‌ن.</div>
-    <div id="auto-backup-list"><div class="empty">در حال بارگذاری…</div></div>
-  `;
-  document.getElementById('export-json').addEventListener('click', exportBackupJSON);
-  document.getElementById('export-excel').addEventListener('click', exportExcel);
-  document.getElementById('undo-import').addEventListener('click', undoLastRestore);
-  document.getElementById('do-import').addEventListener('click', async ()=>{
-    const inp = document.getElementById('import-file');
-    if(!inp.files || !inp.files[0]){ showToast('اول یه فایل انتخاب کن'); return; }
-    if(!(await appConfirm('مطمئنی؟ اطلاعات فعلی با فایل بکاپ جایگزین می‌شه.'))) return;
-    importBackupJSON(inp.files[0]);
-  });
-
-  getAutoBackupList().then(list=>{
-    const wrap = document.getElementById('auto-backup-list');
-    if(!wrap) return; // کاربر قبل از رسیدن جواب، تب رو عوض کرده
-    if(!list.length){ wrap.innerHTML = `<div class="empty">هنوز نسخه‌ی خودکاری گرفته نشده</div>`; return; }
-    wrap.innerHTML = list.slice().reverse().map(item=>`
-      <div class="ledger-row" data-restore-auto="${esc(item.key)}">
-        <span class="name">${new Date(item.ts).toLocaleString('fa-IR')}</span>
-        <span class="filler"></span>
-        <span class="amount"><button class="btn small secondary" data-restore-auto-btn="${esc(item.key)}">بازیابی</button></span>
-      </div>
-    `).join('');
-    wrap.querySelectorAll('[data-restore-auto-btn]').forEach(btn=>{
-      btn.addEventListener('click', ()=>restoreFromAutoBackup(btn.dataset.restoreAutoBtn));
-    });
-  }).catch(e=>{
-    console.error('loading auto backup list failed', e);
-    const wrap = document.getElementById('auto-backup-list');
-    if(wrap) wrap.innerHTML = `<div class="empty">لیست بکاپ خودکار در دسترس نیست</div>`;
-  });
-}
-
-function renderSuppliers(main){
-  if(data.suppliers.length===0){
-    main.innerHTML = `<div class="empty">هنوز تامین‌کننده‌ای ثبت نشده. با دکمه + یکی اضافه کن.</div>`;
-    return;
-  }
-  main.innerHTML = data.suppliers.map(s=>{
-    const t = supplierTotals(s.id);
-    return `<div class="ledger-row" data-open-supplier="${esc(s.id)}">
-      <span class="name">${esc(s.name)}</span>
-      <span class="filler"></span>
-      <span class="amount" style="color:${t.balance>0?'var(--red)':'var(--olive-dark)'}">
-        ${t.balance>0?'بدهکارید ':'تسویه '}${toman(Math.abs(t.balance))} ت
-      </span>
-    </div>`;
-  }).join('');
-  main.querySelectorAll('[data-open-supplier]').forEach(row=>{
-    row.addEventListener('click', ()=>openSupplierDetail(row.dataset.openSupplier));
-  });
 }
 
 // ---------- print & image export ----------
@@ -686,6 +395,65 @@ async function exportInvoiceImage(invId){
 }
 
 // ---------- products / inventory ----------
+/* Product Analysis Group — read-only helpers for the product form's
+   group <select> (surgical addition; no new file, no schema/version bump). */
+function analysisGroupOptionsHtml(selectedId){
+  return (data.analysisGroups || []).slice()
+    .sort((a,b)=>(a.name||'').localeCompare(b.name||'', 'fa'))
+    .map(g=>`<option value="${esc(g.id)}" ${g.id===selectedId?'selected':''}>${esc(g.name)}</option>`)
+    .join('');
+}
+
+/* Nested Micro-Layer for creating a new Analysis Group inline — same
+   append-a-floating-layer-on-#modalRoot pattern as appConfirm() in ui.js,
+   but with a text input instead of a yes/no choice. The sheet underneath
+   (openAddProduct's openSheet) is never destroyed or re-rendered, so its
+   other field values survive regardless of what happens in this layer.
+   Resolves with the trimmed name on confirm, or null on cancel/backdrop
+   click. Reuses existing .confirm-overlay/.confirm-card/.field/.btn/.btn-row
+   classes — no CSS file touched. */
+function promptNewAnalysisGroupName(){
+  return new Promise(function(resolve){
+    const root = document.getElementById('modalRoot');
+    if(!root){ resolve(null); return; }
+    const layer = document.createElement('div');
+    layer.className = 'confirm-overlay';
+    layer.setAttribute('role','dialog');
+    layer.setAttribute('aria-modal','true');
+    layer.innerHTML =
+      '<div class="confirm-card">'
+      + '<div class="confirm-message">نام گروه تحلیلی جدید</div>'
+      + '<div class="field"><input id="new-analysis-group-name" type="text"></div>'
+      + '<div class="btn-row">'
+      + '<button type="button" class="btn secondary" data-ag-cancel>انصراف</button>'
+      + '<button type="button" class="btn" data-ag-ok>تأیید</button>'
+      + '</div>'
+      + '</div>';
+    root.appendChild(layer);
+    let settled = false;
+    function finish(value){
+      if(settled) return;
+      settled = true;
+      layer.remove();
+      resolve(value);
+    }
+    const input = layer.querySelector('#new-analysis-group-name');
+    function tryConfirm(){
+      const name = (input.value||'').trim();
+      if(!name){ input.focus(); return; } // نام لازم است؛ لایه باز می‌ماند
+      finish(name);
+    }
+    layer.querySelector('[data-ag-cancel]').addEventListener('click', function(){ finish(null); });
+    layer.querySelector('[data-ag-ok]').addEventListener('click', tryConfirm);
+    layer.addEventListener('click', function(e){ if(e.target === layer) finish(null); });
+    input.addEventListener('keydown', function(e){
+      if(e.key === 'Enter'){ e.preventDefault(); tryConfirm(); }
+      else if(e.key === 'Escape'){ e.preventDefault(); finish(null); }
+    });
+    requestAnimationFrame(function(){ input.focus(); });
+  });
+}
+
 function openAddProduct(editId){
   const p = editId ? data.products.find(x=>x.id===editId) : null;
   const productId = editId || null;
@@ -700,13 +468,21 @@ function openAddProduct(editId){
       <input id="f-cat" list="cat-list" value="${p?esc(p.category||''):''}">
       <datalist id="cat-list">${CATEGORY_SUGGESTIONS.map(c=>`<option value="${c}">`).join('')}</datalist>
     </div>
+    <div class="field">
+      <label>گروه تحلیلی (اختیاری)</label>
+      <select id="f-analysis-group">
+        <option value="">بدون گروه</option>
+        ${analysisGroupOptionsHtml(p ? (p.analysisGroupId || '') : '')}
+        <option value="__new__">➕ افزودن گروه جدید…</option>
+      </select>
+    </div>
     <div class="field"><label>وزن بسته (کیلوگرم یا گرم، اختیاری)</label><input id="f-pkgw" type="text" inputmode="decimal" value="${p&&p.packageWeight?p.packageWeight:''}"></div>
 
     <div class="field"><label>تاریخ این تغییر قیمت</label>${shamsiDateInputHTML('f-pdate', todayISO())}</div>
     <div class="field" style="display:flex;gap:8px;">
-      <div style="flex:1;"><label>قیمت خرید</label><input id="f-buy" type="text" inputmode="decimal" value="${p?p.buy:''}"></div>
-      <div style="flex:1;"><label>قیمت عمده</label><input id="f-wholesale" type="text" inputmode="decimal" value="${p?p.wholesale:''}"></div>
-      <div style="flex:1;"><label>قیمت مصرف‌کننده</label><input id="f-retail" type="text" inputmode="decimal" value="${p?p.retail:''}"></div>
+      <div style="flex:1;"><label>قیمت خرید</label><input id="f-buy" type="text" inputmode="decimal" value="${(typeof formatLiveAmount==='function' && p && p.buy) ? formatLiveAmount(String(p.buy)) : (p?p.buy:'')}"></div>
+      <div style="flex:1;"><label>قیمت عمده</label><input id="f-wholesale" type="text" inputmode="decimal" value="${(typeof formatLiveAmount==='function' && p && p.wholesale) ? formatLiveAmount(String(p.wholesale)) : (p?p.wholesale:'')}"></div>
+      <div style="flex:1;"><label>قیمت مصرف‌کننده</label><input id="f-retail" type="text" inputmode="decimal" value="${(typeof formatLiveAmount==='function' && p && p.retail) ? formatLiveAmount(String(p.retail)) : (p?p.retail:'')}"></div>
     </div>
     ${profitPct!==null?`<div class="product-profit-pct">درصد سود تقریبی: <b>${profitPct}٪</b></div>`:''}
     ${p?`<div class="empty form-hint" style="padding:0 0 8px;text-align:right;font-size:.78rem;">قیمت خرید واقعی به روش FIFO الان: <b>${toman(productFifoUnitCost(p.id))} ت</b> (میانگین وزنی لایه‌های موجود در انبار — «قیمت خرید» بالا فقط مبنای پیش‌فرض برای خریدهای بدون قیمت مشخص است) — ارزش این کالا در انبار: <b>${toman(productInventoryValue(p.id))} ت</b></div>`:''}
@@ -750,7 +526,7 @@ function openAddProduct(editId){
         </div>
       `).join('')}
     `:''}
-  `);
+  `, {dirtyCheck:true});
 
   async function persist(){
     const liveProduct = productId ? data.products.find(x=>x.id===productId) : null;
@@ -763,6 +539,8 @@ function openAddProduct(editId){
     const pdate = document.getElementById('f-pdate').value || todayISO();
     const stockQty = numVal(document.getElementById('f-stock'));
     const minStock = numVal(document.getElementById('f-minstock'));
+    const analysisGroupSelectVal = document.getElementById('f-analysis-group').value;
+    const analysisGroupId = (analysisGroupSelectVal && analysisGroupSelectVal !== '__new__') ? analysisGroupSelectVal : null;
     if(!name){ showToast('نام جنس رو وارد کن'); return null; }
     if(liveProduct){
       const p = liveProduct;
@@ -777,13 +555,14 @@ function openAddProduct(editId){
       p.name=name; p.category=category; p.packageWeight=packageWeight;
       p.buy=buy; p.wholesale=wholesale; p.retail=retail; p.sell=retail;
       p.minStock=minStock;
+      p.analysisGroupId = analysisGroupId;
       p.priceHistory = p.priceHistory||[];
       p.priceHistory.push({date:pdate, buy, wholesale, retail});
       await saveData();
       return p;
     } else {
       const np = {id:uid(), name, category, packageWeight, buy, wholesale, retail, sell:retail,
-        stockQty:0, minStock, priceHistory:[{date:pdate, buy, wholesale, retail}], stockLog: [], active:true};
+        stockQty:0, minStock, analysisGroupId, priceHistory:[{date:pdate, buy, wholesale, retail}], stockLog: [], active:true};
       data.products.push(np);
       if(stockQty>0){
         manualStockIn(np.id, stockQty, 'موجودی اولیه');
@@ -800,6 +579,41 @@ function openAddProduct(editId){
       closeModal(); render(); showToast('ذخیره شد');
     });
   });
+  {
+    const analysisGroupSelect = document.getElementById('f-analysis-group');
+    let lastAnalysisGroupValue = analysisGroupSelect.value;
+    analysisGroupSelect.addEventListener('change', async (e)=>{
+      if(e.target.value !== '__new__'){
+        lastAnalysisGroupValue = e.target.value;
+        return;
+      }
+      const chosenName = await promptNewAnalysisGroupName();
+      if(!chosenName){
+        // Cancel: هیچ گروهی ساخته نمی‌شود؛ select به مقدار قبلی برمی‌گردد؛
+        // بقیهٔ فرم (که اصلاً دست نخورده) همان‌طور باقی می‌ماند.
+        analysisGroupSelect.value = lastAnalysisGroupValue;
+        return;
+      }
+      data.analysisGroups = data.analysisGroups || [];
+      const newGroup = {id: uid(), name: chosenName, status: 'active'};
+      data.analysisGroups.push(newGroup);
+      try{
+        await saveData();
+      }catch(err){
+        data.analysisGroups = data.analysisGroups.filter(g=>g.id!==newGroup.id);
+        showToast('گروه ذخیره نشد');
+        analysisGroupSelect.value = lastAnalysisGroupValue;
+        return;
+      }
+      const opt = document.createElement('option');
+      opt.value = newGroup.id;
+      opt.textContent = newGroup.name;
+      const addNewOption = analysisGroupSelect.querySelector('option[value="__new__"]');
+      analysisGroupSelect.insertBefore(opt, addNewOption);
+      analysisGroupSelect.value = newGroup.id;
+      lastAnalysisGroupValue = newGroup.id;
+    });
+  }
   if(p){
     document.getElementById('toggle-product-active').addEventListener('click', async (e)=>{
       await withSubmitGuard(e.currentTarget, async ()=>{
@@ -862,7 +676,7 @@ function openAddCustomer(editId){
       <div class="empty" style="padding:4px 0 0;text-align:right;font-size:.75rem;">بدهی مشتری از قبل از استفاده از این برنامه رو اینجا بزن. اگه خودت بهش بدهکاری (طلبکاره)، عدد رو منفی بزن. این مبلغ توی گزارش فروش/سود حساب نمی‌شه، فقط توی مانده حساب میاد.</div>
     </div>
     <div class="btn-row"><button class="btn" id="save-customer">ذخیره</button></div>
-  `);
+  `, {dirtyCheck:true});
   document.getElementById('save-customer').addEventListener('click', async (e)=>{
     await withSubmitGuard(e.currentTarget, async ()=>{
       const name = document.getElementById('f-name').value.trim();
@@ -877,8 +691,9 @@ function openAddCustomer(editId){
       const liveCustomer = customerId ? data.customers.find(x=>x.id===customerId) : null;
       if(liveCustomer){ liveCustomer.ownerName=ownerName; liveCustomer.name=name; liveCustomer.phone=phone; liveCustomer.region=region; liveCustomer.route=route; liveCustomer.address=address; liveCustomer.note=note; liveCustomer.openingBalance=openingBalance; }
       else{ data.customers.push({id:uid(), name, ownerName, phone, region, route, address, note, openingBalance, visits:[], active:true}); }
-      await saveData(); closeModal(); render();
+      await saveData(); closeModal();
       if(liveCustomer) openCustomerDetail(liveCustomer.id);
+      else render();
       showToast('ذخیره شد');
     });
   });
@@ -1038,10 +853,12 @@ function openAddTransaction(cid){
         ${returnItemsSectionHtml()}
         <div class="btn-row"><button class="btn" id="save-tx">ثبت</button></div>
       ` : ''}
-    `);
+    `, {dirtyCheck:true});
 
     document.querySelectorAll('[data-tx-method]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
+        const sheetEl = btn.closest('.sheet');
+        if (sheetEl) sheetEl.dataset.dirty = '1';
         method = btn.getAttribute('data-tx-method');
         if(method!=='return'){
           selectedInvoiceId = '';
@@ -1156,6 +973,14 @@ function openAddTransaction(cid){
 
         const payment = {id:uid(), customerId:cid, date, amount, method, note, returnItems};
         if(returnInvoiceId) payment.invoiceId = returnInvoiceId;
+        // بدون مقصد مشخص (بدون invoiceId) و از انواع قابل‌تخصیص به بدهی؟ همین الان،
+        // در لحظهٔ ثبت، جایگاهش در بدهی مشتری مشخص و ذخیره می‌شود (نگاه کنید به
+        // calc.js computeDebtAllocationForAmount). بعداً با ثبت دریافت‌های جدید
+        // این تخصیص دوباره محاسبه یا جابه‌جا نمی‌شود.
+        if(!payment.invoiceId && typeof computeDebtAllocationForAmount === 'function'
+          && ['cash','card','transfer','discount'].includes(method)){
+          payment.debtAllocations = computeDebtAllocationForAmount(cid, amount);
+        }
         // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور —
         // چون این مسیر هم برای «برگشت از فروش» موجودی/لایه‌های FIFO را تغییر می‌دهد.
         // یک try واحد: اگر applyReturnStockEffects یا saveData شکست بخورد،
@@ -1171,6 +996,10 @@ function openAddTransaction(cid){
           restoreDataInPlace(previousData);
           throw err;
         }
+        // Operational Action acknowledgement only; never changes payment/accounting data.
+        if (typeof recordPaymentActionAcks === 'function') {
+          try { recordPaymentActionAcks(cid, payment); } catch (eAckPayment) { console.warn('Action ack failed:', eAckPayment); }
+        }
         // Game Center hook (derived only — never rolls back CRM)
         if (typeof gameOnPayment === 'function') {
           try {
@@ -1180,7 +1009,7 @@ function openAddTransaction(cid){
           }
         }
         closeModal();
-        openCustomerDetail(cid); render(); showToast('ثبت شد');
+        openCustomerDetail(cid); showToast('ثبت شد');
       });
     });
   }
@@ -1207,7 +1036,7 @@ function openEditStandalonePayment(cid, paymentId){
     <div class="field"><label>مبلغ (تومان)</label><input id="ep-amount" type="text" inputmode="decimal" value="${esc(amountStr)}"></div>
     <div class="field"><label>توضیح (اختیاری)</label><input id="ep-note" value="${esc(noteStr)}"></div>
     <div class="btn-row"><button class="btn" id="ep-save">ذخیره</button><button class="btn danger secondary" id="ep-delete">حذف دریافت</button></div>
-  `);
+  `, {dirtyCheck:true});
   document.getElementById('ep-method').addEventListener('change', e=>{ method=e.target.value; });
   document.getElementById('ep-date').addEventListener('input', e=>{ dateStr=e.target.value; });
   document.getElementById('ep-amount').addEventListener('input', e=>{ amountStr=e.target.value; });
@@ -1221,6 +1050,13 @@ function openEditStandalonePayment(cid, paymentId){
         const livePayment = (data.payments||[]).find(x=>x.id===paymentId && x.customerId===cid);
         if(!livePayment) throw new Error('validation');
         livePayment.method=method; livePayment.date=dateStr||todayISO(); livePayment.amount=amount; livePayment.note=(noteStr||'').trim();
+        // مبلغ/نوع این دریافت عوض شده — فقط تخصیص خودِ همین رکورد دوباره محاسبه می‌شود
+        // (بدون دست‌زدن به debtAllocations بقیهٔ دریافت‌ها؛ excludeId یعنی تخصیص قبلیِ
+        // خودش در محاسبهٔ «مصرف‌شده» حساب نشود).
+        if(typeof computeDebtAllocationForAmount === 'function'
+          && ['cash','card','transfer','discount'].includes(livePayment.method)){
+          livePayment.debtAllocations = computeDebtAllocationForAmount(cid, livePayment.amount, livePayment.id);
+        }
         await saveData();
       }catch(err){ restoreDataInPlace(previousData); throw err; }
       closeModal();
@@ -1255,14 +1091,20 @@ function openAddCheck(cid){
     <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
     <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', todayISO())}</div>
     <div class="btn-row"><button class="btn" id="save-check">ثبت</button></div>
-  `);
+  `, {dirtyCheck:true});
   document.getElementById('save-check').addEventListener('click', async (e)=>{
     await withSubmitGuard(e.currentTarget, async ()=>{
       const amount = numVal(document.getElementById('f-amount'));
       const dueDate = document.getElementById('f-due').value || todayISO();
       const checkNumber = document.getElementById('f-num').value.trim();
       if(amount<=0){ showToast('مبلغ رو وارد کن'); throw new Error('validation'); }
-      data.checks.push({id:uid(), customerId:cid, amount, dueDate, checkNumber, status:'pending'});
+      const newCheck = {id:uid(), customerId:cid, amount, dueDate, checkNumber, status:'pending'};
+      // چک هم مثل دریافت، از نظر تخصیص به بدهی، همین لحظه جایگاهش مشخص و ذخیره می‌شود.
+      // وضعیت وصول چک (pending/cleared) کاملاً جدا می‌ماند و اینجا دخیل نیست.
+      if(typeof computeDebtAllocationForAmount === 'function'){
+        newCheck.debtAllocations = computeDebtAllocationForAmount(cid, amount);
+      }
+      data.checks.push(newCheck);
       await saveData(); closeModal(); openCustomerDetail(cid); render(); showToast('چک ثبت شد');
     });
   });
@@ -1411,6 +1253,325 @@ function bindNoPurchasePrompt(cid){
    Partial in-progress product is dropped on Save & Finish.
    Backward-compatible: old visits without offeredProducts / stockSource OK.
    Does not touch invoice/stock/FIFO. */
+/* ============================================================
+   BAGHERI — Presentation helpers (Delivery / Context patch)
+   PRESENTATION ONLY. Turns facts the system already stores or
+   computes (watch occurrences, visit offeredProducts, stock sources,
+   invoices) into short human Persian lines. It computes no new
+   Intelligence, creates no Signal/Watch, never mutates data and never
+   touches accounting / FIFO / persistence.
+   Used by: openAddVisit + openInvoiceForm (this file),
+            views/customer.js, views/watches.js.
+   ============================================================ */
+window.BagheriPresent = (function () {
+  'use strict';
+
+  function fa(v) { return typeof enToFaDigits === 'function' ? enToFaDigits(String(v)) : String(v); }
+  function n0(v) { return fa(Math.round(Number(v))); }
+  function n1(v) { return fa(Math.round(Number(v) * 10) / 10); }
+  function pct01(v) { return fa(Math.round(Number(v) * 100)) + '٪'; }
+  function money(v) { return typeof toman === 'function' ? toman(Math.round(Number(v))) : n0(v); }
+  var LV = { critical: 4, high: 3, medium: 2, low: 1 };
+  function lvRank(l) { return LV[l] || 0; }
+
+  function productById(pid) {
+    if (!pid || typeof data === 'undefined' || !Array.isArray(data.products)) return null;
+    return data.products.find(function (p) { return p && p.id === pid; }) || null;
+  }
+  function pname(pid, fallback) {
+    var p = productById(pid);
+    return (p && p.name) || fallback || '';
+  }
+  /* Unit comes from product master data only (same rule the Watch views already use). */
+  function qtyText(q, pid) {
+    if (q == null || !isFinite(Number(q))) return '';
+    var p = productById(pid);
+    return n1(q) + ' ' + (p && p.packageWeight ? 'بسته' : 'کیلو');
+  }
+
+  /* ---------- labels ---------- */
+  var WATCH_LABELS = {
+    PURCHASE_DECLINE_WATCH: 'خرید کلی کمتر شده',
+    BEHIND_PATTERN_WATCH: 'نزدیک به عقب‌افتادن از زمان معمول خرید',
+    BASKET_SHRINK_WATCH: 'افت مقدار خرید',
+    KEY_PRODUCT_LOST_WATCH: 'کالای کلیدی خریده نشده',
+    SKU_DELAY_WATCH: 'دیرتر از معمول خریده شده',
+    SKU_QUANTITY_DROP_WATCH: 'مقدار خرید کمتر شده',
+    SKU_FREQUENCY_DROP_WATCH: 'کمتر از قبل خریده می‌شود',
+    LINE_DROP_WATCH: 'در سبد اخیر کم‌رنگ شده',
+    COMBINED_SKU_WATCH: 'چند نشانه هم‌زمان'
+  };
+  var WATCH_SHORT = {
+    KEY_PRODUCT_LOST_WATCH: 'در خریدهای اخیر دیده نمی‌شود',
+    BASKET_SHRINK_WATCH: 'مقدار خرید کمتر شده',
+    SKU_DELAY_WATCH: 'دیرتر از معمول خریده شده',
+    SKU_QUANTITY_DROP_WATCH: 'مقدار خرید اخیر کمتر از معمول شده',
+    SKU_FREQUENCY_DROP_WATCH: 'کمتر از قبل خریده می‌شود',
+    LINE_DROP_WATCH: 'در سبد اخیر کم‌رنگ شده',
+    COMBINED_SKU_WATCH: 'چند نشانه کاهش خرید دارد'
+  };
+  /* Confirmed SKU-level signals that may speak about ONE product. Anything not listed here
+     (payment, check, visit, general decline ...) is never shown in a product hint. */
+  var CONFIRMED_PRODUCT_SHORT = {
+    SKU_DELAY: WATCH_SHORT.SKU_DELAY_WATCH,
+    SKU_QUANTITY_DROP: WATCH_SHORT.SKU_QUANTITY_DROP_WATCH,
+    SKU_FREQUENCY_DROP: WATCH_SHORT.SKU_FREQUENCY_DROP_WATCH,
+    LINE_DROP: WATCH_SHORT.LINE_DROP_WATCH
+  };
+  var COMPONENT_LABELS = {
+    SKU_DELAY_WATCH: 'تأخیر در خرید',
+    SKU_QUANTITY_DROP_WATCH: 'کاهش مقدار',
+    SKU_FREQUENCY_DROP_WATCH: 'کاهش دفعات خرید',
+    LINE_DROP_WATCH: 'کم‌رنگ شدن در سبد'
+  };
+  var REASON_LABELS = {
+    price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'موجود نبود',
+    no_need: 'نیاز نداشت', still_stock: 'موجودی داشت', other: ''
+  };
+  function watchLabel(cat) { return WATCH_LABELS[cat] || 'تغییر در رفتار خرید'; }
+  function reasonLabel(code) { return REASON_LABELS[code] || ''; }
+
+  /* ---------- Stock source: stored fact -> later context ---------- */
+  function stockSentence(src) {
+    if (src === 'competitor') return 'مشتری گفت این محصول را فعلاً از تأمین‌کننده دیگری تهیه می‌کند.';
+    if (src === 'ours') return 'مشتری گفت موجودی این محصول را از ما دارد.';
+    if (src === 'unknown') return 'مشتری گفت هنوز موجودی دارد؛ منبع آن مشخص نیست.';
+    return '';
+  }
+  function stockShort(src) {
+    if (src === 'competitor') return 'فعلاً از تأمین‌کننده دیگری تهیه می‌کند';
+    if (src === 'ours') return 'موجودی فعلی را از ما دارد';
+    if (src === 'unknown') return 'هنوز موجودی دارد (منبع نامشخص)';
+    return '';
+  }
+
+  /* ---------- Watch: Level 0 sentence ---------- */
+  function namesText(list, max) {
+    var arr = (list || []).map(function (x) { return x && (x.productName || x.productId); }).filter(Boolean);
+    if (!arr.length) return '';
+    var shown = arr.slice(0, max || 2).map(function (n) { return '«' + n + '»'; });
+    var s = shown.join(' و ');
+    if (arr.length > shown.length) s += ' و ' + n0(arr.length - shown.length) + ' کالای دیگر';
+    return s;
+  }
+
+  function sentenceFor(cat, e, pid, o) {
+    e = e || {};
+    switch (cat) {
+      case 'SKU_DELAY_WATCH':
+        if (e.typicalCycle != null) {
+          // Real "days since last purchase" when the evidence carries it.
+          if (e.daysSinceLast != null)
+            return n0(e.daysSinceLast) + ' روز از آخرین خرید گذشته؛ این مشتری معمولاً هر ' + n0(e.typicalCycle) + ' روز خرید می‌کند.';
+          // currentGap is the delay relative to the usual cycle (daysSinceLast - typicalCycle).
+          if (e.currentGap != null && e.currentGap > 0)
+            return n0(e.currentGap) + ' روز از زمان معمول خرید گذشته؛ این مشتری معمولاً هر ' + n0(e.typicalCycle) + ' روز خرید می‌کند.';
+        }
+        break;
+      case 'BEHIND_PATTERN_WATCH':
+        if (e.daysSinceLast != null && e.averageIntervalDays != null)
+          return n0(e.daysSinceLast) + ' روز از آخرین خرید گذشته؛ این مشتری معمولاً هر ' + n0(e.averageIntervalDays) + ' روز خرید می‌کند.';
+        break;
+      case 'SKU_QUANTITY_DROP_WATCH':
+        if (e.recentQuantity != null && e.typicalQuantity != null)
+          return 'مقدار خرید اخیر ' + qtyText(e.recentQuantity, pid) + ' بوده؛ مقدار معمول ' + qtyText(e.typicalQuantity, pid) + ' است.';
+        break;
+      case 'SKU_FREQUENCY_DROP_WATCH':
+        if (e.recentFrequency != null && e.expectedFrequency != null)
+          return 'در بازهٔ اخیر ' + n0(e.recentFrequency) + ' بار خرید ثبت شده؛ معمولاً حدود ' + n1(e.expectedFrequency) + ' بار.';
+        break;
+      case 'LINE_DROP_WATCH':
+        if (e.historicalPresenceRate != null && e.currentBasketPresence != null)
+          return 'قبلاً در حدود ' + pct01(e.historicalPresenceRate) + ' خریدها بوده؛ اخیراً فقط در ' + pct01(e.currentBasketPresence) + ' خریدها دیده شده.';
+        break;
+      case 'PURCHASE_DECLINE_WATCH':
+        if (e.declinePercent != null)
+          return 'خرید ۳۰ روز اخیر حدود ' + n0(e.declinePercent) + '٪ کمتر از ۳۰ روز قبل است.';
+        break;
+      case 'BASKET_SHRINK_WATCH': {
+        var an = namesText(e.affectedProducts, 2);
+        return an ? 'مقدار خرید ' + an + ' نسبت به قبل به نصف یا کمتر رسیده.' : 'مقدار خرید چند کالا نسبت به قبل به نصف یا کمتر رسیده.';
+      }
+      case 'KEY_PRODUCT_LOST_WATCH': {
+        var ln = namesText(e.lostProducts, 2);
+        var many = Array.isArray(e.lostProducts) && e.lostProducts.length > 1;
+        return ln ? ln + (many ? ' در خریدهای اخیر دیده نمی‌شوند.' : ' در خریدهای اخیر دیده نمی‌شود، در حالی که قبلاً خریده می‌شد.') : 'یک یا چند کالای کلیدی در خریدهای اخیر دیده نمی‌شود.';
+      }
+      case 'COMBINED_SKU_WATCH': {
+        var cats = (o && Array.isArray(o.watchComponents) && o.watchComponents.length)
+          ? o.watchComponents
+          : ((e.components || []).map(function (c) { return c && c.category; }));
+        var labels = cats.map(function (c) { return COMPONENT_LABELS[c]; }).filter(Boolean);
+        if (labels.length) return 'چند نشانه هم‌زمان دیده شده: ' + labels.join('، ') + '.';
+        break;
+      }
+    }
+    return '';
+  }
+  function watchSentence(o) {
+    if (!o) return '';
+    var s = '';
+    try { s = sentenceFor(o.watchCategory, o.evidence, o.productId, o); } catch (e) { s = ''; }
+    return s || o.generatedReason || '';
+  }
+
+  /* ---------- Watch: Level 1/2 raw evidence (kept, moved out of Level 0) ---------- */
+  function evidenceLines(e, pid) {
+    var out = [];
+    if (!e) return out;
+    if (e.comparison) out.push('مبنای مقایسه: ' + e.comparison);
+    if (e.salesPrevious30 != null && e.salesRecent30 != null) out.push('فروش: ' + money(e.salesPrevious30) + ' ← ' + money(e.salesRecent30));
+    if (e.daysSinceLast != null && e.averageIntervalDays != null) out.push('فاصله از آخرین خرید: ' + n0(e.daysSinceLast) + ' روز؛ فاصله معمول: ' + n0(e.averageIntervalDays) + ' روز');
+    if (Array.isArray(e.affectedProducts) && e.affectedProducts.length) {
+      e.affectedProducts.forEach(function (x) {
+        out.push('«' + (x.productName || x.productId || '') + '»: قبلاً ' + qtyText(x.earlyQty, x.productId) + ' ← اخیراً ' + qtyText(x.lateQty, x.productId));
+      });
+    }
+    if (Array.isArray(e.lostProducts) && e.lostProducts.length) {
+      e.lostProducts.forEach(function (x) {
+        out.push('«' + (x.productName || x.productId || '') + '»: قبلاً ' + qtyText(x.earlyQty, x.productId) + ' ← اخیراً ۰');
+      });
+    }
+    if (e.currentGap != null && e.typicalCycle != null) out.push('تأخیر فعلی: ' + n0(e.currentGap) + ' روز؛ چرخه معمول: ' + n0(e.typicalCycle) + ' روز');
+    if (e.recentQuantity != null && e.typicalQuantity != null) out.push('مقدار اخیر: ' + qtyText(e.recentQuantity, pid) + '؛ مقدار معمول: ' + qtyText(e.typicalQuantity, pid));
+    if (e.recentFrequency != null && e.expectedFrequency != null) out.push('دفعات اخیر: ' + n0(e.recentFrequency) + '؛ مورد انتظار: ' + n1(e.expectedFrequency));
+    if (e.historicalPresenceRate != null && e.currentBasketPresence != null) out.push('حضور در سبد: ' + pct01(e.historicalPresenceRate) + ' ← ' + pct01(e.currentBasketPresence));
+    if (e.purchaseCount != null) out.push('تعداد خرید ثبت‌شده: ' + n0(e.purchaseCount));
+    if (e.invoiceCount != null) out.push('تعداد فاکتور بررسی‌شده: ' + n0(e.invoiceCount));
+    return out;
+  }
+  function watchDetailLines(o) {
+    if (!o) return [];
+    var e = o.evidence;
+    var lines = [];
+    if (e && Array.isArray(e.components) && e.components.length) {
+      e.components.forEach(function (c) {
+        if (!c || !c.evidence) return;
+        var tag = COMPONENT_LABELS[c.category] || 'مؤلفه';
+        evidenceLines(c.evidence, o.productId).forEach(function (l) { lines.push(tag + ' — ' + l); });
+      });
+    } else {
+      lines = evidenceLines(e, o.productId);
+    }
+    return lines;
+  }
+  function detailsHtml(lines, label) {
+    if (!lines || !lines.length) return '';
+    return '<details class="bp-more"><summary>' + esc(label || 'جزئیات') + '</summary><div class="bp-more-body">' +
+      lines.map(function (l) { return '<div class="bp-more-line">' + esc(l) + '</div>'; }).join('') +
+      '</div></details>';
+  }
+
+  /* ---------- Customer × product context (Pre-Visit / Picker / Invoice row) ---------- */
+  function relDays(iso) {
+    if (!iso || typeof _behaviorDaysDiff !== 'function' || typeof todayISO !== 'function') return '';
+    var d = _behaviorDaysDiff(iso, todayISO());
+    if (d == null || d < 0) return '';
+    if (d === 0) return 'امروز';
+    if (d === 1) return 'دیروز';
+    return n0(d) + ' روز پیش';
+  }
+  function lastOfferMap(cid) {
+    var map = Object.create(null);
+    var c = (data.customers || []).find(function (x) { return x && x.id === cid; });
+    if (!c || !Array.isArray(c.visits)) return map;
+    c.visits.forEach(function (v) {
+      if (!v || !Array.isArray(v.offeredProducts)) return;
+      var key = (v.date || '') + ' ' + (v.time || '');
+      v.offeredProducts.forEach(function (op) {
+        if (!op || !op.productId) return;
+        var cur = map[op.productId];
+        if (!cur || key >= cur.key) {
+          map[op.productId] = { key: key, date: v.date, reaction: op.reaction, reason: op.rejectionReason || null, stockSource: op.stockSource || null };
+        }
+      });
+    });
+    return map;
+  }
+  function lastPurchaseMap(cid, excludeInvoiceId) {
+    var map = Object.create(null);
+    (data.invoices || []).forEach(function (inv) {
+      if (!inv || inv.customerId !== cid) return;
+      if (excludeInvoiceId && inv.id === excludeInvoiceId) return;
+      (inv.items || []).forEach(function (it) {
+        if (!it || !it.productId || !(Number(it.qty) > 0)) return;
+        var d = String(inv.date || '');
+        if (!map[it.productId] || d > map[it.productId]) map[it.productId] = d;
+      });
+    });
+    return map;
+  }
+  /* Returns pid -> up to 2 lines [{t, tone:'warn'|'info'|'muted'}]. Built once per sheet. */
+  function productHints(cid, opts) {
+    opts = opts || {};
+    var offers = {}, buys = {}, watchByPid = Object.create(null), sigByPid = Object.create(null);
+    try { offers = lastOfferMap(cid); } catch (e1) { offers = {}; }
+    try { buys = lastPurchaseMap(cid, opts.excludeInvoiceId); } catch (e2) { buys = {}; }
+    try {
+      var occs = typeof getActiveWatchOccurrences === 'function' ? (getActiveWatchOccurrences(cid) || []) : [];
+      occs.forEach(function (o) {
+        if (!o || !o.productId) return;
+        var cur = watchByPid[o.productId];
+        if (!cur || lvRank(o.level) > lvRank(cur.level)) watchByPid[o.productId] = o;
+      });
+    } catch (e3) { watchByPid = Object.create(null); }
+    /* Confirmed signals that still hold for a specific product even when its Watch is no longer
+       active (e.g. resolved). Only signals whose own productId matches are kept. */
+    try {
+      var sigs = typeof extractCustomerSignals === 'function' ? (extractCustomerSignals(cid) || []) : [];
+      sigs.forEach(function (sg) {
+        if (!sg || sg.status !== 'active' || sg.type !== 'risk') return;
+        if (!sg.productId || sg.productId === 'multi') return;
+        if (!CONFIRMED_PRODUCT_SHORT[sg.category]) return;
+        var cur = sigByPid[sg.productId];
+        if (!cur || lvRank(sg.severity) > lvRank(cur.severity)) sigByPid[sg.productId] = sg;
+      });
+    } catch (e4) { sigByPid = Object.create(null); }
+
+    return function (pid) {
+      var lines = [];
+      var of = offers[pid];
+      if (of) {
+        var when = relDays(of.date);
+        if (of.reaction === 'rejected') {
+          if (of.reason === 'still_stock' && of.stockSource) {
+            lines.push({ t: stockShort(of.stockSource) + (when ? ' · ' + when : ''), tone: 'warn' });
+          } else if (of.reason === 'still_stock') {
+            lines.push({ t: 'بار قبل گفت هنوز موجودی دارد' + (when ? ' · ' + when : ''), tone: 'warn' });
+          } else {
+            var rl = reasonLabel(of.reason);
+            lines.push({ t: 'بار قبل رد کرد' + (rl ? ' — ' + rl : '') + (when ? ' · ' + when : ''), tone: 'warn' });
+          }
+        } else if (of.reaction === 'deferred') {
+          lines.push({ t: 'بار قبل گفت بعداً تصمیم می‌گیرد' + (when ? ' · ' + when : ''), tone: 'info' });
+        }
+      }
+      var w = watchByPid[pid];
+      var sgp = sigByPid[pid];
+      if (w && WATCH_SHORT[w.watchCategory]) lines.push({ t: WATCH_SHORT[w.watchCategory], tone: 'warn' });
+      else if (sgp) lines.push({ t: CONFIRMED_PRODUCT_SHORT[sgp.category], tone: 'warn' });
+      if (buys[pid]) {
+        var r = relDays(buys[pid]);
+        if (r) lines.push({ t: 'آخرین خرید: ' + r, tone: 'muted' });
+      }
+      return lines.slice(0, 2);
+    };
+  }
+  function hintHtml(lines) {
+    return (lines || []).map(function (l) {
+      return '<span class="bp-hint-line is-' + esc(l.tone || 'muted') + '">' + esc(l.t) + '</span>';
+    }).join('');
+  }
+
+  return {
+    fa: fa, n0: n0, n1: n1, lvRank: lvRank, pname: pname, qtyText: qtyText,
+    watchLabel: watchLabel, watchSentence: watchSentence, watchDetailLines: watchDetailLines,
+    detailsHtml: detailsHtml, evidenceLines: evidenceLines, namesText: namesText,
+    stockSentence: stockSentence, stockShort: stockShort, reasonLabel: reasonLabel,
+    relDays: relDays, productHints: productHints, hintHtml: hintHtml
+  };
+})();
+
 function openAddVisit(cid){
   const RESULT_CHIPS = [
     { value: VISIT_RESULTS[0], label: 'سفارش گرفته شد' },
@@ -1447,18 +1608,111 @@ function openAddVisit(cid){
   try {
     if (typeof customerBehavior === 'function') visitBehavior = customerBehavior(cid) || {};
   } catch (eVisitContext) { visitBehavior = {}; }
-  let visitWatchCount = 0;
+  const BP = window.BagheriPresent || null;
+  let visitWatches = [];
+  let visitFollowUps = [];
   try {
-    if (typeof getActiveWatchOccurrences === 'function') {
-      visitWatchCount = (getActiveWatchOccurrences(cid) || []).length;
+    if (typeof getActiveWatchOccurrences === 'function') visitWatches = getActiveWatchOccurrences(cid) || [];
+    if (typeof getPendingWatchFollowUps === 'function') visitFollowUps = getPendingWatchFollowUps(cid) || [];
+  } catch (eVisitWatch) { visitWatches = []; visitFollowUps = []; }
+  let visitStory = '';
+  try {
+    if (typeof buildCustomerStory === 'function') {
+      const st = buildCustomerStory(cid);
+      visitStory = (st && st.summary) ? st.summary : '';
     }
-  } catch (eVisitWatch) { visitWatchCount = 0; }
-  const lastVisitDate = visitBehavior.lastVisit && visitBehavior.lastVisit.date
-    ? faDate(visitBehavior.lastVisit.date)
-    : '—';
-  const lastInvoiceDate = visitBehavior.lastInvoiceDate
-    ? faDate(visitBehavior.lastInvoiceDate)
-    : '—';
+  } catch (eVisitStory) { visitStory = ''; }
+  let visitSignals = [];
+  try {
+    if (typeof extractCustomerSignals === 'function') {
+      visitSignals = (extractCustomerSignals(cid) || []).filter(function (s) { return s && s.status === 'active'; });
+    }
+  } catch (eVisitSig) { visitSignals = []; }
+
+  /* Pre-Visit = "what must I not forget for this customer?" — compact, max 2 points,
+     chosen by existing severity/level only (nothing is recalculated here). */
+  const visitLast = visitBehavior.lastVisit || null;
+  const visitPoints = [];
+  const visitPointProducts = {};
+  function addVisitPoint(text, tone, pid){
+    if (!text || visitPoints.length >= 2) return;
+    visitPoints.push({ text: text, tone: tone });
+    if (pid) visitPointProducts[pid] = true;
+  }
+  const visitMoneySig = visitSignals.find(function (s) { return s.category === 'PAYMENT_OVERDUE' || s.category === 'CHECK_BOUNCED'; });
+  if (visitMoneySig) addVisitPoint(visitMoneySig.reason, 'danger');
+  if (BP && visitLast && Array.isArray(visitLast.offeredProducts)) {
+    const rej = visitLast.offeredProducts.filter(function (op) { return op && op.reaction === 'rejected'; });
+    const pick = rej.find(function (op) { return op.rejectionReason === 'still_stock' && op.stockSource; }) || rej[0];
+    if (pick) {
+      const pn = BP.pname(pick.productId, '');
+      const rl = BP.reasonLabel(pick.rejectionReason);
+      if (pn) {
+        addVisitPoint(
+          (pick.rejectionReason === 'still_stock' && pick.stockSource)
+            ? '«' + pn + '»: ' + BP.stockSentence(pick.stockSource)
+            : '«' + pn + '» را ویزیت قبلی رد کرد' + (rl ? ' (' + rl + ')' : '') + '.',
+          'warn', pick.productId
+        );
+      }
+    }
+  }
+  let visitUsedWatch = false;
+  if (BP && visitWatches.length) {
+    const sortedW = visitWatches.slice().sort(function (a, b) { return BP.lvRank(b.level) - BP.lvRank(a.level); });
+    const w = sortedW.find(function (o) { return !(o.productId && visitPointProducts[o.productId]); });
+    if (w) {
+      visitUsedWatch = true;
+      addVisitPoint((w.productName ? '«' + w.productName + '»: ' : '') + BP.watchSentence(w), 'warn', w.productId);
+    }
+  }
+  if (BP && !visitUsedWatch && !visitStory) {
+    const riskSig = visitSignals
+      .filter(function (s) { return s !== visitMoneySig && s.type === 'risk' && s.reason && !(s.productId && visitPointProducts[s.productId]); })
+      .sort(function (a, b) { return BP.lvRank(b.severity) - BP.lvRank(a.severity); })[0];
+    if (riskSig) addVisitPoint(riskSig.reason, 'warn', riskSig.productId);
+  }
+
+  let visitLastHtml = '';
+  if (visitLast) {
+    const when = BP ? BP.relDays(visitLast.date) : '';
+    visitLastHtml =
+      '<div class="bp-pre-last">' +
+        '<div class="bp-pre-label">آخرین پیگیری' + (when ? ' · ' + esc(when) : '') + '</div>' +
+        (visitLast.result ? '<div class="bp-pre-line">' + esc(visitLast.result) + '</div>' : '') +
+        (visitLast.nextAction ? '<div class="bp-pre-line">اقدام بعدی قبلی: ' + esc(visitLast.nextAction) + '</div>' : '') +
+        (visitLast.note ? '<div class="bp-pre-note">' + esc(visitLast.note) + '</div>' : '') +
+      '</div>';
+  }
+  const followUpReminderHtml = visitFollowUps.length
+    ? '<div class="visit-watch-followups"><div class="bp-pre-label">پیگیری‌های منتظر</div>' +
+      visitFollowUps.slice(0, 2).map(function (o) {
+        const sentence = BP ? BP.watchSentence(o) : (o.generatedReason || '');
+        return '<div class="visit-watch-followup-item">' +
+          '<div class="bp-pre-line"><strong>' + esc(o.productName ? ('«' + o.productName + '»') : 'همان موضوع قبلی') + '</strong>' + (sentence ? ' — ' + esc(sentence) : '') + '</div>' +
+          (o.reason && o.reason.comment ? '<div class="bp-pre-note">' + esc(o.reason.comment) + '</div>' : '') +
+          '</div>';
+      }).join('') +
+      (visitFollowUps.length > 2 ? '<div class="bp-pre-note">و ' + (BP ? BP.n0(visitFollowUps.length - 2) : (visitFollowUps.length - 2)) + ' پیگیری دیگر</div>' : '') +
+      '</div>'
+    : '';
+  const lastInvoiceText = visitBehavior.lastInvoiceDate
+    ? ((BP && BP.relDays(visitBehavior.lastInvoiceDate)) || faDate(visitBehavior.lastInvoiceDate))
+    : '';
+  const visitPreHtml =
+    '<div class="visit-precontext bp-pre">' +
+      '<div class="visit-precontext-title">' + esc(visitCustomer ? visitCustomer.name : 'مشتری') + '</div>' +
+      (visitStory ? '<div class="bp-pre-story">' + esc(visitStory) + '</div>' : '') +
+      visitLastHtml +
+      (visitPoints.length
+        ? '<div class="bp-pre-points">' + visitPoints.map(function (pt) {
+            return '<div class="bp-pre-point is-' + esc(pt.tone) + '">' + esc(pt.text) + '</div>';
+          }).join('') + '</div>'
+        : '') +
+      followUpReminderHtml +
+      (lastInvoiceText ? '<div class="visit-precontext-grid"><span>آخرین خرید: ' + esc(lastInvoiceText) + '</span></div>' : '') +
+    '</div>';
+  const visitHints = BP ? BP.productHints(cid) : null;
 
   function chipBtn(group, value, label){
     return '<button type="button" class="chip-opt" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
@@ -1466,25 +1720,22 @@ function openAddVisit(cid){
 
   openSheet(
     '<h3>ثبت ویزیت</h3>' +
-    '<div class="visit-precontext">' +
-      '<div class="visit-precontext-title">' + esc(visitCustomer ? visitCustomer.name : 'مشتری') + '</div>' +
-      '<div class="visit-precontext-grid">' +
-        '<span>آخرین خرید: ' + esc(lastInvoiceDate) + '</span>' +
-        '<span>آخرین ویزیت: ' + esc(lastVisitDate) + '</span>' +
-        '<span>هشدار فعال: ' + esc(String(visitWatchCount)) + ' مورد</span>' +
-      '</div>' +
-    '</div>' +
+    visitPreHtml +
     '<div style="display:flex;gap:8px;">' +
       '<div class="field" style="flex:1;"><label>تاریخ</label>' + shamsiDateInputHTML('f-date', todayISO()) + '</div>' +
       '<div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
     '</div>' +
     '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
+    '<div class="field bp-next-field" style="margin-top:12px;"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
+      '<select id="f-next-action"><option value="">بدون اقدام</option>' +
+      VISIT_NEXT_ACTIONS.map(function (a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
+      '</select></div>' +
     '<div class="field" style="margin-top:12px;"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
     '<div class="btn-row visit-save-actions" style="margin-top:8px;">' +
       '<button type="button" class="btn" id="save-visit">ثبت و پایان</button>' +
       '<button type="button" class="btn secondary" id="save-visit-invoice">ثبت و ایجاد فاکتور</button>' +
     '</div>'
-  );
+  , {dirtyCheck:true});
 
   const state = {
     result: null,
@@ -1492,8 +1743,19 @@ function openAddVisit(cid){
     pendingProductId: null,
     pendingReaction: null,
     pendingRejectionReason: null,
-    step: 'result', // result | product | reaction | rejectReason | stockSource | another | done
+    nextAction: null, // optional; one of VISIT_NEXT_ACTIONS
+    pendingFrom: 'list', // where the pending product came from: list | add
+    step: 'result', // result | list | add | reaction | rejectReason | stockSource
   };
+  const nextActionEl = document.getElementById('f-next-action');
+  if (nextActionEl) {
+    nextActionEl.addEventListener('change', function () {
+      const v = nextActionEl.value;
+      state.nextAction = (v && VISIT_NEXT_ACTIONS.indexOf(v) >= 0) ? v : null;
+      const sheetEl = nextActionEl.closest('.sheet');
+      if (sheetEl) sheetEl.dataset.dirty = '1';
+    });
+  }
   const stage = document.getElementById('visit-card-stage');
 
   function validOffered(){
@@ -1532,10 +1794,109 @@ function openAddVisit(cid){
     return p ? (p.name || '—') : '—';
   }
 
+  /* ── Customer-relevant product list (read-only, from existing customerBehavior output) ──
+     Sources: topProducts (real purchase history) then offeredProductStats (real offers).
+     Order: purchase-history products first (existing order), then offered products by
+     most recent offer, with earlier "deferred" and offer count as tie-breakers.
+     No catalog filler: products with no purchase/offer history never enter the list. Max 10. */
+  const VISIT_PRODUCT_LIST_MAX = 10;
+  const activeById = {};
+  activeProducts.forEach(function (p) { activeById[p.id] = p; });
+  const offerStatById = {};
+  (Array.isArray(visitBehavior.offeredProductStats) ? visitBehavior.offeredProductStats : []).forEach(function (st) {
+    if (st && st.productId) offerStatById[st.productId] = st;
+  });
+  function buildCustomerProductCandidates(){
+    const out = [];
+    const seen = {};
+    function push(pid, bought){
+      if (!pid || seen[pid] || !activeById[pid] || out.length >= VISIT_PRODUCT_LIST_MAX) return;
+      seen[pid] = true;
+      out.push({ id: pid, bought: !!bought });
+    }
+    (Array.isArray(visitBehavior.topProducts) ? visitBehavior.topProducts : []).forEach(function (tp) {
+      push(tp && tp.productId, true);
+    });
+    Object.keys(offerStatById).map(function (k) { return offerStatById[k]; }).sort(function (a, b) {
+      const da = a.lastOfferedDate || '', db = b.lastOfferedDate || '';
+      if (da !== db) return da < db ? 1 : -1;
+      const dd = (b.deferredCount || 0) - (a.deferredCount || 0);
+      if (dd) return dd;
+      return (b.offeredCount || 0) - (a.offeredCount || 0);
+    }).forEach(function (st) { push(st.productId, false); });
+    return out;
+  }
+  const customerProductCandidates = buildCustomerProductCandidates();
+
+  function optBtn(group, value, label, selected){
+    return '<button type="button" class="chip-opt vp-opt' + (selected ? ' selected' : '') + '" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
+  }
+  function currentOffer(pid){
+    return (state.offeredProducts || []).find(function (op) { return op.productId === pid; }) || null;
+  }
+  function offerSummary(op){
+    if (op.reaction === 'accepted') return { text: 'قبول کرد', tone: 'success' };
+    if (op.reaction === 'deferred') return { text: 'بعداً تصمیم می‌گیرد', tone: 'warning' };
+    const rl = REJECTION_REASON_CHIPS.find(function (c) { return c.value === op.rejectionReason; });
+    let t = 'رد کرد' + (rl ? ' · ' + rl.label : '');
+    if (op.rejectionReason === 'still_stock' && op.stockSource) {
+      const sl = STOCK_SOURCE_CHIPS.find(function (c) { return c.value === op.stockSource; });
+      if (sl) t += ' (' + sl.label + ')';
+    }
+    return { text: t, tone: 'danger' };
+  }
+  // One entry per product: re-answering a product replaces its previous entry.
+  function commitOffer(entry){
+    state.offeredProducts = (state.offeredProducts || []).filter(function (op) { return op.productId !== entry.productId; });
+    state.offeredProducts.push(entry);
+  }
+  function backToList(){
+    state.pendingProductId = null;
+    state.pendingReaction = null;
+    state.pendingRejectionReason = null;
+    state.pendingFrom = 'list';
+    state.step = 'list';
+    renderStage();
+  }
+  function candidateMeta(c){
+    const parts = [];
+    if (c.bought) parts.push('در سابقهٔ خرید');
+    const st = offerStatById[c.id];
+    if (st && st.lastOfferedDate) {
+      parts.push('آخرین پیشنهاد ' + ((BP && BP.relDays(st.lastOfferedDate)) || faDate(st.lastOfferedDate)));
+    }
+    if (st && st.deferredCount > 0) parts.push('قبلاً: بعداً تصمیم می‌گیرد');
+    return parts.join(' · ');
+  }
+  function productRowHtml(pid, meta){
+    const op = currentOffer(pid);
+    const sum = op ? offerSummary(op) : null;
+    return '<div class="vp-row' + (op ? ' is-done' : '') + '">' +
+      '<button type="button" class="vp-row-main" data-vp-open="' + esc(pid) + '">' +
+        '<span class="vp-row-name">' + esc(productLabel(pid)) + '</span>' +
+        (sum
+          ? '<span class="vp-status is-' + sum.tone + '">' + esc(sum.text) + '</span>'
+          : (meta ? '<span class="vp-row-meta">' + esc(meta) + '</span>' : '')) +
+      '</button>' +
+      (op ? '<button type="button" class="vp-row-del" data-vp-del="' + esc(pid) + '" aria-label="حذف ' + esc(productLabel(pid)) + '">حذف</button>' : '') +
+    '</div>';
+  }
+  function footerBack(target){
+    return '<div class="vp-footer"><button type="button" class="vp-back visit-stage-back" data-back-step="' + esc(target) + '">بازگشت</button></div>';
+  }
+  function shownProductIds(){
+    const shown = {};
+    customerProductCandidates.forEach(function (c) { shown[c.id] = true; });
+    (state.offeredProducts || []).forEach(function (op) { shown[op.productId] = true; });
+    return shown;
+  }
+
   function renderStage(){
     if (!stage) return;
     let html = '';
     const step = state.step;
+    const pname = esc(productLabel(state.pendingProductId));
+    const cur = state.pendingProductId ? currentOffer(state.pendingProductId) : null;
 
     if (step === 'result') {
       html =
@@ -1545,62 +1906,74 @@ function openAddVisit(cid){
             return chipBtn('result', o.value, o.label);
           }).join('') + '</div>' +
         '</div>';
-    } else if (step === 'product') {
-      const chosen = {};
-      (state.offeredProducts || []).forEach(function (op) { chosen[op.productId] = true; });
-      const avail = activeProducts.filter(function (p) { return !chosen[p.id]; });
+    } else if (step === 'list') {
+      const candIds = {};
+      customerProductCandidates.forEach(function (c) { candIds[c.id] = true; });
+      const extras = (state.offeredProducts || []).filter(function (op) { return !candIds[op.productId]; });
+      const n = (state.offeredProducts || []).length;
       html =
-        '<div class="visit-card visit-card-enter" data-visit-step="product">' +
-          '<div class="q-title">چه محصولی پیشنهاد/بررسی شد؟</div>' +
+        '<div class="visit-card visit-card-enter" data-visit-step="list">' +
+          '<div class="vp-head">' +
+            '<div class="q-title">محصولات این مشتری</div>' +
+            '<div class="vp-sub">مواردی که احتمالاً در این ویزیت ارزش بررسی دارند</div>' +
+          '</div>' +
+          ((customerProductCandidates.length || extras.length)
+            ? '<div class="vp-rows">' +
+                customerProductCandidates.map(function (c) { return productRowHtml(c.id, candidateMeta(c)); }).join('') +
+                extras.map(function (op) { return productRowHtml(op.productId, ''); }).join('') +
+              '</div>'
+            : '<div class="vp-empty">برای این مشتری هنوز سابقهٔ خرید یا پیشنهاد ثبت نشده است.</div>') +
+          (n ? '<div class="vp-count">' + n + ' محصول در این ویزیت ثبت شده</div>' : '') +
+          '<button type="button" class="vp-add" data-vp-add><span class="vp-add-plus" aria-hidden="true">＋</span><span>افزودن محصول</span></button>' +
+          footerBack('result') +
+        '</div>';
+    } else if (step === 'add') {
+      const shown = shownProductIds();
+      const avail = activeProducts.filter(function (p) { return !shown[p.id]; });
+      html =
+        '<div class="visit-card visit-card-enter" data-visit-step="add">' +
+          '<div class="vp-head">' +
+            '<div class="q-title">افزودن محصول</div>' +
+            '<div class="vp-sub">سایر محصولات فعال کاتالوگ</div>' +
+          '</div>' +
           (avail.length
-            ? '<div class="visit-product-grid chip-wrap">' + avail.map(function (p) {
-                return chipBtn('product', p.id, p.name || '—');
+            ? '<div class="vp-rows">' + avail.map(function (p) {
+                return '<div class="vp-row"><button type="button" class="vp-row-main" data-vp-pick="' + esc(p.id) + '">' +
+                  '<span class="vp-row-name">' + esc(p.name || '—') + '</span></button></div>';
               }).join('') + '</div>'
-            : '<div class="empty" style="padding:12px 0;">همه محصولات فعال قبلاً ثبت شدند یا کالایی نیست.</div>') +
+            : '<div class="vp-empty">محصول دیگری برای افزودن نیست.</div>') +
+          footerBack('list') +
         '</div>';
     } else if (step === 'reaction') {
       html =
         '<div class="visit-card visit-card-enter" data-visit-step="reaction">' +
-          '<div class="q-title">واکنش مشتری؟ <span class="sub" style="display:inline;font-weight:400;">(' + esc(productLabel(state.pendingProductId)) + ')</span></div>' +
-          '<div class="chip-wrap">' + REACTION_CHIPS.map(function (o) {
-            return chipBtn('reaction', o.value, o.label);
+          '<div class="q-title">واکنش مشتری؟ <span class="sub" style="display:inline;font-weight:400;">(' + pname + ')</span></div>' +
+          (function () {
+            const hl = visitHints ? visitHints(state.pendingProductId) : [];
+            return hl.length ? '<div class="bp-hint">' + BP.hintHtml(hl) + '</div>' : '';
+          })() +
+          '<div class="vp-opts">' + REACTION_CHIPS.map(function (o) {
+            return optBtn('reaction', o.value, o.label, cur && cur.reaction === o.value);
           }).join('') + '</div>' +
+          footerBack(state.pendingFrom === 'add' ? 'add' : 'list') +
         '</div>';
     } else if (step === 'rejectReason') {
       html =
         '<div class="visit-card visit-card-enter" data-visit-step="rejectReason">' +
-          '<div class="q-title">چرا نخرید؟ <span class="sub" style="display:inline;font-weight:400;">(' + esc(productLabel(state.pendingProductId)) + ')</span></div>' +
-          '<div class="chip-wrap">' + REJECTION_REASON_CHIPS.map(function (o) {
-            return chipBtn('rejectReason', o.value, o.label);
+          '<div class="q-title">چرا نخرید؟ <span class="sub" style="display:inline;font-weight:400;">(' + pname + ')</span></div>' +
+          '<div class="vp-opts is-2col">' + REJECTION_REASON_CHIPS.map(function (o) {
+            return optBtn('rejectReason', o.value, o.label, cur && cur.reaction === 'rejected' && cur.rejectionReason === o.value);
           }).join('') + '</div>' +
+          footerBack('reaction') +
         '</div>';
     } else if (step === 'stockSource') {
       html =
         '<div class="visit-card visit-card-enter" data-visit-step="stockSource">' +
-          '<div class="q-title">این موجودی از کجا بود؟ <span class="sub" style="display:inline;font-weight:400;">(' + esc(productLabel(state.pendingProductId)) + ')</span></div>' +
-          '<div class="chip-wrap">' + STOCK_SOURCE_CHIPS.map(function (o) {
-            return chipBtn('stockSource', o.value, o.label);
+          '<div class="q-title">این موجودی از کجا بود؟ <span class="sub" style="display:inline;font-weight:400;">(' + pname + ')</span></div>' +
+          '<div class="vp-opts">' + STOCK_SOURCE_CHIPS.map(function (o) {
+            return optBtn('stockSource', o.value, o.label, cur && cur.rejectionReason === 'still_stock' && cur.stockSource === o.value);
           }).join('') + '</div>' +
-        '</div>';
-    } else if (step === 'another') {
-      html =
-        '<div class="visit-card visit-card-enter" data-visit-step="another">' +
-          '<div class="q-title">محصول دیگری هم مطرح شد؟</div>' +
-          '<div class="chip-wrap">' +
-            chipBtn('another', 'yes', 'بله') +
-            chipBtn('another', 'no', 'خیر') +
-          '</div>' +
-        '</div>';
-    } else if (step === 'done') {
-      const n = validOffered().length;
-      html =
-        '<div class="visit-card visit-card-enter" data-visit-step="done">' +
-          '<div class="q-title">آماده ثبت</div>' +
-          '<div class="empty" style="padding:8px 0;text-align:right;">' +
-            (state.result ? ('نتیجه: ' + esc(state.result) + '<br>') : '') +
-            (n ? (n + ' محصول با واکنش کامل ثبت می‌شود.') : 'بدون محصول پیشنهادی (اختیاری).') +
-            '<br>برای ذخیره روی «ثبت و پایان» بزنید.' +
-          '</div>' +
+          footerBack('rejectReason') +
         '</div>';
     }
 
@@ -1608,10 +1981,59 @@ function openAddVisit(cid){
     bindStageChips();
   }
 
+  function markDirty(el){
+    const sheetEl = el && el.closest ? el.closest('.sheet') : null;
+    if (sheetEl) sheetEl.dataset.dirty = '1';
+  }
+
   function bindStageChips(){
     if (!stage) return;
+    stage.querySelectorAll('.visit-stage-back').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const next = btn.getAttribute('data-back-step');
+        if (next) { state.step = next; renderStage(); }
+      });
+    });
+    stage.querySelectorAll('[data-vp-open]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        markDirty(btn);
+        state.pendingProductId = btn.getAttribute('data-vp-open');
+        state.pendingReaction = null;
+        state.pendingRejectionReason = null;
+        state.pendingFrom = 'list';
+        state.step = 'reaction';
+        renderStage();
+      });
+    });
+    stage.querySelectorAll('[data-vp-pick]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        markDirty(btn);
+        state.pendingProductId = btn.getAttribute('data-vp-pick');
+        state.pendingReaction = null;
+        state.pendingRejectionReason = null;
+        state.pendingFrom = 'add';
+        state.step = 'reaction';
+        renderStage();
+      });
+    });
+    stage.querySelectorAll('[data-vp-del]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        markDirty(btn);
+        const pid = btn.getAttribute('data-vp-del');
+        state.offeredProducts = (state.offeredProducts || []).filter(function (op) { return op.productId !== pid; });
+        renderStage();
+      });
+    });
+    const addBtn = stage.querySelector('[data-vp-add]');
+    if (addBtn) {
+      addBtn.addEventListener('click', function () {
+        state.step = 'add';
+        renderStage();
+      });
+    }
     stage.querySelectorAll('.chip-opt').forEach(function (btn) {
       btn.addEventListener('click', function () {
+        markDirty(btn);
         const group = btn.getAttribute('data-vgroup');
         const value = btn.getAttribute('data-value');
         if (!group || value == null) return;
@@ -1620,14 +2042,7 @@ function openAddVisit(cid){
           state.result = value;
           state.pendingProductId = null;
           state.pendingReaction = null;
-          state.step = 'product';
-          renderStage();
-          return;
-        }
-        if (group === 'product') {
-          state.pendingProductId = value;
-          state.pendingReaction = null;
-          state.step = 'reaction';
+          state.step = 'list';
           renderStage();
           return;
         }
@@ -1640,16 +2055,12 @@ function openAddVisit(cid){
             return;
           }
           if (state.pendingProductId && (value === 'accepted' || value === 'deferred')) {
-            state.offeredProducts.push({
+            commitOffer({
               productId: state.pendingProductId,
               reaction: value,
             });
           }
-          state.pendingProductId = null;
-          state.pendingReaction = null;
-          state.pendingRejectionReason = null;
-          state.step = 'another';
-          renderStage();
+          backToList();
           return;
         }
         if (group === 'rejectReason') {
@@ -1661,17 +2072,13 @@ function openAddVisit(cid){
           }
           if (state.pendingProductId && state.pendingReaction === 'rejected' && value) {
             // Non-still_stock reasons: never attach stockSource
-            state.offeredProducts.push({
+            commitOffer({
               productId: state.pendingProductId,
               reaction: 'rejected',
               rejectionReason: value,
             });
           }
-          state.pendingProductId = null;
-          state.pendingReaction = null;
-          state.pendingRejectionReason = null;
-          state.step = 'another';
-          renderStage();
+          backToList();
           return;
         }
         if (group === 'stockSource') {
@@ -1681,32 +2088,14 @@ function openAddVisit(cid){
             state.pendingRejectionReason === 'still_stock' &&
             (value === 'ours' || value === 'competitor' || value === 'unknown')
           ) {
-            state.offeredProducts.push({
+            commitOffer({
               productId: state.pendingProductId,
               reaction: 'rejected',
               rejectionReason: 'still_stock',
               stockSource: value,
             });
           }
-          state.pendingProductId = null;
-          state.pendingReaction = null;
-          state.pendingRejectionReason = null;
-          state.step = 'another';
-          renderStage();
-          return;
-        }
-        if (group === 'another') {
-          if (value === 'yes') {
-            state.pendingProductId = null;
-            state.pendingReaction = null;
-            state.pendingRejectionReason = null;
-            state.step = 'product';
-            renderStage();
-            return;
-          }
-          state.step = 'done';
-          renderStage();
-          persistVisit(true);
+          backToList();
           return;
         }
       });
@@ -1740,6 +2129,7 @@ function openAddVisit(cid){
       ordered: state.result === VISIT_RESULTS[0],
     };
     if (note) visit.note = note;
+    if (state.nextAction && VISIT_NEXT_ACTIONS.indexOf(state.nextAction) >= 0) visit.nextAction = state.nextAction;
     if (offered.length) visit.offeredProducts = offered;
 
     c.visits = c.visits || [];
@@ -1750,6 +2140,9 @@ function openAddVisit(cid){
       console.error(e);
       showToast('ذخیره نشد');
       return false;
+    }
+    if (typeof recordVisitActionAcks === 'function') {
+      try { recordVisitActionAcks(cid, visit); } catch (eAckVisit) { console.warn('Action ack failed:', eAckVisit); }
     }
     if (typeof gameOnCustomerVisit === 'function') {
       try {
@@ -1763,7 +2156,7 @@ function openAddVisit(cid){
     if (typeof ViewHost !== 'undefined' && ViewHost.refreshCurrent) ViewHost.refreshCurrent();
     else if (typeof render === 'function') render();
     showToast('ویزیت ثبت شد');
-    return true;
+    return visit;
   }
 
   document.getElementById('save-visit').addEventListener('click', function (e) {
@@ -1776,7 +2169,7 @@ function openAddVisit(cid){
     withSubmitGuard(e.currentTarget, async function () {
       const saved = await persistVisit(false);
       if (saved && typeof openAddInvoice === 'function') {
-        openAddInvoice(cid);
+        openAddInvoice(cid, {visitId: saved.id});
       }
     });
   });
@@ -1785,131 +2178,7 @@ function openAddVisit(cid){
 }
 
 function openCustomerDetail(cid){
-  if (typeof isSpaShell === 'function' && isSpaShell() && typeof AppRouter !== 'undefined' && AppRouter.navigate) {
-    AppRouter.navigate('/customer', { id: cid });
-    return;
-  }
-  const c = data.customers.find(x=>x.id===cid);
-  if(!c) return;
-  const t = customerTotals(cid);
-  const st = customerStats(cid);
-  const invs = customerInvoices(cid).sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const pays = customerPayments(cid).sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const checks = customerChecks(cid).sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate));
-  const visits = (c.visits||[]).slice().sort((a,b)=> new Date(b.date+'T'+(b.time||'00:00')) - new Date(a.date+'T'+(a.time||'00:00')));
-
-  openSheet(`
-    <h3>${esc(c.name)}${c.region?` <span class="sub" style="display:inline;">— ${esc(c.region)}${c.route?' / '+esc(c.route):''}</span>`:''}${c.active===false?' <span class="badge pending">غیرفعال</span>':''}</h3>
-    ${c.ownerName?`<div class="empty" style="padding:0 0 4px;text-align:right;">صاحب فروشگاه: ${esc(c.ownerName)}</div>`:''}
-    ${c.phone?`<div class="empty" style="padding:0 0 4px;text-align:right;">تلفن: ${esc(c.phone)}</div>`:''}
-    ${c.note?`<div class="empty" style="padding:0 0 8px;text-align:right;">یادداشت: ${esc(c.note)}</div>`:''}
-    ${c.openingBalance?`<div class="empty" style="padding:0 0 8px;text-align:right;">مانده حساب اولیه (قبل از این برنامه): ${toman(Math.abs(c.openingBalance))} ت ${c.openingBalance>0?'بدهکار':'طلبکار'}</div>`:''}
-    <div class="cards">
-      <div class="card"><div class="label">تعداد فاکتور</div><div class="value">${st.count}</div></div>
-      <div class="card"><div class="label">میانگین هر فاکتور</div><div class="value">${toman(st.avgInvoice)} ت</div></div>
-      <div class="card"><div class="label">جمع خرید (فاکتورها)</div><div class="value">${toman(t.invTotal)} ت</div></div>
-      <div class="card"><div class="label">جمع پرداختی (نقد/کارت/انتقال)</div><div class="value">${toman(t.cashOnlyTotal)} ت</div></div>
-      <div class="card"><div class="label">جمع چک‌ها</div><div class="value">${toman(t.checkTotal)} ت</div></div>
-      <div class="card"><div class="label">سود این مشتری</div><div class="value accent-olive">${toman(st.profit)} ت</div></div>
-      <div class="card"><div class="label">اولین خرید</div><div class="value" style="font-size:1rem;">${st.firstInvoiceDate?faDate(st.firstInvoiceDate):'—'}</div></div>
-      <div class="card"><div class="label">آخرین خرید</div><div class="value" style="font-size:1rem;">${st.lastInvoiceDate?faDate(st.lastInvoiceDate):'—'}</div></div>
-      <div class="card wide"><div class="label">مانده حساب</div><div class="value" style="color:${t.balance>0?'var(--rust)':'var(--olive-dark)'}">${toman(Math.abs(t.balance))} ت ${balanceStatusWord(t.balance)}</div></div>
-    </div>
-    <div class="btn-row">
-      <button class="btn" id="add-invoice">+ فاکتور جدید</button>
-      <button class="btn secondary" id="add-tx">+ ثبت تراکنش</button>
-      <button class="btn secondary" id="add-check">+ ثبت چک</button>
-      <button class="btn secondary" id="add-visit">+ ثبت ویزیت</button>
-      <button class="btn secondary" id="print-statement">چاپ صورتحساب</button>
-      <button class="btn secondary" id="edit-customer">ویرایش مشتری</button>
-      <button class="btn secondary" id="toggle-customer-active">${c.active===false?'فعال‌سازی مشتری':'غیرفعال‌سازی مشتری'}</button>
-    </div>
-
-    <h2 class="section-title">فاکتورها</h2>
-    ${invs.length===0?`<div class="empty">فاکتوری ثبت نشده</div>`:invs.map(i=>`
-      <div class="ledger-row" data-open-invoice="${esc(i.id)}">
-        <span class="name">#${i.number||'—'} — ${faDate(i.date)}</span>
-        <span class="filler"></span>
-        <span class="amount">${toman(i.total)} ت</span>
-      </div>
-    `).join('')}
-
-    <h2 class="section-title">تراکنش‌ها</h2>
-    ${pays.length===0?`<div class="empty">تراکنشی ثبت نشده</div>`:pays.map(p=>{
-      const standalone = !p.invoiceId && p.method!=='return' && ['cash','card','transfer','discount'].includes(p.method);
-      return `<div class="ledger-row"><span class="name">${paymentMethodLabel(p.method)}${p.note?` <span class="sub" style="display:inline;">(${esc(p.note)})</span>`:''}</span><span class="filler"></span><span class="amount">${faDate(p.date)} — ${toman(p.amount)} ت${standalone?`<br><button class="btn secondary small" data-edit-standalone-payment="${esc(p.id)}">ویرایش</button><button class="btn danger small" data-delete-standalone-payment="${esc(p.id)}">حذف</button>`:''}</span></div>`;
-    }).join('')}
-
-    <h2 class="section-title">چک‌ها</h2>
-    ${checks.length===0?`<div class="empty">چکی ثبت نشده</div>`:checks.map(c2=>`
-      <div class="ledger-row" data-toggle-check="${esc(c2.id)}">
-        <span class="name">سررسید ${faDate(c2.dueDate)} ${c2.checkNumber?`<span class="sub">شماره: ${esc(c2.checkNumber)}</span>`:''}</span>
-        <span class="filler"></span>
-        <span class="amount">${toman(c2.amount)} ت <span class="badge ${c2.status==='cleared'?'cleared':'pending'}">${c2.status==='cleared'?'وصول شده':'در جریان'}</span></span>
-      </div>
-    `).join('')}
-
-    <h2 class="section-title">ویزیت‌ها</h2>
-    ${visits.length===0?`<div class="empty">ویزیتی ثبت نشده</div>`:visits.map(v=>`
-      <div class="ledger-row"><span class="name">${faDate(v.date)} ${v.time||''}</span><span class="filler"></span>
-      <span class="amount" style="font-size:.78rem;">${esc(v.result)}</span></div>
-    `).join('')}
-  `);
-
-  document.getElementById('add-invoice').addEventListener('click', ()=>openAddInvoice(cid));
-  document.getElementById('add-tx').addEventListener('click', ()=>openAddTransaction(cid));
-  document.getElementById('add-check').addEventListener('click', ()=>openAddCheck(cid));
-  document.getElementById('add-visit').addEventListener('click', ()=>openAddVisit(cid));
-  document.getElementById('print-statement').addEventListener('click', ()=>printCustomerStatement(cid));
-  document.getElementById('edit-customer').addEventListener('click', ()=>openAddCustomer(cid));
-  document.getElementById('toggle-customer-active').addEventListener('click', async (e)=>{
-    await withSubmitGuard(e.currentTarget, async ()=>{
-      c.active = (c.active===false) ? true : false;
-      await saveData(); openCustomerDetail(cid); render();
-      showToast(c.active===false ? 'مشتری غیرفعال شد' : 'مشتری فعال شد');
-    });
-  });
-  document.querySelectorAll('[data-open-invoice]').forEach(row=>{
-    row.addEventListener('click', ()=>openInvoiceDetail(row.dataset.openInvoice, cid));
-  });
-  document.querySelectorAll('[data-edit-standalone-payment]').forEach(btn=>{
-    btn.addEventListener('click', ()=>openEditStandalonePayment(cid, btn.dataset.editStandalonePayment));
-  });
-  document.querySelectorAll('[data-delete-standalone-payment]').forEach(btn=>{
-    btn.addEventListener('click', async e=>{
-      await withSubmitGuard(e.currentTarget, async()=>{
-        const p=data.payments.find(x=>x.id===btn.dataset.deleteStandalonePayment && x.customerId===cid);
-        if(!p || p.invoiceId || p.method==='return') return;
-        if(!(await appConfirm('این دریافت از حساب مشتری حذف شود؟'))) throw new Error('validation');
-        const previousData=JSON.parse(JSON.stringify(data));
-        try{ data.payments=data.payments.filter(x=>x.id!==p.id); await saveData(); }catch(err){ restoreDataInPlace(previousData); throw err; }
-        if (typeof gameOnPaymentDeleted === 'function') {
-          try {
-            await gameOnPaymentDeleted(p.id);
-          } catch (e) {
-            console.warn('Game hook failed:', e);
-          }
-        }
-        closeModal();
-      openCustomerDetail(cid); render(); showToast('دریافت حذف شد');
-      });
-    });
-  });
-  document.querySelectorAll('[data-toggle-check]').forEach(row=>{
-    row.addEventListener('click', async ()=>{
-      const chk = data.checks.find(x=>x.id===row.dataset.toggleCheck);
-      if(!chk) return;
-      if(!(await appConfirm(chk.status === 'cleared' ? 'وضعیت این چک به «در جریان» برگردد؟' : 'این چک به‌عنوان «وصول‌شده» ثبت شود؟'))) return;
-      const prev = chk.status;
-      try{
-        chk.status = chk.status==='cleared' ? 'pending' : 'cleared';
-        await saveData(); openCustomerDetail(cid); render();
-      }catch(err){
-        chk.status = prev;
-        throw err;
-      }
-    });
-  });
+  AppRouter.navigate('/customer', { id: cid });
 }
 
 /* Invoice-linked payment/check persistence helpers.
@@ -1959,92 +2228,11 @@ function revertInvoicePayments(inv){
 }
 
 function openInvoiceDetail(invId, cid){
-  if (typeof isSpaShell === 'function' && isSpaShell() && typeof AppRouter !== 'undefined' && AppRouter.navigate) {
-    AppRouter.navigate('/invoice', { id: invId });
-    return;
-  }
-  const inv = data.invoices.find(x=>x.id===invId);
-  if(!inv) return;
-  const cust = data.customers.find(x=>x.id===cid);
-  const hasSnapshot = typeof inv.prevBalance === 'number';
-  openSheet(`
-    <h3>فاکتور #${inv.number||'—'}</h3>
-    <div class="empty" style="padding:0 0 10px;text-align:right;">
-      مشتری: ${esc(cust?cust.name:'—')} &nbsp;|&nbsp; تاریخ: ${faDate(inv.date)}
-    </div>
-    <table>
-      <tr><th>ردیف</th><th>کالا</th><th>تعداد</th><th>قیمت واحد</th><th>جمع</th></tr>
-      ${inv.items.map((it,idx)=>`
-        <tr>
-          <td>${idx+1}</td><td>${esc(it.name)}</td><td>${it.qty}</td>
-          <td>${toman(it.price)} ت</td>
-          <td>${toman(it.qty*it.price-(it.discount||0))} ت</td>
-        </tr>
-      `).join('')}
-    </table>
-    <div class="ledger-row" style="margin-top:10px;"><span class="name">جمع فاکتور</span><span class="filler"></span><span class="amount">${toman(inv.total)} ت</span></div>
-    ${hasSnapshot ? `
-      <div class="ledger-row"><span class="name">مانده قبلی مشتری</span><span class="filler"></span><span class="amount">${toman(inv.prevBalance)} ت</span></div>
-      <div class="ledger-row"><span class="name">دریافت نقد این فاکتور</span><span class="filler"></span><span class="amount">${toman(inv.cashPaid||0)} ت</span></div>
-      <div class="ledger-row"><span class="name">دریافت کارت این فاکتور</span><span class="filler"></span><span class="amount">${toman(inv.cardPaid||0)} ت</span></div>
-      <div class="ledger-row"><span class="name">دریافت انتقال این فاکتور</span><span class="filler"></span><span class="amount">${toman(inv.transferPaid||0)} ت</span></div>
-      <div class="ledger-row"><span class="name">دریافت چک این فاکتور</span><span class="filler"></span><span class="amount">${toman(inv.checkPaid||0)} ت</span></div>
-      <div class="ledger-row"><span class="name" style="color:${inv.newBalance>0?'var(--rust)':'var(--olive-dark)'}">مانده بعد از این فاکتور</span><span class="filler"></span><span class="amount" style="color:${inv.newBalance>0?'var(--rust)':'var(--olive-dark)'}">${toman(Math.abs(inv.newBalance))} ت ${balanceStatusWord(inv.newBalance)}</span></div>
-    ` : `<div class="empty" style="font-size:.75rem;">این فاکتور قبل از فعال شدن محاسبهٔ خودکار مانده ثبت شده.</div>`}
-    <div class="btn-row">
-      <button class="btn" id="print-inv-detail">چاپ فاکتور</button>
-      <button class="btn secondary" id="image-inv-detail">خروجی تصویر (واتساپ)</button>
-      <button class="btn secondary" id="edit-invoice">ویرایش فاکتور</button>
-      <button class="btn danger" id="del-invoice">حذف فاکتور</button>
-    </div>
-    ${(inv.editHistory && inv.editHistory.length) ? `
-      <h2 class="section-title">تاریخچه ویرایش</h2>
-      ${inv.editHistory.slice().reverse().map(h=>`
-        <div class="ledger-row" style="display:block;">
-          <span class="sub" style="display:block;margin-bottom:4px;">${faDate(h.editedAt.slice(0,10))} ${h.editedAt.slice(11,16)}</span>
-          <span class="name" style="font-weight:400;">جمع قبل: ${toman(h.before.total)} ت ← جمع بعد: ${toman(h.after.total)} ت</span>
-        </div>
-      `).join('')}
-    ` : ''}
-  `);
-  document.getElementById('print-inv-detail').addEventListener('click', ()=>printInvoice(inv.id));
-  document.getElementById('image-inv-detail').addEventListener('click', ()=>exportInvoiceImage(inv.id));
-  document.getElementById('edit-invoice').addEventListener('click', ()=>openEditInvoice(inv.id, cid));
-  document.getElementById('del-invoice').addEventListener('click', async (e)=>{
-    await withSubmitGuard(e.currentTarget, async ()=>{
-      if(invoiceHasLinkedStockReturn(inv.id)){
-        showToast('این فاکتور دارای برگشت از فروش است و برای حفظ یکپارچگی موجودی قابل حذف نیست');
-        throw new Error('validation');
-      }
-      if(!(await appConfirm('با حذف این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟'))) throw new Error('validation');
-      // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور —
-      // تا اگر saveData() شکست بخورد، data در حافظه دقیقاً به حالت قبل از
-      // حذف برگردد و با آخرین نسخه‌ی موفق در IndexedDB ناهماهنگ نماند.
-      const previousData = JSON.parse(JSON.stringify(data));
-      revertInvoiceStockEffects(inv);
-      revertInvoicePayments(inv);
-      data.invoices = data.invoices.filter(x=>x.id!==invId);
-      try{
-        await saveData();
-      }catch(saveErr){
-        restoreDataInPlace(previousData);
-        throw saveErr;
-      }
-      // Game Center: reverse invoice XP if previously claimed (never affects CRM)
-      if (typeof gameOnInvoiceDeleted === 'function') {
-        try {
-          await gameOnInvoiceDeleted(invId);
-        } catch (e) {
-          console.warn('Game hook failed:', e);
-        }
-      }
-      openCustomerDetail(cid); render(); showToast('فاکتور حذف شد؛ موجودی و حساب مشتری اصلاح شد');
-    });
-  });
+  AppRouter.navigate('/invoice', { id: invId });
 }
 
-function openAddInvoice(cid){
-  openInvoiceForm(cid, null);
+function openAddInvoice(cid, opts){
+  openInvoiceForm(cid, null, opts);
 }
 
 function openEditInvoice(invId, cid){
@@ -2057,30 +2245,93 @@ function openEditInvoice(invId, cid){
   openInvoiceForm(cid, inv);
 }
 
-function openInvoiceForm(cid, editInv){
+function openInvoiceForm(cid, editInv, opts){
   if(data.products.length===0){
     openSheet(`<h3>اول جنس اضافه کن</h3><div class="empty">برای ${editInv?'ویرایش':'ثبت'} فاکتور، حداقل یک جنس باید تو تب «اجناس و انبار» ثبت شده باشه.</div>`);
     return;
   }
+  // One invoice form is one execution boundary. These disposable indexes
+  // avoid repeated product/history scans without changing accounting rules.
+  const invoiceCtx = typeof createComputationContext === 'function'
+    ? createComputationContext({ data: data })
+    : null;
+  const productCache = Object.create(null);
+  const fifoCostCache = Object.create(null);
+  const lastSaleCustomerCache = Object.create(null);
+  const lastSaleAnyCache = Object.create(null);
+  let invoiceMetricsCache = null;
+  function invalidateInvoiceMetrics(){ invoiceMetricsCache = null; }
+  function invoiceProduct(productId){
+    if(!productId) return null;
+    if(Object.prototype.hasOwnProperty.call(productCache, productId)) return productCache[productId];
+    const prod = invoiceCtx && typeof invoiceCtx.productById === 'function'
+      ? invoiceCtx.productById(productId)
+      : data.products.find(p=>p.id===productId);
+    productCache[productId] = prod || null;
+    return productCache[productId];
+  }
+  function invoiceFifoCost(productId){
+    if(!Object.prototype.hasOwnProperty.call(fifoCostCache, productId)){
+      fifoCostCache[productId] = productFifoUnitCost(productId);
+    }
+    return fifoCostCache[productId];
+  }
+  // Visit → invoice ("ثبت و ایجاد فاکتور"): every product the customer ACCEPTED in that visit
+  // starts as its own invoice line, exactly like picking it by hand (same default price rule
+  // as selectProduct: retail||sell, qty 1, no discount, no buyPrice). Read-only on the visit;
+  // inactive/missing products and duplicates are skipped. Nothing accepted => the usual blank line.
+  function visitAcceptedRows(visitId){
+    const vc = data.customers.find(c=>c.id===cid);
+    const visit = vc && Array.isArray(vc.visits) ? vc.visits.find(v=>v && v.id===visitId) : null;
+    if(!visit || !Array.isArray(visit.offeredProducts)) return [];
+    const seen = Object.create(null);
+    const out = [];
+    visit.offeredProducts.forEach(op=>{
+      if(!op || op.reaction!=='accepted' || !op.productId || seen[op.productId]) return;
+      const prod = invoiceProduct(op.productId);
+      if(!prod || prod.active===false) return;
+      seen[op.productId] = true;
+      out.push({productId:op.productId, qty:1, price:prod.retail||prod.sell||0, discount:0});
+    });
+    return out;
+  }
+  const visitRows = (!editInv && opts && opts.visitId) ? visitAcceptedRows(opts.visitId) : [];
   let rows = editInv
     ? editInv.items.map(it=>({productId:it.productId, qty:it.qty, price:it.price, discount:it.discount||0, buyPrice:it.buyPrice}))
-    : [{productId:'', qty:1, price:0, discount:0}];
-  // Invoice V6 line editor: one row at a time is expanded. New invoices
-  // start with the required empty line open; existing invoices start compact.
-  let editingRowIndex = (!editInv && rows.length === 1 && !rows[0].productId) ? 0 : null;
-  let editingRowSnapshot = null;
-  let flashRowIndex = null;
+    : (visitRows.length ? visitRows : [{productId:'', qty:1, price:0, discount:0}]);
   const cust = data.customers.find(c=>c.id===cid); // presentation only: Customer Context header
+  // Presentation only: one-time per-sheet context map (last offer/reject, stock source,
+  // relevant active watch, last purchase). Reads existing facts; never writes or recalculates.
+  let productHintFn = null;
+  function productHint(productId){
+    if(!productHintFn){
+      try{
+        productHintFn = window.BagheriPresent
+          ? window.BagheriPresent.productHints(cid, {excludeInvoiceId: editInv ? editInv.id : null})
+          : function(){ return []; };
+      }catch(eHint){ productHintFn = function(){ return []; }; }
+    }
+    try{ return productHintFn(productId) || []; }catch(eHint2){ return []; }
+  }
+  function productIntelLine(productId){
+    const l = productHint(productId).filter(h=>h.tone!=='muted')[0];
+    return l ? l.t : '';
+  }
   const existingCheck = editInv ? data.checks.find(c=>c.invoiceId===editInv.id) : null;
   let cashPaid = editInv ? (editInv.cashPaid||0) : 0;
   let cardPaid = editInv ? (editInv.cardPaid||0) : 0;
   let transferPaid = editInv ? (editInv.transferPaid||0) : 0;
   let checkAmount = editInv ? (editInv.checkPaid||0) : 0;
   let checkDue = existingCheck ? existingCheck.dueDate : todayISO();
-  // Invoice date is form state: renderSheet() may rebuild the DOM many times,
-  // so the user's selected date must survive those re-renders.
-  let currentDate = editInv ? (editInv.date || todayISO()) : todayISO();
-  const invoiceInitialDate = currentDate;
+  const pendingPayment = { cash: cashPaid, card: cardPaid, transfer: transferPaid, check: checkAmount, checkDue };
+  // Display-only digit grouping for the payment amount inputs (same fa-IR grouping as toman()).
+  // Raw numbers stay in cashPaid/cardPaid/... / pendingPayment; faToEnDigits() strips the separators on read.
+  function payInputText(v){
+    v = Number(v) || 0;
+    if(!v) return '';
+    return Number.isInteger(v) ? toman(v) : v.toLocaleString('fa-IR', { maximumFractionDigits: 6 });
+  }
+  opts = opts || {};
   let discount = editInv ? (editInv.discount||0) : 0;
   let discountType = (editInv && editInv.discountType==='percent') ? 'percent' : 'fixed';
   if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
@@ -2088,116 +2339,187 @@ function openInvoiceForm(cid, editInv){
   // "مانده قبلی": مانده مشتری بدون احتساب این فاکتور اصلاً — برای فاکتور جدید یعنی مانده فعلی،
   // برای ویرایش یعنی مانده فعلی منهای سهم همین فاکتور (چه از بابت جمع فاکتور و چه از بابت پرداختی‌های همراهش)
   const prevBalance = editInv
-    ? (customerTotals(cid).balance - editInv.total + (editInv.cashPaid||0) + (editInv.cardPaid||0) + (editInv.transferPaid||0) + (editInv.checkPaid||0))
-    : customerTotals(cid).balance;
+     ? (customerTotals(cid, invoiceCtx).balance - editInv.total + (editInv.cashPaid||0) + (editInv.cardPaid||0) + (editInv.transferPaid||0) + (editInv.checkPaid||0))
+     : customerTotals(cid, invoiceCtx).balance;
 
   function lastSaleToCustomer(productId){
+    if(Object.prototype.hasOwnProperty.call(lastSaleCustomerCache, productId)) return lastSaleCustomerCache[productId];
     const past = data.invoices
       .filter(inv=>inv.customerId===cid && (!editInv || inv.id!==editInv.id))
       .flatMap(inv=>inv.items.filter(it=>it.productId===productId).map(it=>({...it, date:inv.date})))
       .sort((a,b)=>new Date(b.date)-new Date(a.date));
-    return past[0] || null;
+    lastSaleCustomerCache[productId] = past[0] || null;
+    return lastSaleCustomerCache[productId];
   }
 
   function lastSaleAnyCustomer(productId){
+    if(Object.prototype.hasOwnProperty.call(lastSaleAnyCache, productId)) return lastSaleAnyCache[productId];
     const past = data.invoices
       .filter(inv=>!editInv || inv.id!==editInv.id)
       .flatMap(inv=>inv.items.filter(it=>it.productId===productId).map(it=>({...it, date:inv.date})))
       .sort((a,b)=>new Date(b.date)-new Date(a.date));
-    return past[0] || null;
-  }
-
-  function rowInfoHtml(idx){
-    const r = rows[idx];
-    const prod = data.products.find(p=>p.id===r.productId);
-    if(!prod) return '';
-    const fifoCost = productFifoUnitCost(prod.id);
-    const qty = r.qty||0;
-    const unitPrice = r.price||0;
-    const profitPerUnit = unitPrice - fifoCost;
-    const profitTotal = profitPerUnit*qty;
-    const pct = fifoCost ? Math.round((profitPerUnit/fifoCost)*100) : 0;
-    const profitColor = profitTotal<0 ? 'var(--rust)' : 'var(--olive-dark)';
-    const lastAny = lastSaleAnyCustomer(prod.id);
-    const lastCust = lastSaleToCustomer(prod.id);
-    const sellRef = (prod.retail!=null && prod.retail!=='') ? prod.retail : (prod.sell||0);
-    return `
-      <div class="inv-row-meta">
-        <div class="inv-row-profit-line" data-profit-toggle="1" style="color:${profitColor};">سود این قلم: <span class="inv-profit-private">${profitTotal<0?'−':''}${toman(Math.abs(profitTotal))} ت (${pct}٪)</span></div>
-        <button type="button" class="inv-price-info-btn" data-row="${idx}" aria-expanded="false">اطلاعات قیمت</button>
-        <div class="inv-price-info-panel" data-row="${idx}" hidden>
-          <div class="inv-price-info-grid">
-            <div class="inv-price-info-row"><span class="k">خرید (FIFO)</span><span class="v">${toman(fifoCost)} ت</span></div>
-            <div class="inv-price-info-row"><span class="k">قیمت فروش (مرجع)</span><span class="v">${toman(sellRef)} ت</span></div>
-            <div class="inv-price-info-row"><span class="k">آخرین فروش (کلی)</span><span class="v">${lastAny?`${toman(lastAny.price)} ت — ${faDate(lastAny.date)}`:'ثبت نشده'}</span></div>
-            <div class="inv-price-info-row"><span class="k">آخرین فروش به این مشتری</span><span class="v">${lastCust?`${toman(lastCust.price)} ت — ${faDate(lastCust.date)}`:'ثبت نشده'}</span></div>
-          </div>
-        </div>
-      </div>
-    `;
+    lastSaleAnyCache[productId] = past[0] || null;
+    return lastSaleAnyCache[productId];
   }
 
   function updateRowInfo(idx){
-    const el = document.querySelector(`.row-info[data-row="${idx}"]`);
-    if(el) el.innerHTML = rowInfoHtml(idx);
     const r = rows[idx];
     if(!r) return;
-    const totalEl = document.querySelector(`[data-total-for="${idx}"]`);
-    if(totalEl) totalEl.textContent = toman((Number(r.qty)||0)*(Number(r.price)||0)-(Number(r.discount)||0)) + ' ت';
-  }
+    const prod = invoiceProduct(r.productId);
+    const line = document.querySelector(`.inv-line[data-row="${idx}"]`);
+    if(!line) return;
 
-  function lineIsValid(idx){
-    const r = rows[idx];
-    const prod = r && data.products.find(p=>p.id===r.productId);
-    return !!(r && prod && prod.name && String(prod.name).trim() && Number(r.qty)>0 && Number(r.price)>0);
-  }
+    if(prod && line.classList.contains('inv-line-empty')) line.classList.remove('inv-line-empty');
 
-  function commitEditingLine(idx){
-    if(idx===null || idx===undefined || !rows[idx]) return false;
-    if(!lineIsValid(idx)) return false;
-    editingRowIndex = null;
-    editingRowSnapshot = null;
-    flashRowIndex = idx;
-    renderSheet();
-    setTimeout(()=>{
-      if(flashRowIndex === idx){
-        flashRowIndex = null;
-        const el = document.querySelector(`.inv-line-collapsed[data-row="${idx}"]`);
-        if(el) el.classList.remove('line-flash');
-      }
-    }, 300);
-    return true;
-  }
-
-  function beginEditingLine(idx){
-    if(idx<0 || idx>=rows.length) return;
-    if(editingRowIndex !== null && editingRowIndex !== idx){
-      if(!commitEditingLine(editingRowIndex)){
-        showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
-        return;
-      }
+    if(prod && !line.querySelector('.inv-line-collapsed')){
+      const view = document.createElement('div');
+      view.className = 'inv-line-collapsed';
+      view.setAttribute('role','button');
+      view.tabIndex = 0;
+      const body = document.createElement('div');
+      body.className = 'inv-line-body';
+      const name = document.createElement('span');
+      name.className = 'inv-line-name';
+      const meta = document.createElement('div');
+      meta.className = 'inv-line-collapsed-meta';
+      const calc = document.createElement('span');
+      calc.className = 'inv-line-calc';
+      meta.appendChild(calc);
+      body.append(name, meta);
+      const amount = document.createElement('span');
+      amount.className = 'inv-line-amount';
+      view.append(body, amount);
+      line.insertBefore(view, line.querySelector('.inv-line-view-active'));
+      // قبلاً اینجا setActiveRow صدا زده می‌شد که در scope این تابع نیست (ReferenceError)؛
+      // برای آخرین ردیفِ پرشده تپ بی‌اثر می‌ماند تا re-render بعدی. حالا از hook استفاده می‌شود.
+      const activate = ()=>{
+        const lineEl = view.closest('.inv-line');
+        if(lineEl && activateCollapsedRow) activateCollapsedRow(parseInt(lineEl.getAttribute('data-row'), 10));
+      };
+      view.addEventListener('click', activate);
+      view.addEventListener('keydown', e=>{
+        if(e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); }
+      });
     }
-    editingRowIndex = idx;
-    editingRowSnapshot = JSON.parse(JSON.stringify(rows[idx]));
-    renderSheet();
+
+    if(prod){
+      const collapsed = line.querySelector('.inv-line-collapsed');
+      if(collapsed){
+        const name = collapsed.querySelector('.inv-line-name');
+        const calc = collapsed.querySelector('.inv-line-calc');
+        const amount = collapsed.querySelector('.inv-line-amount');
+        if(name) name.textContent = prod.name || '';
+        if(calc) calc.textContent = `${enToFaDigits(fmtQtyDisplay(r.qty||0))} × ${toman(r.price||0)} ت`;
+        if(amount) amount.textContent = `${toman((r.qty||0)*(r.price||0))} ت`;
+      }
+
+      const fifoCost = invoiceFifoCost(prod.id);
+      const subEl = line.querySelector('.inv-line-sub');
+      const chevronEl = line.querySelector('.inv-line-chevron');
+      const marketDetails = line.querySelector('.inv-line-market-details');
+      if(subEl) subEl.style.display = 'flex';
+      if(chevronEl) chevronEl.style.display = 'none';
+      if(marketDetails) marketDetails.hidden = false;
+      const avgCost = line.querySelector('.inv-line-avg-cost');
+      if(avgCost){
+        avgCost.style.display = 'block';
+        avgCost.textContent = `میانگین خرید: ${toman(fifoCost)} ت`;
+        avgCost.classList.toggle('is-below', (r.price||0) < fifoCost);
+      }
+      const intelEl = line.querySelector('.inv-line-intel');
+      if(intelEl){
+        const intelText = productIntelLine(prod.id);
+        intelEl.textContent = intelText;
+        intelEl.hidden = !intelText;
+      }
+      const lastAny = lastSaleAnyCustomer(prod.id);
+      const lastCust = lastSaleToCustomer(prod.id);
+      const marketAny = line.querySelector('[data-market="last-any"]');
+      const marketCust = line.querySelector('[data-market="last-customer"]');
+      if(marketAny) marketAny.textContent = lastAny ? `${toman(lastAny.price)} ت — ${faDate(lastAny.date)}` : 'ثبت نشده';
+      if(marketCust) marketCust.textContent = lastCust ? `${toman(lastCust.price)} ت — ${faDate(lastCust.date)}` : 'ثبت نشده';
+    }
   }
 
   // Product selector state (one open at a time) — UI only
   let prodDropOpenRow = null;
   let prodDropOpening = false;
+  // Stage 3 — which row (if any) is currently expanded to its active/edit
+  // view. Populated rows render collapsed by default; an empty row (still
+  // awaiting a product) is always shown in its active form regardless of
+  // this value, since it has no collapsed summary to fall back to.
+  let activeRowIndex = rows.findIndex(r=>!r.productId);
+  if(activeRowIndex < 0) activeRowIndex = null;
+  // تاریخ فاکتور در closure نگه داشته می‌شود تا با هر renderSheet() دوباره به «امروز» برنگردد.
+  let invoiceDateStr = editInv ? editInv.date : todayISO();
+  // فعال‌سازی ردیف جمع‌شده؛ renderSheet آن را تنظیم می‌کند (setActiveRow داخل scope همان است).
+  let activateCollapsedRow = null;
+  const qtyFocusPrevious = new Map();
+  function focusQtyForRow(idx){
+    const input = document.querySelector(`.inv-line[data-row="${idx}"] .row-qty`);
+    if(!input) return;
+    qtyFocusPrevious.set(String(idx), input.value);
+    requestAnimationFrame(()=>setTimeout(()=>{
+      if(!input.isConnected) return;
+      input.focus();
+    },0));
+  }
 
+  // The customer's most-purchased products (customerBehavior.topProducts, already memoised in
+  // invoiceCtx), active ones only. Read-only; any failure just means "no frequent section".
+  let frequentProductsCache = null;
+  function frequentProducts(){
+    if(frequentProductsCache) return frequentProductsCache;
+    frequentProductsCache = [];
+    try{
+      const beh = (typeof customerBehavior === 'function') ? customerBehavior(cid, invoiceCtx) : null;
+      const top = beh && Array.isArray(beh.topProducts) ? beh.topProducts : [];
+      const seen = Object.create(null);
+      top.forEach(t=>{
+        const pid = t && t.productId;
+        if(!pid || seen[pid]) return;
+        const p = invoiceProduct(pid);
+        if(!p || p.active===false) return;
+        seen[pid] = true;
+        frequentProductsCache.push(p);
+      });
+    }catch(eFreq){ frequentProductsCache = []; }
+    return frequentProductsCache;
+  }
+
+  function productDropItemHtml(idx, p){
+    const hl = productHint(p.id);
+    return `
+      <div class="prod-drop-item" data-row="${idx}" data-pid="${esc(p.id)}" role="button" tabindex="0">
+        <span class="prod-drop-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/></svg></span>
+        <span class="prod-drop-main">
+          <span class="prod-drop-name">${esc(p.name)}</span>
+          ${hl.length ? `<span class="prod-drop-hint">${window.BagheriPresent.hintHtml(hl)}</span>` : ''}
+        </span>
+        <span class="prod-drop-stock">${enToFaDigits(String(p.stockQty||0))}</span>
+        <span class="prod-drop-chevron" aria-hidden="true">›</span>
+      </div>
+    `;
+  }
   function productDropListHtml(idx, query){
     const q = (query||'').trim();
+    const matches = p=>!q || (p.name||'').includes(q);
     // Inactive products (active===false) excluded from NEW invoice product selector only.
     const activeOnly = data.products.filter(p=>p.active!==false);
-    const list = (q ? activeOnly.filter(p=>(p.name||'').includes(q)) : activeOnly).slice(0, 40);
-    if(!list.length) return `<div class="prod-drop-empty">کالایی پیدا نشد</div>`;
-    return list.map(p=>`
-      <div class="prod-drop-item" data-row="${idx}" data-pid="${esc(p.id)}">
-        <span class="prod-drop-name">${esc(p.name)}</span>
-        <span class="prod-drop-stock">موجودی: ${p.stockQty||0}</span>
-      </div>
-    `).join('');
+    // Section 1 — this customer's most-purchased products; section 2 — everything else (max 40).
+    const frequent = frequentProducts().filter(matches);
+    const inFrequent = Object.create(null);
+    frequent.forEach(p=>{ inFrequent[p.id] = true; });
+    const others = activeOnly.filter(p=>matches(p) && !inFrequent[p.id]).slice(0, 40);
+    if(!frequent.length && !others.length) return `<div class="prod-drop-empty">کالایی پیدا نشد</div>`;
+    // Headings only when both sections exist; otherwise the list looks exactly as before.
+    if(frequent.length && others.length){
+      return `<div class="prod-drop-section-title">پرخرید این مشتری</div>` +
+        frequent.map(p=>productDropItemHtml(idx, p)).join('') +
+        `<div class="prod-drop-section-title">همه محصولات</div>` +
+        others.map(p=>productDropItemHtml(idx, p)).join('');
+    }
+    return (frequent.length ? frequent : others).map(p=>productDropItemHtml(idx, p)).join('');
   }
   function productDropPanelHtml(idx){
     return `
@@ -2212,200 +2534,115 @@ function openInvoiceForm(cid, editInv){
     return productDropListHtml(idx, query);
   }
 
-  function lineProfitValue(idx){
-    const r = rows[idx];
-    const prod = data.products.find(p=>p.id===r.productId);
-    if(!prod) return { total:0, pct:0, negative:false };
-    const fifoCost = productFifoUnitCost(prod.id);
-    const profitPerUnit = (Number(r.price)||0) - fifoCost;
-    const total = profitPerUnit * (Number(r.qty)||0);
-    const pct = fifoCost ? Math.round((profitPerUnit/fifoCost)*100) : 0;
-    return { total, pct, negative: total < 0 };
-  }
-
-  function lineEmptyHtml(r, idx){
-    return `
-      <div class="inv-line inv-line-empty" data-row="${idx}" role="button" tabindex="0" aria-label="افزودن کالا به قلم ${toman(idx+1)}">
-        <div class="inv-line-main">
-          <span class="inv-line-index">${toman(idx+1)}</span>
-          <span class="inv-line-name">+ افزودن کالا</span>
-          <span class="inv-line-chevron" aria-hidden="true">‹</span>
-        </div>
-      </div>`;
-  }
-
-  function lineCollapsedHtml(r, idx){
-    const prod = data.products.find(p=>p.id===r.productId);
-    if(!prod) return lineEmptyHtml(r, idx);
-    const total = (Number(r.qty)||0) * (Number(r.price)||0) - (Number(r.discount)||0);
-    const profit = lineProfitValue(idx);
-    const profitHtml = Number.isFinite(profit.total) && profit.total !== 0
-      ? `<span class="inv-line-collapsed-profit" data-profit-id="${idx}">سود: <span class="inv-profit-private">${profit.negative?'−':''}${toman(Math.abs(profit.total))} ت</span></span>`
-      : '';
-    const flash = flashRowIndex === idx ? ' line-flash' : '';
-    return `
-      <div class="inv-line inv-line-collapsed${flash}" data-row="${idx}" role="button" tabindex="0" aria-label="ویرایش قلم ${toman(idx+1)}">
-        <div class="inv-line-main">
-          <span class="inv-line-index">${toman(idx+1)}</span>
-          <div class="inv-line-collapsed-body">
-            <div class="inv-line-collapsed-top">
-              <span class="inv-line-collapsed-name">${esc(prod.name)}</span>
-              <span class="inv-line-amount">${toman(total)} ت</span>
-            </div>
-            <div class="inv-line-collapsed-bottom">
-              <span class="inv-line-collapsed-qty">${toman(r.qty)} × ${toman(r.price)} ت</span>
-              ${profitHtml}
-            </div>
-          </div>
-          <span class="inv-line-chevron" aria-hidden="true">‹</span>
-          <button type="button" class="inv-line-del" data-del="${idx}" aria-label="حذف قلم">×</button>
-        </div>
-      </div>`;
-  }
-
-  function lineEditingHtml(r, idx){
-    const prod = data.products.find(p=>p.id===r.productId);
-    const lineAmt = (Number(r.qty)||0) * (Number(r.price)||0) - (Number(r.discount)||0);
-    const profit = lineProfitValue(idx);
-    const priceDisp = (typeof formatLiveAmount==='function' && r.price) ? enToFaDigits(formatLiveAmount(String(r.price))).replace(/,/g,'٬') : enToFaDigits(String(r.price||''));
-    const label = prod ? esc(prod.name) : '';
-    return `
-      <div class="inv-line inv-line-editing" data-row="${idx}">
-        <div class="inv-line-edit-head">
-          <span>قلم ${toman(idx+1)}</span>
-          <div class="inv-line-edit-head-actions">
-            <button type="button" class="inv-line-delete" data-del="${idx}" aria-label="حذف قلم">×</button>
-            <button type="button" class="inv-line-commit" data-line-commit="${idx}" aria-label="ثبت قلم">✓</button>
-          </div>
-        </div>
-        <div class="inv-line-product-wrap">
-          <label>نام کالا</label>
-          <input type="text" class="row-product-search inv-line-name" data-row="${idx}" placeholder="انتخاب کالا..." autocomplete="off" readonly value="${label}" inputmode="none">
-          <span class="prod-drop" data-row="${idx}" hidden></span>
-        </div>
-        <div class="inv-line-edit-two-col">
-          <div class="inv-edit-field">
-            <label for="inv-row-qty-${idx}">تعداد</label>
-            <input id="inv-row-qty-${idx}" type="text" inputmode="decimal" data-row="${idx}" class="row-qty inv-mini-input" aria-label="تعداد" value="${esc(enToFaDigits(String(r.qty||'')))}">
-          </div>
-          <div class="inv-edit-field">
-            <label for="inv-row-price-${idx}">قیمت واحد</label>
-            <input id="inv-row-price-${idx}" type="text" inputmode="decimal" data-row="${idx}" class="row-price inv-mini-input inv-mini-input-price" aria-label="قیمت واحد" value="${esc(String(priceDisp))}">
-          </div>
-        </div>
-        <div class="edit-computed-row">
-          <div class="edit-computed compact-computed">
-            <span class="edit-computed-label">جمع</span>
-            <span class="edit-computed-value" data-total-for="${idx}">${toman(lineAmt)} ت</span>
-          </div>
-          <div class="edit-computed compact-computed">
-            <span class="edit-computed-label">سود این قلم</span>
-            <span class="line-profit edit-computed-profit" data-revealed="0" data-profit-id="${idx}">
-              <span class="profit-value">${profit.negative?'−':''}${toman(Math.abs(profit.total))} ت</span>
-            </span>
-          </div>
-        </div>
-        <button type="button" class="inv-price-info-btn inv-edit-price-info" data-row="${idx}" aria-expanded="false">اطلاعات قیمت</button>
-        <div class="row-info" data-row="${idx}">${rowInfoHtml(idx)}</div>
-
-      </div>`;
-  }
-
-  function formatInvoiceFaInput(el){
-    if(!el) return;
-    const oldVal = String(el.value || '');
-    const sel = (typeof el.selectionStart === 'number') ? el.selectionStart : oldVal.length;
-    const digitsBefore = faToEnDigits(oldVal.slice(0, sel)).replace(/[^\d.]/g,'').length;
-    const enFormatted = (typeof formatLiveAmount === 'function')
-      ? formatLiveAmount(oldVal)
-      : faToEnDigits(oldVal).replace(/[^\d.]/g,'');
-    const formatted = enToFaDigits(enFormatted).replace(/,/g,'٬');
-    if(formatted === oldVal) return;
-    el.value = formatted;
-    let pos = formatted.length, seen = 0;
-    for(let i=0;i<formatted.length;i++){
-      if(/[\d۰-۹٠-٩.٫]/.test(formatted[i])){
-        seen++;
-        if(seen >= digitsBefore){ pos=i+1; break; }
-      }
-    }
-    try{ el.setSelectionRange(pos,pos); }catch(e){}
-  }
-
   function itemsHtml(){
-    return rows.map((r,idx)=> editingRowIndex === idx ? lineEditingHtml(r,idx) : lineCollapsedHtml(r,idx)).join('');
+    return rows.map((r,idx)=>{
+      const prod = invoiceProduct(r.productId);
+      const rowFifo = prod ? invoiceFifoCost(prod.id) : 0;
+      const rowLastAny = prod ? lastSaleAnyCustomer(prod.id) : null;
+      const rowLastCustomer = prod ? lastSaleToCustomer(prod.id) : null;
+      const rowIntelText = prod ? productIntelLine(prod.id) : '';
+      const priceDisp = (typeof formatLiveAmount==='function' && r.price) ? formatLiveAmount(String(r.price)) : (r.price||'');
+      const label = prod ? esc(prod.name) : '';
+      const lineAmt = (r.qty||0) * (r.price||0);
+      let activeHtml = `
+        <div class="inv-line-main">
+          <input type="text" class="row-product-search inv-line-name" data-row="${idx}" placeholder="انتخاب کالا..." autocomplete="off" readonly value="${label}" inputmode="none" aria-label="${prod?'تغییر کالا':'انتخاب کالا'}">
+          ${rows.length>1?`<button type="button" class="inv-line-del row-del" data-row="${idx}" title="حذف این قلم" aria-label="حذف این قلم">×</button>`:''}
+          <span class="inv-line-chevron" data-row="${idx}" aria-hidden="true" style="display:${prod?'none':''}">›</span>
+          <div class="prod-drop" data-row="${idx}" hidden></div>
+        </div>
+        <div class="inv-line-sub" data-row="${idx}" style="display:${prod?'flex':'none'}">
+          <span class="inv-line-qtyrate">
+            <input type="text" inputmode="decimal" data-row="${idx}" class="row-qty inv-mini-input" aria-label="تعداد" value="${enToFaDigits(fmtQtyDisplay(r.qty||0))}">
+            <span class="inv-line-x">×</span>
+            <input type="text" inputmode="decimal" data-row="${idx}" class="row-price inv-mini-input inv-mini-input-price" aria-label="قیمت واحد" value="${esc(String(priceDisp))}">
+            <span class="inv-line-unit">ت</span>
+          </span>
+        </div>
+        <div class="inv-line-avg-cost${prod && (r.price||0) < rowFifo?' is-below':''}" data-row="${idx}" style="display:${prod?'block':'none'}">${prod?`میانگین خرید: ${toman(rowFifo)} ت`:''}</div>
+        <div class="inv-line-intel" data-row="${idx}"${rowIntelText?'':' hidden'}>${esc(rowIntelText)}</div>
+        <details class="inv-line-market-details" data-row="${idx}" ${prod?'':'hidden'}>
+          <summary>اطلاعات بازار</summary>
+          <div class="inv-line-market-row"><span>آخرین فروش کلی</span><strong data-market="last-any">${rowLastAny?`${toman(rowLastAny.price)} ت — ${faDate(rowLastAny.date)}`:'ثبت نشده'}</strong></div>
+          <div class="inv-line-market-row"><span>آخرین فروش به این مشتری</span><strong data-market="last-customer">${rowLastCustomer?`${toman(rowLastCustomer.price)} ت — ${faDate(rowLastCustomer.date)}`:'ثبت نشده'}</strong></div>
+        </details>`;
+      const isRowActive = !prod || idx === activeRowIndex;
+      return `
+      <div class="inv-line${prod?'':' inv-line-empty'}${isRowActive?' is-active':''}" data-row="${idx}">
+        ${prod?`<div class="inv-line-collapsed" role="button" tabindex="0" aria-label="ویرایش ${label}">
+          <div class="inv-line-body">
+            <span class="inv-line-name">${label}</span>
+            <div class="inv-line-collapsed-meta"><span class="inv-line-calc">${enToFaDigits(fmtQtyDisplay(r.qty||0))} × ${toman(r.price||0)} ت</span></div>
+          </div>
+          <span class="inv-line-amount">${toman(lineAmt)} ت</span>
+        </div>`:''}
+        <div class="inv-line-view-active">${activeHtml}</div>
+      </div>`;
+    }).join('');
   }
 
-  function invoiceTotal(){
-    const subtotal = rows.reduce((s,r)=>s+(r.qty*r.price-(r.discount||0)),0);
-    const discountAmount = discountType==='percent' ? subtotal*(discount||0)/100 : discount;
-    return Math.max(0, subtotal - discountAmount);
-  }
-
-  function invoiceProfitEstimate(){
+  function invoiceMetrics(){
+    if(invoiceMetricsCache) return invoiceMetricsCache;
     const subtotal = rows.reduce((s,r)=>s+(r.qty*r.price-(r.discount||0)),0);
     const discountAmount = discountType==='percent' ? subtotal*(discount||0)/100 : discount;
     const itemsProfit = rows.reduce((s,r)=>{
       if(!r.productId) return s;
-      const fifoCost = productFifoUnitCost(r.productId);
+      const fifoCost = invoiceFifoCost(r.productId);
       return s + ((r.price||0)-fifoCost)*(r.qty||0);
     }, 0);
-    return itemsProfit - discountAmount;
+    invoiceMetricsCache = {
+      subtotal: subtotal,
+      discountAmount: discountAmount,
+      total: Math.max(0, subtotal - discountAmount),
+      profit: itemsProfit - discountAmount
+    };
+    return invoiceMetricsCache;
+  }
+
+  function invoiceTotal(){ return invoiceMetrics().total; }
+
+  function invoiceProfitEstimate(){
+    return invoiceMetrics().profit;
   }
 
   function updateSummary(){
-    const total = invoiceTotal();
-    const subtotal = rows.reduce((s,r)=>s+(r.qty*r.price-(r.discount||0)),0);
-    const discountAmount = discountType==='percent' ? subtotal*(discount||0)/100 : discount;
+    const metrics = invoiceMetrics();
+    const total = metrics.total;
+    const discountAmount = metrics.discountAmount;
     const paid = cashPaid+cardPaid+transferPaid+checkAmount;
     const newBalance = prevBalance + total - paid;
     const profit = invoiceProfitEstimate();
-    const remainCls = newBalance>0 ? 'is-danger' : 'is-success';
-    const discountRow = discountAmount!==0
-      ? `<div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label">تخفیف</span><span class="vg-row-value is-muted">${toman(discountAmount)} ت</span></div>`
-      : '';
-    document.getElementById('calc-summary').innerHTML = `
-      <div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label">اقلام</span><span class="vg-row-value">${toman(subtotal)} ت</span></div>
-      ${discountRow}
-      <div class="vg-row vg-row-between total-row"><span class="vg-row-label" style="font-weight:700;color:var(--vg-color-text);">جمع فاکتور</span><span class="vg-row-value">${toman(total)} ت</span></div>
-      <div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label">مانده قبلی</span><span class="vg-row-value">${toman(Math.abs(prevBalance))} ت</span></div>
-      <div class="vg-row vg-row-between vg-row-compact"><span class="vg-row-label ${remainCls}">مانده جدید</span><span class="vg-row-value ${remainCls}">${toman(Math.abs(newBalance))} ت ${balanceStatusWord(newBalance)}</span></div>
-      <div class="vg-row vg-row-between vg-row-compact profit-row"><span class="vg-row-label">سود (FIFO)</span><span class="vg-row-value">${profit<0?'−':''}${toman(Math.abs(profit))} ت</span></div>
+    const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
+    const profitColor = profit<0 ? (isDarkTheme ? '#FF6973' : '#D52B36') : (isDarkTheme ? '#45C99A' : '#0F7A4A');
+    const remainCls = newBalance>0 ? 'accent-rust' : 'accent-olive';
+    const totalChipEl = document.getElementById('inv-total-chip-value');
+    if(totalChipEl) totalChipEl.textContent = toman(total) + ' ت';
+    const summaryEl = document.getElementById('calc-summary');
+    if(summaryEl) summaryEl.innerHTML = `
+      <div class="ledger-row inv-sum-tertiary"><span class="name">مانده قبلی مشتری</span><span class="filler"></span><span class="amount">${toman(prevBalance)} ت</span></div>
+      <div class="ledger-row inv-total-row inv-sum-primary"><span class="name">جمع این فاکتور</span><span class="filler"></span><span class="amount">${toman(total)} ت</span></div>
+      ${discountAmount>0?`<div class="ledger-row inv-discount-row"><span class="name">تخفیف کلی فاکتور</span><span class="filler"></span><span class="amount">− ${toman(discountAmount)} ت</span></div>`:''}
+      <div class="ledger-row inv-sum-secondary"><span class="name">پرداختی</span><span class="filler"></span><span class="amount">(${toman(paid)}) ت</span></div>
+      <div class="ledger-row inv-remain-row inv-sum-primary"><span class="name ${remainCls}">مانده جدید</span><span class="filler"></span><span class="amount ${remainCls}">${toman(Math.abs(newBalance))} ت ${balanceStatusWord(newBalance)}</span></div>
     `;
-    const sticky = document.getElementById('inv-sticky-total-value');
-    if(sticky) sticky.textContent = toman(total) + ' ت';
-  }
-
-  function invoiceFormSnapshot(){
-    return JSON.stringify({
-      date: currentDate || invoiceInitialDate,
-      rows: rows.map(r=>({productId:r.productId||'',qty:Number(r.qty)||0,price:Number(r.price)||0,discount:Number(r.discount)||0})),
-      cashPaid:Number(cashPaid)||0,
-      cardPaid:Number(cardPaid)||0,
-      transferPaid:Number(transferPaid)||0,
-      checkAmount:Number(checkAmount)||0,
-      discount:Number(discount)||0,
-      discountType:discountType||'fixed'
-    });
-  }
-  const invoiceInitialSnapshot = JSON.stringify({
-    date: invoiceInitialDate,
-    rows: rows.map(r=>({productId:r.productId||'',qty:Number(r.qty)||0,price:Number(r.price)||0,discount:Number(r.discount)||0})),
-    cashPaid:Number(cashPaid)||0, cardPaid:Number(cardPaid)||0, transferPaid:Number(transferPaid)||0,
-    checkAmount:Number(checkAmount)||0, discount:Number(discount)||0, discountType:discountType||'fixed'
-  });
-  function invoiceHasUnsavedData(){ return invoiceFormSnapshot() !== invoiceInitialSnapshot; }
-  async function tryCloseInvoiceSheet(){
-    if(invoiceHasUnsavedData()){
-      const ok = await appConfirm('فاکتور ذخیره نشده است. آیا می‌خواهید از فاکتور خارج شوید؟','خروج بدون ذخیره','ادامه ویرایش');
-      if(!ok) return;
+    const profitEl = document.getElementById('inv-profit-summary');
+    if(profitEl){
+      profitEl.innerHTML = `<span class="name">سود این فاکتور (بر اساس میانگین خرید)</span><strong class="amount" style="color:${profitColor}">${profit<0?'−':''}${toman(Math.abs(profit))} ت</strong>`;
     }
-    if(typeof clearNavigationGuard==='function') clearNavigationGuard();
-    if(typeof clearModalCloseGuard==='function') clearModalCloseGuard();
-    closeModal();
   }
 
   function renderSheet(){
+    // Preserve the sheet's internal scroll position across re-renders.
+    // renderSheet() is called on every add-row / row-delete / discount-type
+    // change, and each call fully rebuilds #modalRoot via openSheet() (a
+    // brand-new .sheet element with scrollTop=0). On a long invoice where the
+    // user has scrolled down to the discount/payment section, that reset
+    // makes the whole form visibly "jump" back to the top on every one of
+    // those actions. Capturing/restoring scrollTop here is local to this
+    // function and does not change what openSheet()/closeModal() do for any
+    // other sheet in the app.
+    const _prevScrollEl = document.querySelector('.inv-body') || document.querySelector('.sheet');
+    const _prevScrollTop = _prevScrollEl ? _prevScrollEl.scrollTop : 0;
     // No-Purchase Reason: expected SKUs missing from current basket (non-blocking)
     const basketPids = rows.map(function(r){ return r.productId; }).filter(Boolean);
     const nprCandidatesInv = (typeof getNoPurchaseCandidates === 'function')
@@ -2417,7 +2654,6 @@ function openInvoiceForm(cid, editInv){
     const custDisplay = cust
       ? (cust.ownerName ? (esc(cust.name)+' / '+esc(cust.ownerName)) : esc(cust.name||'—'))
       : '—';
-    const custInitial = esc((cust && cust.name ? cust.name.trim().charAt(0) : 'م') || 'م');
 
     openSheet(`
       <div class="inv-sheet-v2">
@@ -2430,101 +2666,133 @@ function openInvoiceForm(cid, editInv){
           <button type="button" class="btn inv-header-save" id="save-invoice">${editInv?'ذخیره':'ثبت'}</button>
         </div>
 
-        <div class="inv-body has-sticky-total">
+        <div class="inv-body">
+          <div class="inv-total-chip" id="inv-total-chip" role="status" aria-live="polite">
+            <span class="inv-total-chip-label">جمع این فاکتور</span>
+            <strong class="inv-total-chip-value" id="inv-total-chip-value"></strong>
+          </div>
           ${editInv?`<div class="inv-edit-notice">با ذخیره‌ی این ویرایش، موجودی انبار و مانده حساب مشتری به‌طور خودکار اصلاح می‌شود.</div>`:''}
 
-          <div class="vg-section inv-vg-section">
-            <div class="vg-section-card inv-customer-card">
-              <div class="vg-row inv-customer-row">
-                <div class="inv-customer-avatar" aria-hidden="true">${custInitial}</div>
-                <div class="inv-customer-info">
-                  <div class="inv-customer-name">${custDisplay}</div>
-                  <div class="inv-customer-meta">
-                    ${cust&&cust.phone?`<span>${esc(cust.phone)}</span><span class="inv-customer-meta-sep">·</span>`:''}
-                    <span class="inv-customer-date">${shamsiDateInputHTML('f-date', currentDate)}</span>
-                  </div>
-                </div>
-              </div>
+          <div class="inv-customer-context">
+            <div class="inv-customer-info">
+              <div class="inv-customer-kicker">مشتری</div>
+              <div class="inv-customer-name">${custDisplay}</div>
+              ${cust&&cust.phone?`<div class="inv-customer-meta">${esc(cust.phone)}</div>`:''}
             </div>
           </div>
 
-          <div class="vg-section inv-vg-section inv-items-section">
-            <h2 class="vg-section-title">اقلام</h2>
-            <div class="vg-section-card inv-items-card">
+          <div class="field inv-date-field"><label>تاریخ فاکتور</label>${shamsiDateInputHTML('f-date', invoiceDateStr)}</div>
+
+          <div class="inv-section inv-items-section">
+            <div class="inv-items-card-head">
+              <span class="inv-items-card-label">اقلام فاکتور</span>
+            </div>
+            <div class="inv-items-card">
               <div id="items-wrap" class="inv-items">${itemsHtml()}</div>
-              <button type="button" class="inv-add-line" id="add-row" ${rows.some(r=>!r.productId)?'hidden':''}><span class="inv-add-line-icon" aria-hidden="true">+</span> افزودن کالا</button>
+              <button type="button" class="inv-add-line" id="add-row"><span class="inv-add-line-icon" aria-hidden="true">+</span> افزودن قلم جدید</button>
             </div>
           </div>
 
           ${nprHtmlInv}
 
-          <div class="vg-section inv-vg-section inv-payment-section">
-            <h2 class="vg-section-title">پرداخت</h2>
-            <div class="vg-section-card inv-payment-card">
-              <div class="inv-payment-row">
-                <span class="inv-payment-row-label">دریافت</span>
-                <div class="inv-payment-actions" role="group" aria-label="روش دریافت">
-                  <button type="button" class="inv-payment-action" data-payment-method="cash" aria-expanded="false"><span>نقد</span></button>
-                  <button type="button" class="inv-payment-action" data-payment-method="card" aria-expanded="false"><span>کارت</span></button>
-                  <button type="button" class="inv-payment-action" data-payment-method="transfer" aria-expanded="false"><span>بانکی</span></button>
-                  <button type="button" class="inv-payment-action" data-payment-method="check" aria-expanded="false"><span>چک</span></button>
-                </div>
-                <span class="inv-payment-row-value" id="inv-payment-total">${toman(cashPaid+cardPaid+transferPaid+checkAmount)} ت</span>
-              </div>
-              <div class="inv-payment-row inv-discount-row">
-                <span class="inv-payment-row-label">تخفیف</span>
-                <input id="f-discount" type="text" inputmode="decimal" value="${discount||''}" placeholder="۰" aria-label="مبلغ تخفیف">
-                <select id="f-discount-type" aria-label="نوع تخفیف">
-                  <option value="fixed" ${discountType==='fixed'?'selected':''}>مبلغ</option>
-                  <option value="percent" ${discountType==='percent'?'selected':''}>درصد</option>
-                </select>
-              </div>
+          <div class="inv-section inv-payment-section">
+            <div class="inv-payment-heading">
+              <h2 class="inv-section-title">دریافتی همراه این فاکتور <span class="inv-section-title-optional">(اختیاری)</span></h2>
+              <span class="inv-payment-total" id="inv-payment-total">${toman(cashPaid+cardPaid+transferPaid+checkAmount)} ت</span>
+            </div>
+
+            <div class="inv-payment-actions" role="group" aria-label="روش دریافت">
+              <button type="button" class="inv-payment-action" data-payment-method="cash" aria-expanded="false">
+                <span class="inv-payment-action-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 9h18M7 14h.01M11 14h3"/></svg>
+                </span>
+                <span>نقد</span>
+                <span class="inv-payment-action-value" data-payment-value="cash">${cashPaid>0 ? toman(cashPaid) + ' ت' : ''}</span>
+              </button>
+              <button type="button" class="inv-payment-action" data-payment-method="card" aria-expanded="false">
+                <span class="inv-payment-action-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
+                </span>
+                <span>کارت</span>
+                <span class="inv-payment-action-value" data-payment-value="card">${cardPaid>0 ? toman(cardPaid) + ' ت' : ''}</span>
+              </button>
+              <button type="button" class="inv-payment-action" data-payment-method="transfer" aria-expanded="false">
+                <span class="inv-payment-action-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5M8 17h8"/></svg>
+                </span>
+                <span>بانکی</span>
+                <span class="inv-payment-action-value" data-payment-value="transfer">${transferPaid>0 ? toman(transferPaid) + ' ت' : ''}</span>
+              </button>
+              <button type="button" class="inv-payment-action" data-payment-method="check" aria-expanded="false">
+                <span class="inv-payment-action-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                </span>
+                <span>چک</span>
+                <span class="inv-payment-action-value" data-payment-value="check">${checkAmount>0 ? toman(checkAmount) + ' ت' : ''}</span>
+              </button>
             </div>
 
             <div class="inv-payment-backdrop" data-payment-backdrop hidden></div>
 
             <div class="inv-payment-panel" data-payment-panel="cash" hidden>
-              <div class="inv-payment-panel-head"><span>دریافت نقدی</span><button type="button" class="inv-payment-close" data-payment-close="cash" aria-label="بستن">×</button></div>
+              <div class="inv-payment-panel-head"><div><strong>دریافت نقدی</strong><small>دارم نقدی می‌گیرم</small></div><button type="button" class="inv-payment-close" data-payment-close="cash" aria-label="بستن">×</button></div>
               <label for="f-cash">مبلغ نقدی</label>
-              <input id="f-cash" type="text" inputmode="decimal" value="${cashPaid||''}" placeholder="مبلغ را وارد کنید">
+              <input id="f-cash" type="text" inputmode="decimal" value="${payInputText(cashPaid)}" placeholder="مبلغ را وارد کنید">
+              <button type="button" class="inv-payment-confirm" data-payment-confirm="cash">ثبت دریافت نقدی</button>
             </div>
+
             <div class="inv-payment-panel" data-payment-panel="card" hidden>
-              <div class="inv-payment-panel-head"><span>دریافت با کارت</span><button type="button" class="inv-payment-close" data-payment-close="card" aria-label="بستن">×</button></div>
+              <div class="inv-payment-panel-head"><div><strong>دریافت با کارت</strong><small>دارم با کارت دریافت می‌کنم</small></div><button type="button" class="inv-payment-close" data-payment-close="card" aria-label="بستن">×</button></div>
               <label for="f-card">مبلغ کارت</label>
-              <input id="f-card" type="text" inputmode="decimal" value="${cardPaid||''}" placeholder="مبلغ را وارد کنید">
+              <input id="f-card" type="text" inputmode="decimal" value="${payInputText(cardPaid)}" placeholder="مبلغ را وارد کنید">
+              <button type="button" class="inv-payment-confirm" data-payment-confirm="card">ثبت دریافت کارت</button>
             </div>
+
             <div class="inv-payment-panel" data-payment-panel="transfer" hidden>
-              <div class="inv-payment-panel-head"><span>انتقال بانکی</span><button type="button" class="inv-payment-close" data-payment-close="transfer" aria-label="بستن">×</button></div>
+              <div class="inv-payment-panel-head"><div><strong>انتقال بانکی</strong><small>دارم انتقال بانکی می‌گیرم</small></div><button type="button" class="inv-payment-close" data-payment-close="transfer" aria-label="بستن">×</button></div>
               <label for="f-transfer">مبلغ انتقال</label>
-              <input id="f-transfer" type="text" inputmode="decimal" value="${transferPaid||''}" placeholder="مبلغ را وارد کنید">
+              <input id="f-transfer" type="text" inputmode="decimal" value="${payInputText(transferPaid)}" placeholder="مبلغ را وارد کنید">
+              <button type="button" class="inv-payment-confirm" data-payment-confirm="transfer">ثبت انتقال بانکی</button>
             </div>
+
             <div class="inv-payment-panel" data-payment-panel="check" hidden>
-              <div class="inv-payment-panel-head"><span>دریافت چک</span><button type="button" class="inv-payment-close" data-payment-close="check" aria-label="بستن">×</button></div>
+              <div class="inv-payment-panel-head"><div><strong>دریافت چک</strong><small>دارم چک دریافت می‌کنم</small></div><button type="button" class="inv-payment-close" data-payment-close="check" aria-label="بستن">×</button></div>
               <label for="f-check">مبلغ چک</label>
-              <input id="f-check" type="text" inputmode="decimal" value="${checkAmount||''}" placeholder="مبلغ چک را وارد کنید">
+              <input id="f-check" type="text" inputmode="decimal" value="${payInputText(checkAmount)}" placeholder="مبلغ چک را وارد کنید">
+              <!-- تاریخ سررسید قبل از دکمهٔ ثبت می‌آید تا کاربر قبل از ثبت به آن برسد -->
               <div class="inv-payment-check-due" id="check-due-wrap" style="display:${checkAmount>0?'block':'none'};">
                 <label for="f-check-due">تاریخ سررسید چک</label>
                 ${shamsiDateInputHTML('f-check-due', checkDue)}
               </div>
+              <button type="button" class="inv-payment-confirm" data-payment-confirm="check">ثبت دریافت چک</button>
+            </div>
+
+            <div class="inv-discount-block" role="group" aria-label="تخفیف فاکتور">
+              <span class="inv-discount-label">تخفیف</span>
+              <div class="inv-discount-type" role="group" aria-label="نوع تخفیف">
+                <button type="button" class="inv-discount-type-btn${discountType==='fixed'?' is-active':''}" data-discount-type="fixed" aria-pressed="${discountType==='fixed'?'true':'false'}">مبلغ</button>
+                <button type="button" class="inv-discount-type-btn${discountType==='percent'?' is-active':''}" data-discount-type="percent" aria-pressed="${discountType==='percent'?'true':'false'}">درصد</button>
+              </div>
+              <input id="f-discount" type="text" inputmode="decimal" value="${discount ? enToFaDigits(String(discount)) : ''}" placeholder="۰" aria-label="مقدار تخفیف">
             </div>
           </div>
 
-          <div class="vg-section inv-vg-section inv-summary-section">
-            <h2 class="vg-section-title">خلاصه</h2>
-            <div class="vg-section-card inv-summary-card">
-              <div id="calc-summary"></div>
-            </div>
+          <div class="inv-summary-section">
+            <h2 class="inv-section-title">جمع‌بندی فاکتور</h2>
+            <div id="calc-summary"></div>
           </div>
+          <div class="inv-profit-summary" id="inv-profit-summary" aria-label="سود این فاکتور"></div>
         </div>
-        <div class="inv-sticky-total" id="inv-sticky-total" aria-live="polite"><span class="inv-sticky-total-label">جمع فاکتور</span><span class="inv-sticky-total-value" id="inv-sticky-total-value">${toman(invoiceTotal())} ت</span><button type="button" class="btn inv-sticky-total-submit" id="inv-sticky-submit">ثبت</button></div>
       </div>
-    `);
+    `, {dirtyCheck:true});
+    const invoiceBottomNav = document.getElementById('bottom-nav');
+    if (invoiceBottomNav && invoiceBottomNav.dataset.invoiceHiddenPrev == null) { invoiceBottomNav.dataset.invoiceHiddenPrev = invoiceBottomNav.hidden ? '1' : '0'; invoiceBottomNav.hidden = true; }
     // Presentation-only: the sheet's generic close-x (from openSheet) is
     // replaced by the "لغو" button in the custom header above, and the
     // custom header's save button IS the original #save-invoice element
     // (same id, same listener below) — no duplicate save logic anywhere.
     (function(){
-      const sheetEl = document.querySelector('#modalRoot .sheet');
+      const sheetEl = document.querySelector('.sheet');
       if(sheetEl) sheetEl.classList.add('inv-sheet-host');
       // Overlay default z-index (60) is below bottom-nav (70). Lift only while
       // Invoice V6 host is open so chrome cannot cover the full-screen sheet.
@@ -2532,157 +2800,101 @@ function openInvoiceForm(cid, editInv){
       if(ov) ov.style.zIndex = '80';
       const genericClose = document.getElementById('closeX');
       if(genericClose) genericClose.style.display = 'none';
+      // Presentation-only: the sticky total chip sits just below the fixed header.
+      const invHeaderEl = document.querySelector('.inv-header');
+      const invBodyEl = document.querySelector('.inv-body');
+      if(invHeaderEl && invBodyEl) invBodyEl.style.setProperty('--inv-header-h', invHeaderEl.offsetHeight + 'px');
       const cancelBtn = document.getElementById('inv-cancel');
-      if(cancelBtn) cancelBtn.addEventListener('click', tryCloseInvoiceSheet);
-      const stickySubmit = document.getElementById('inv-sticky-submit');
-      if(stickySubmit) stickySubmit.addEventListener('click', function(){
-        const saveBtn = document.getElementById('save-invoice');
-        if(saveBtn) saveBtn.click();
+      if(cancelBtn) cancelBtn.addEventListener('click', async ()=>{
+        if(await window.__requestAppExit('invoice-cancel')) closeModal();
       });
     })();
-    if(typeof setNavigationGuard==='function') setNavigationGuard(function(){
-      if(!invoiceHasUnsavedData()) return true;
-      return appConfirm('فاکتور ذخیره نشده است. آیا می‌خواهید از فاکتور خارج شوید؟','خروج بدون ذخیره','ادامه ویرایش');
-    });
-    if(typeof setModalCloseGuard==='function') setModalCloseGuard(tryCloseInvoiceSheet);
+    if(_prevScrollTop){
+      const _newScrollEl = document.querySelector('.inv-body') || document.querySelector('.sheet');
+      if(_newScrollEl) _newScrollEl.scrollTop = _prevScrollTop;
+    }
     updateSummary();
-    // iOS keyboard-safe sticky total: bind the viewport listeners once so repeated
-    // renderSheet() calls do not accumulate stale listeners for removed bars.
-    (function bindInvoiceStickyViewport(){
-      if(!window.__invoiceStickyViewportBinding){
-        const sync = function(){
-          const sticky = document.getElementById('inv-sticky-total');
-          if(!sticky) return;
-          const vv = window.visualViewport;
-          if(!vv){ sticky.style.bottom = 'env(safe-area-inset-bottom,0px)'; return; }
-          const keyboardOffset = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop||0));
-          sticky.style.bottom = keyboardOffset + 'px';
-        };
-        const cleanup = function(){
-          if(window.visualViewport){
-            window.visualViewport.removeEventListener('resize', sync);
-            window.visualViewport.removeEventListener('scroll', sync);
-          }
-          window.removeEventListener('resize', sync);
-          if(window.__invoiceStickyViewportBinding && window.__invoiceStickyViewportBinding.sync === sync){
-            window.__invoiceStickyViewportBinding = null;
-          }
-          if(window.__invoiceStickyViewportCleanup === cleanup) window.__invoiceStickyViewportCleanup = null;
-        };
-        window.__invoiceStickyViewportBinding = { sync, cleanup };
-        window.__invoiceStickyViewportCleanup = cleanup;
-        if(window.visualViewport){
-          window.visualViewport.addEventListener('resize', sync);
-          window.visualViewport.addEventListener('scroll', sync);
-        }
-        window.addEventListener('resize', sync);
-      }
-      window.__invoiceStickyViewportBinding.sync();
-    })();
     // No-Purchase Reason chips (re-bound after every renderSheet rebuild)
     if(typeof bindNoPurchasePrompt === 'function') bindNoPurchasePrompt(cid);
 
-    document.getElementById('add-row').addEventListener('click', ()=>{
-      // Starting another line commits the current one first; an incomplete
-      // current line remains open and blocks the new line.
-      if(editingRowIndex !== null){
-        if(!commitEditingLine(editingRowIndex)){
-          showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
-          return;
-        }
+    activateCollapsedRow = function(idx){
+      if(isNaN(idx) || idx === activeRowIndex) return;
+      setActiveRow(idx);
+      focusQtyForRow(idx);
+    };
+    document.querySelectorAll('.inv-line-collapsed').forEach(el=>{
+      const activate = ()=>{
+        const line = el.closest('.inv-line');
+        if(line) activateCollapsedRow(parseInt(line.getAttribute('data-row'), 10));
+      };
+      el.addEventListener('click', activate);
+      el.addEventListener('keydown', e=>{
+        if(e.key==='Enter' || e.key===' '){ e.preventDefault(); activate(); }
+      });
+    });
+    // Collapse: tapping the blank part of the ACTIVE row (not the product box, the qty/price
+    // group, the delete button or the market details) folds it back to its summary line.
+    // Same state change as activating another row; no render. A tap that merely closed the
+    // product picker (see the outside-tap listener below) never collapses the row.
+    document.querySelectorAll('.inv-line').forEach(line=>{
+      line.addEventListener('click', e=>{
+        const idx = parseInt(line.getAttribute('data-row'), 10);
+        if(isNaN(idx) || idx !== activeRowIndex) return;
+        if(!rows[idx] || !rows[idx].productId) return;
+        if(e.target.closest('.inv-line-collapsed, .row-product-search, .prod-drop, .inv-line-qtyrate, .inv-line-del, .inv-line-market-details, input, button, a, label, select, textarea')) return;
+        if(document._invPickerTapPending){ document._invPickerTapPending = false; return; }
+        if(prodDropOpenRow !== null) closeAllProductDrops();
+        const focused = document.activeElement;
+        if(focused && focused !== document.body && typeof focused.blur === 'function') focused.blur();
+        activeRowIndex = null;
+        line.classList.remove('is-active');
+      });
+    });
+    document.querySelectorAll('.row-qty').forEach(el=>el.addEventListener('blur', e=>{
+      const key = e.target.dataset.row;
+      if(e.target.value.trim()==='' && qtyFocusPrevious.has(String(key))){
+        e.target.value = qtyFocusPrevious.get(String(key));
+        rows[key].qty = parseFloat(faToEnDigits(e.target.value))||0;
+        updateRowInfo(key);
+        updateSummary();
       }
+      qtyFocusPrevious.delete(String(key));
+    }));
+
+    document.getElementById('add-row').addEventListener('click', ()=>{
       // One active empty line at a time: once a blank line exists, repeated
       // taps open its product picker instead of creating another blank row.
       const emptyIdx = rows.findIndex(r=>!r.productId);
       if(emptyIdx >= 0){
+        activeRowIndex = emptyIdx;
         openProductDrop(emptyIdx);
         return;
       }
       rows.push({productId:'', qty:1, price:0, discount:0});
-      editingRowIndex = rows.length-1;
-      editingRowSnapshot = JSON.parse(JSON.stringify(rows[editingRowIndex]));
+      invalidateInvoiceMetrics();
+      activeRowIndex = rows.length-1;
       renderSheet();
       // Start the intended workflow immediately: Add Line → Product Search.
       setTimeout(()=>openProductDrop(rows.length-1), 0);
     });
-    const itemsWrap = document.getElementById('items-wrap');
-    if(itemsWrap){
-      itemsWrap.addEventListener('click', function(e){
-        const profit = e.target.closest('[data-profit-id]');
-        if(profit){
-          e.preventDefault(); e.stopPropagation();
-          profit.setAttribute('data-revealed', profit.getAttribute('data-revealed') === '1' ? '0' : '1');
-          return;
+    document.querySelectorAll('.row-del').forEach(el=>el.addEventListener('click', e=>{
+      const i = parseInt(e.currentTarget.dataset.row, 10);
+      if(rows.length>1 && i>=0 && i<rows.length){
+        // Stage 3 — keep activeRowIndex valid across the splice: dropping
+        // the active row itself clears it (and its picker, if any); dropping
+        // a row before it shifts it down by one so it still points at the
+        // same logical row after renderSheet() rebuilds the list.
+        if(activeRowIndex === i){
+          activeRowIndex = null;
+          closeAllProductDrops();
+        }else if(activeRowIndex !== null && i < activeRowIndex){
+          activeRowIndex -= 1;
         }
-        const commit = e.target.closest('[data-line-commit]');
-        if(commit){
-          e.preventDefault(); e.stopPropagation();
-          const idx = Number(commit.getAttribute('data-line-commit'));
-          if(!commitEditingLine(idx)) showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
-          return;
-        }
-        const cancel = e.target.closest('[data-line-cancel]');
-        if(cancel){
-          e.preventDefault(); e.stopPropagation();
-          const idx = Number(cancel.getAttribute('data-line-cancel'));
-          if(editingRowSnapshot && editingRowIndex === idx){ rows[idx] = editingRowSnapshot; }
-          editingRowSnapshot = null;
-          editingRowIndex = null;
-          if(rows.length > 1 && !rows[idx].productId){ rows.splice(idx,1); }
-          renderSheet();
-          return;
-        }
-        const close = e.target.closest('[data-line-close]');
-        if(close){
-          e.preventDefault(); e.stopPropagation();
-          const idx = Number(close.getAttribute('data-line-close'));
-          if(editingRowSnapshot && editingRowIndex === idx) rows[idx] = editingRowSnapshot;
-          editingRowSnapshot = null;
-          editingRowIndex = null;
-          renderSheet();
-          return;
-        }
-        const del = e.target.closest('[data-del]');
-        if(del){
-          e.preventDefault(); e.stopPropagation();
-          const i = Number(del.getAttribute('data-del'));
-          if(rows.length>1 && i>=0 && i<rows.length){
-            rows.splice(i,1);
-            editingRowIndex = null;
-            editingRowSnapshot = null;
-            renderSheet();
-          }
-          return;
-        }
-        const empty = e.target.closest('.inv-line-empty[data-row]');
-        if(empty){
-          e.preventDefault(); e.stopPropagation();
-          beginEditingLine(Number(empty.getAttribute('data-row')));
-          return;
-        }
-        const collapsed = e.target.closest('.inv-line-collapsed[data-row]');
-        if(collapsed){
-          const idx = Number(collapsed.getAttribute('data-row'));
-          beginEditingLine(idx);
-        }
-      });
-      itemsWrap.addEventListener('keydown', function(e){
-        if(e.key==='Enter' && editingRowIndex !== null && e.target.closest('.inv-line-editing') && !e.target.closest('.prod-drop-search')){
-          e.preventDefault();
-          if(!commitEditingLine(editingRowIndex)) showToast('قلم فعلی نامعتبر است — ابتدا آن را کامل کنید');
-          return;
-        }
-        if((e.key==='Enter' || e.key===' ') && e.target.closest('.inv-line-empty[data-row]')){
-          e.preventDefault();
-          beginEditingLine(Number(e.target.closest('.inv-line-empty').getAttribute('data-row')));
-          return;
-        }
-        if((e.key==='Enter' || e.key===' ') && e.target.closest('.inv-line-collapsed[data-row]')){
-          e.preventDefault();
-          beginEditingLine(Number(e.target.closest('.inv-line-collapsed').getAttribute('data-row')));
-        }
-      });
-    }
+        rows.splice(i, 1);
+        invalidateInvoiceMetrics();
+        renderSheet();
+      }
+    }));
 
     function closeAllProductDrops(){
       prodDropOpenRow = null;
@@ -2694,6 +2906,38 @@ function openInvoiceForm(cid, editInv){
         d.style.top = d.style.bottom = d.style.maxHeight = d.style.left = d.style.right = '';
       });
     }
+    // Stage 3 — expand/collapse a row in place. Pure class toggle: no
+    // renderSheet(), no outerHTML/innerHTML morph. Rows with no collapsed
+    // view yet (still empty, awaiting a product) are left alone here — they
+    // are not part of the collapse/expand toggle at all (see itemsHtml()).
+    function setActiveRow(idx){
+      idx = parseInt(idx, 10);
+      if(isNaN(idx) || idx < 0 || idx >= rows.length) return;
+      if(idx === activeRowIndex) return;
+      if(prodDropOpenRow !== null) closeAllProductDrops();
+
+      // A transient empty row is always appended by Add Item. Remove that
+      // true empty row from both state and DOM when the user switches away,
+      // so Save can never validate an invisible empty item.
+      if(activeRowIndex !== null && rows[activeRowIndex] && !rows[activeRowIndex].productId && activeRowIndex !== idx){
+        const removedIdx = activeRowIndex;
+        const emptyEl = document.querySelector(`.inv-line[data-row="${removedIdx}"]`);
+        rows.splice(removedIdx, 1);
+        invalidateInvoiceMetrics();
+        if(emptyEl) emptyEl.remove();
+        // Add Item appends the transient row, so populated row indexes remain stable.
+      }
+
+      activeRowIndex = idx;
+      document.querySelectorAll('.inv-line.is-active').forEach(el=>{
+        const rowIdx = parseInt(el.getAttribute('data-row'), 10);
+        if(rowIdx !== idx && rows[rowIdx] && rows[rowIdx].productId) el.classList.remove('is-active');
+        else if(rowIdx !== idx && (!rows[rowIdx] || !rows[rowIdx].productId)) el.classList.remove('is-active');
+      });
+      const newActiveEl = document.querySelector(`.inv-line[data-row="${idx}"]`);
+      if(newActiveEl) newActiveEl.classList.add('is-active');
+    }
+
     function positionProductDrop(dropEl, anchorEl){
       if(!dropEl || !anchorEl) return;
       const margin = 10;
@@ -2721,10 +2965,11 @@ function openInvoiceForm(cid, editInv){
     }
     function openProductDrop(idx){
       idx = String(idx);
-      // Already open for this row → do not rebuild
+      // Same row is a true toggle: tapping the product field again closes it.
+      // Do not rebuild the panel, which previously caused the close→reopen flash.
       if(prodDropOpenRow === idx){
-        const existing = document.querySelector(`.prod-drop[data-row="${idx}"]`);
-        if(existing && existing.classList.contains('is-open') && !existing.hidden) return;
+        closeAllProductDrops();
+        return;
       }
       if(prodDropOpening) return;
       prodDropOpening = true;
@@ -2758,11 +3003,12 @@ function openInvoiceForm(cid, editInv){
       }
     }
     function selectProduct(idx, productId){
-      const prod = data.products.find(p=>p.id===productId);
+      const prod = invoiceProduct(productId);
       if(!prod) return;
       rows[idx].productId = productId;
       delete rows[idx].buyPrice;
       rows[idx].price = prod.retail||prod.sell||0;
+      invalidateInvoiceMetrics();
       const searchEl = document.querySelector(`.row-product-search[data-row="${idx}"]`);
       if(searchEl){
         searchEl.value = prod.name;
@@ -2771,14 +3017,12 @@ function openInvoiceForm(cid, editInv){
       const priceEl = document.querySelector(`.row-price[data-row="${idx}"]`);
       if(priceEl){
         priceEl.value = (typeof formatLiveAmount==='function')
-          ? enToFaDigits(formatLiveAmount(String(rows[idx].price))).replace(/,/g,'٬')
-          : enToFaDigits(String(rows[idx].price));
+          ? formatLiveAmount(String(rows[idx].price))
+          : rows[idx].price;
       }
       closeAllProductDrops();
       updateRowInfo(idx);
       updateSummary();
-      const addRowBtn = document.getElementById('add-row');
-      if(addRowBtn && !rows.some(r=>!r.productId)) addRowBtn.hidden = false;
       // Hide No-Purchase prompt for products now in the basket
       try{
         const card = document.getElementById('npr-card');
@@ -2791,6 +3035,10 @@ function openInvoiceForm(cid, editInv){
           if(!remaining.length) card.style.display = 'none';
         }
       }catch(eNpr){ /* non-critical */ }
+      // Stage 3 — row stays active after picking a product; hand off
+      // straight to quantity entry (iOS Safari: wait a frame after the
+      // picker's DOM changes so focus isn't dropped).
+      focusQtyForRow(idx);
     }
 
     // Single gesture open via pointerup (avoids focus+click double-open on mobile)
@@ -2801,11 +3049,10 @@ function openInvoiceForm(cid, editInv){
         e.preventDefault();
         openProductDrop(el.getAttribute('data-row'));
       });
-      // Prevent keyboard / native focus behavior on the display field
-      el.addEventListener('focus', function(e){
-        e.preventDefault();
+      // Keep the field display-only. Opening is handled by pointerup alone;
+      // opening from focus as well caused a mobile close→reopen flash.
+      el.addEventListener('focus', function(){
         try{ el.blur(); }catch(err){}
-        openProductDrop(el.getAttribute('data-row'));
       });
     });
 
@@ -2822,6 +3069,13 @@ function openInvoiceForm(cid, editInv){
         e.stopPropagation();
         selectProduct(item.getAttribute('data-row'), item.getAttribute('data-pid'));
       });
+      dropEl.addEventListener('keydown', e=>{
+        const item = e.target.closest('.prod-drop-item');
+        if(item && (e.key==='Enter' || e.key===' ')){
+          e.preventDefault();
+          selectProduct(item.getAttribute('data-row'), item.getAttribute('data-pid'));
+        }
+      });
     });
 
     // Outside tap closes (listener bound once per document; the target it reads
@@ -2834,59 +3088,41 @@ function openInvoiceForm(cid, editInv){
     if(!document._invProdDropOutsideBound){
       document._invProdDropOutsideBound = true;
       document.addEventListener('pointerdown', function(e){
+        document._invPickerTapPending = false;      // every new touch starts clean
         if(e.target.closest('.prod-drop') || e.target.closest('.row-product-search')) return;
         const active = document._invProdDropActive;
         if(!active || active.openRow == null) return;
+        document._invPickerTapPending = true;       // this tap only closes the picker (see row click handler)
         active.close();
       }, true);
     }
 
-    // Price-info panel + profit privacy toggle: delegation survives updateRowInfo()
-    (function bindInvPriceInfoDelegation(){
-      const root = document.getElementById('modalRoot');
-      if(!root || root._invPriceInfoBound) return;
-      root._invPriceInfoBound = true;
-      root.addEventListener('click', function(e){
-        const profitLine = e.target.closest('.inv-row-profit-line');
-        if(profitLine && root.contains(profitLine)){
-          e.preventDefault();
-          e.stopPropagation();
-          profitLine.classList.toggle('is-revealed');
-          return;
-        }
-        const btn = e.target.closest('.inv-price-info-btn');
-        if(!btn || !root.contains(btn)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        const i = btn.getAttribute('data-row');
-        const panel = root.querySelector(`.inv-price-info-panel[data-row="${i}"]`);
-        if(!panel) return;
-        const willOpen = panel.hasAttribute('hidden');
-        root.querySelectorAll('.inv-price-info-panel').forEach(p=>p.setAttribute('hidden',''));
-        root.querySelectorAll('.inv-price-info-btn').forEach(b=>b.setAttribute('aria-expanded','false'));
-        if(willOpen){
-          panel.removeAttribute('hidden');
-          btn.setAttribute('aria-expanded','true');
-        }
-      });
-    })();
     document.querySelectorAll('.row-qty').forEach(el=>el.addEventListener('input', e=>{
       const idx = e.target.dataset.row;
       rows[idx].qty = parseFloat(faToEnDigits(e.target.value))||0;
-      formatInvoiceFaInput(e.target);
+      invalidateInvoiceMetrics();
       updateRowInfo(idx);
       updateSummary();
     }));
     document.querySelectorAll('.row-price').forEach(el=>el.addEventListener('input', e=>{
       const idx = e.target.dataset.row;
       rows[idx].price = parseFloat(faToEnDigits(e.target.value))||0;
-      formatInvoiceFaInput(e.target);
+      invalidateInvoiceMetrics();
       updateRowInfo(idx);
       updateSummary();
     }));
     function updateInvPaymentTotal(){
       const totalEl = document.getElementById('inv-payment-total');
-      if(totalEl) totalEl.textContent = toman(cashPaid+cardPaid+transferPaid+checkAmount) + ' ت';
+      if(totalEl){
+        const totalPaid = cashPaid+cardPaid+transferPaid+checkAmount;
+        totalEl.textContent = totalPaid > 0 ? toman(totalPaid) + ' ت' : '';
+      }
+      document.querySelectorAll('[data-payment-value]').forEach(el=>{
+        const method = el.getAttribute('data-payment-value');
+        const amount = method==='cash' ? cashPaid : method==='card' ? cardPaid : method==='transfer' ? transferPaid : checkAmount;
+        el.textContent = amount > 0 ? toman(amount) + ' ت' : '';
+        el.classList.toggle('is-filled', amount > 0);
+      });
     }
     function closeInvPaymentPanels(){
       document.querySelectorAll('.inv-payment-panel').forEach(panel=>panel.hidden = true);
@@ -2896,6 +3132,16 @@ function openInvoiceForm(cid, editInv){
         btn.classList.remove('is-active');
         btn.setAttribute('aria-expanded','false');
       });
+    }
+    function paymentAmountFor(method){
+      return method==='cash' ? cashPaid : method==='card' ? cardPaid : method==='transfer' ? transferPaid : checkAmount;
+    }
+    function setPaymentAmount(method, amount){
+      const value = Math.max(0, Number(amount)||0);
+      if(method==='cash') cashPaid=value;
+      else if(method==='card') cardPaid=value;
+      else if(method==='transfer') transferPaid=value;
+      else checkAmount=value;
     }
     document.querySelectorAll('.inv-payment-action').forEach(btn=>{
       btn.addEventListener('click', ()=>{
@@ -2911,7 +3157,21 @@ function openInvoiceForm(cid, editInv){
           btn.classList.add('is-active');
           btn.setAttribute('aria-expanded','true');
           const input = panel.querySelector('input[type="text"]');
-          if(input) setTimeout(()=>input.focus(), 0);
+          if(input){
+            input.value = pendingPayment[method] > 0 ? payInputText(pendingPayment[method]) : '';
+            setTimeout(()=>input.focus(), 0);
+          }
+          if(method==='check'){
+            // فیلد پنهان و فیلد دیداری هر دو از یک مقدار پر می‌شوند تا آنچه دیده می‌شود همان ذخیره شود.
+            const desiredDue = pendingPayment.checkDue || checkDue;
+            const due = panel.querySelector('#f-check-due');
+            if(due) due.value = desiredDue;
+            const dueVisible = panel.querySelector('.shamsi-date-field');
+            const jDue = (typeof isoToJalali === 'function') ? isoToJalali(desiredDue) : null;
+            if(dueVisible && jDue) dueVisible.value = enToFaDigits(jDue[0] + '/' + jDue[1] + '/' + jDue[2]);
+            const dueWrap = panel.querySelector('#check-due-wrap');
+            if(dueWrap && input && parseFloat(faToEnDigits(input.value))>0) dueWrap.style.display = 'block';
+          }
         }
       });
     });
@@ -2927,81 +3187,117 @@ function openInvoiceForm(cid, editInv){
           action.classList.remove('is-active');
           action.setAttribute('aria-expanded','false');
         }
+        const backdrop = document.querySelector('[data-payment-backdrop]');
+        if(backdrop) backdrop.hidden = true;
       });
     });
-    document.getElementById('f-cash').addEventListener('input', e=>{ cashPaid = parseFloat(faToEnDigits(e.target.value))||0; updateInvPaymentTotal(); updateSummary(); });
-    document.getElementById('f-card').addEventListener('input', e=>{ cardPaid = parseFloat(faToEnDigits(e.target.value))||0; updateInvPaymentTotal(); updateSummary(); });
-    document.getElementById('f-transfer').addEventListener('input', e=>{ transferPaid = parseFloat(faToEnDigits(e.target.value))||0; updateInvPaymentTotal(); updateSummary(); });
-    document.getElementById('f-check').addEventListener('input', e=>{
-      checkAmount = parseFloat(faToEnDigits(e.target.value))||0;
-      document.getElementById('check-due-wrap').style.display = checkAmount>0 ? 'block':'none';
-      updateInvPaymentTotal();
-      updateSummary();
+    ['cash','card','transfer','check'].forEach(method=>{
+      const id = method==='cash' ? 'f-cash' : method==='card' ? 'f-card' : method==='transfer' ? 'f-transfer' : 'f-check';
+      const input = document.getElementById(id);
+      if(input) input.addEventListener('input', e=>{
+        const el = e.target;
+        const v = parseFloat(faToEnDigits(el.value))||0;
+        pendingPayment[method] = v;
+        // keep the caret on the same digit after regrouping (counts digits/decimal point left of the caret)
+        let caret = null, digitsLeft = 0;
+        try {
+          if(document.activeElement === el && el.selectionStart != null){
+            caret = el.selectionStart;
+            digitsLeft = faToEnDigits(el.value.slice(0, caret)).replace(/[^0-9.]/g,'').length;
+          }
+        } catch(_e){ caret = null; }
+        const formatted = payInputText(v);
+        if(el.value !== formatted){
+          el.value = formatted;
+          if(caret != null){
+            let pos = 0, seen = 0;
+            while(pos < formatted.length && seen < digitsLeft){
+              if(/[0-9.]/.test(faToEnDigits(formatted.charAt(pos)))) seen++;
+              pos++;
+            }
+            try { el.setSelectionRange(pos, pos); } catch(_e2){}
+          }
+        }
+        if(method==='check'){
+          const dueWrap = document.getElementById('check-due-wrap');
+          if(dueWrap) dueWrap.style.display = v>0 ? 'block' : 'none';
+        }
+      });
     });
-    const invoiceDateEl = document.getElementById('f-date');
-    if(invoiceDateEl){
-      invoiceDateEl.addEventListener('input', e=>{ currentDate = e.target.value || currentDate; });
-      invoiceDateEl.addEventListener('change', e=>{ currentDate = e.target.value || currentDate; });
-    }
-    document.getElementById('f-check-due').addEventListener('change', e=>{ checkDue = e.target.value; });
+    document.querySelectorAll('.inv-payment-confirm').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const method = btn.getAttribute('data-payment-confirm');
+        const input = document.querySelector(`.inv-payment-panel[data-payment-panel="${method}"] input[type="text"]`);
+        const value = input ? parseFloat(faToEnDigits(input.value))||0 : 0;
+        pendingPayment[method] = value;
+        setPaymentAmount(method, value);
+        if(method==='check'){
+          const due = document.getElementById('f-check-due');
+          pendingPayment.checkDue = due ? due.value : checkDue;
+          checkDue = pendingPayment.checkDue || todayISO();
+        }
+        updateInvPaymentTotal();
+        updateSummary();
+        closeInvPaymentPanels();
+      });
+    });
+    // تاریخ فاکتور و تاریخ سررسید چک: هر تغییرِ picker در closure ثبت می‌شود تا re-render آن را گم نکند.
+    const invDateEl = document.getElementById('f-date');
+    if(invDateEl) invDateEl.addEventListener('input', e=>{ invoiceDateStr = e.target.value || todayISO(); });
+    const checkDueEl = document.getElementById('f-check-due');
+    if(checkDueEl) checkDueEl.addEventListener('input', e=>{
+      pendingPayment.checkDue = e.target.value;
+      checkDue = e.target.value || todayISO();
+    });
     document.getElementById('f-discount').addEventListener('input', e=>{
       let v = parseFloat(faToEnDigits(e.target.value))||0;
-      if(discountType==='percent'){
-        v = Math.min(100, Math.max(0, v));
-        if(String(v) !== e.target.value) e.target.value = v || '';
-      }
+      if(discountType==='percent') v = Math.min(100, Math.max(0, v));
       discount = v;
+      invalidateInvoiceMetrics();
       updateSummary();
     });
-    document.getElementById('f-discount-type').addEventListener('change', e=>{
-      discountType = e.target.value;
-      if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
-      renderSheet();
+    document.querySelectorAll('.inv-discount-type-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const nextType = btn.getAttribute('data-discount-type');
+        if(nextType===discountType) return;
+        discountType = nextType;
+        if(discountType==='percent') discount = Math.min(100, Math.max(0, discount));
+        invalidateInvoiceMetrics();
+        renderSheet();
+      });
     });
 
-    const invoiceSaveBtn = document.getElementById('save-invoice');
-    if(invoiceSaveBtn){
-      invoiceSaveBtn.__invoiceFocusInvalidRow = function(rowIndex){
-        const idx = Number(rowIndex);
-        if(!Number.isInteger(idx) || idx < 0 || idx >= rows.length) return;
-        editingRowIndex = idx;
-        editingRowSnapshot = JSON.parse(JSON.stringify(rows[idx]));
-        renderSheet();
-        requestAnimationFrame(function(){
-          const root = document.querySelector('#modalRoot .sheet');
-          const row = root && root.querySelector('.inv-line-editing[data-row="'+idx+'"]');
-          const control = row && row.querySelector('.row-product-search, .row-qty, .row-price');
-          if(control){
-            try{ control.setAttribute('aria-invalid','true'); control.focus({preventScroll:true}); control.scrollIntoView({behavior:'smooth',block:'center'}); }catch(_e){ try{ control.focus(); }catch(__){} }
-          }
-        });
-      };
-    }
     document.getElementById('save-invoice').addEventListener('click', async (e)=>{
       const btn = e.currentTarget;
       if(btn.disabled) return; // جلوگیری از ثبت دوباره با کلیک سریع/پی‌درپی
       btn.disabled = true;
-      const date = currentDate || todayISO();
+      const date = document.getElementById('f-date').value || todayISO();
 
-      // اعتبارسنجی: هر ردیف باید جنس مشخصی داشته باشه (چون فیلد جستجو دیگه پیش‌فرض نداره)
-      const noProductIndex = rows.findIndex(r=> !r.productId || !data.products.find(p=>p.id===r.productId));
-      if(noProductIndex >= 0){
+      // اعتبارسنجی: ردیف‌های خالیِ draft (بدون جنس انتخاب‌شده) اگر حداقل یک ردیف
+      // معتبر دیگر وجود داشته باشد، نباید مانع ثبت فاکتور شوند؛ اما ردیفی که
+      // productId دارد ولی در لیست جنس‌ها پیدا نمی‌شود (نامعتبر) همچنان خطا می‌دهد.
+      const invalidProductRow = rows.find(r=> r.productId && !invoiceProduct(r.productId));
+      if(invalidProductRow){
         showToast('برای هر ردیف باید یک جنس از لیست انتخاب کنی.');
-        focusValidationControl(btn, noProductIndex);
+        btn.disabled = false;
+        return;
+      }
+      const validRows = rows.filter(r=> r.productId && invoiceProduct(r.productId));
+      if(validRows.length===0){
+        showToast('برای هر ردیف باید یک جنس از لیست انتخاب کنی.');
         btn.disabled = false;
         return;
       }
 
       // Business validation: discount invariants must hold before any stock/payment
       // mutation or persistence. UI clamping is not sufficient protection.
-      const invalidRowIndex = rows.findIndex(r=> {
+      const invalidRow = rows.find(r=> {
         const gross = (Number(r.qty)||0) * (Number(r.price)||0);
         const rowDiscount = Number(r.discount)||0;
         return !(r.qty>0) || r.price<0 || rowDiscount<0 || rowDiscount>gross;
       });
-      if(invalidRowIndex >= 0){
+      if(invalidRow){
         showToast('مقادیر فاکتور نامعتبر است.\n\nتعداد باید بزرگ‌تر از صفر، قیمت و تخفیف نباید منفی باشند و تخفیف هر ردیف نباید از مبلغ همان ردیف بیشتر باشد.');
-        focusValidationControl(btn, invalidRowIndex);
         btn.disabled = false;
         return;
       }
@@ -3035,8 +3331,8 @@ function openInvoiceForm(cid, editInv){
         return;
       }
 
-      const items = rows.map(r=>{
-        const prod = data.products.find(p=>p.id===r.productId);
+      const items = validRows.map(r=>{
+        const prod = invoiceProduct(r.productId);
         return { productId:r.productId, name:prod.name, qty:r.qty, price:r.price, buyPrice:(r.buyPrice!==undefined?r.buyPrice:prod.buy), discount:r.discount||0, weight:(prod.packageWeight||0)*r.qty };
       });
 
@@ -3053,10 +3349,15 @@ function openInvoiceForm(cid, editInv){
       }
       const stockCheck = validateSaleAvailability(items, creditStock, creditFifo);
       if(!stockCheck.ok){
-        showToast(stockCheck.error || 'موجودی کافی نیست یا موجودی FIFO با موجودی کالا ناسازگار است.');
+        showToast(stockCheck.error || 'موجودی کافی نیست یا موجودی FIFO با موجودی کالا ناسازگار است.', {type:'error'});
         btn.disabled = false;
         return;
       }
+
+      const saveMessage = editInv
+        ? 'با ویرایش این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟'
+        : 'فاکتور ثبت شود؟ تغییرات فاکتور پس از تأیید ثبت خواهند شد.';
+      if(!(await appConfirm(saveMessage))){ btn.disabled = false; return; }
 
       const total = invoiceTotal();
       const paid = cashPaid+cardPaid+transferPaid+checkAmount;
@@ -3069,8 +3370,6 @@ function openInvoiceForm(cid, editInv){
           btn.disabled = false;
           return;
         }
-        if(!(await appConfirm('با ویرایش این فاکتور، موجودی انبار و حساب مشتری اصلاح خواهد شد. ادامه می‌دهید؟'))){ btn.disabled = false; return; }
-
         // اسنپ‌شات کامل قبل از هر mutation — اگر saveData() در انتها شکست بخورد،
         // data در حافظه دقیقاً به همین حالت (قبل از هر تغییری) برمی‌گردد تا با
         // آخرین نسخه‌ی موفق در IndexedDB ناهماهنگ نماند.
@@ -3106,7 +3405,7 @@ function openInvoiceForm(cid, editInv){
           editInv.newBalance = before.newBalance;
           applyInvoiceStockEffects(oldItemsSnap, oldDateSnap, editInv, false);
           pushInvoicePayments(cid, editInv, before.cashPaid, before.cardPaid, before.transferPaid, before.checkPaid, checkDue, checkMeta);
-          showToast((e && e.message) || 'موجودی کافی نیست یا موجودی FIFO با موجودی کالا ناسازگار است.');
+          showToast((e && e.message) || 'موجودی کافی نیست یا موجودی FIFO با موجودی کالا ناسازگار است.', {type:'error'});
           btn.disabled = false;
           return;
         }
@@ -3128,8 +3427,6 @@ function openInvoiceForm(cid, editInv){
           btn.disabled = false;
           return;
         }
-        if(typeof clearNavigationGuard==='function') clearNavigationGuard();
-        if(typeof clearModalCloseGuard==='function') clearModalCloseGuard();
         closeModal(); openInvoiceDetail(editInv.id, cid); render();
         showToast('فاکتور ویرایش شد؛ موجودی و حساب مشتری اصلاح شد');
         return;
@@ -3138,19 +3435,21 @@ function openInvoiceForm(cid, editInv){
       const newInv = {
         id:uid(), number:null, customerId:cid, date, items, total, discount, discountType,
         prevBalance, cashPaid, cardPaid, transferPaid, checkPaid:checkAmount, newBalance,
+        ...(opts.visitId ? {visitId: opts.visitId} : {}),
       };
       // اسنپ‌شات کامل قبل از هر mutation — اگر saveData() در انتها شکست بخورد،
       // data در حافظه دقیقاً به همین حالت (قبل از هر تغییری) برمی‌گردد تا با
       // آخرین نسخه‌ی موفق در IndexedDB ناهماهنگ نماند.
       const previousData = JSON.parse(JSON.stringify(data));
       try{
+        newInv.number = nextInvoiceNumber();
         applyInvoiceStockEffects(items, date, newInv, true);
       }catch(e){
-        showToast((e && e.message) || 'موجودی کافی نیست یا موجودی FIFO با موجودی کالا ناسازگار است.');
+        restoreDataInPlace(previousData);
+        showToast((e && e.message) || 'موجودی کافی نیست یا موجودی FIFO با موجودی کالا ناسازگار است.', {type:'error'});
         btn.disabled = false;
         return;
       }
-      newInv.number = nextInvoiceNumber();
       data.invoices.push(newInv);
       pushInvoicePayments(cid, newInv, cashPaid, cardPaid, transferPaid, checkAmount, checkDue, null);
       try{
@@ -3161,6 +3460,10 @@ function openInvoiceForm(cid, editInv){
         restoreDataInPlace(previousData);
         btn.disabled = false;
         return;
+      }
+      // Operational Action acknowledgement only; never changes invoice/stock/FIFO data.
+      if (typeof recordInvoiceActionAcks === 'function') {
+        try { recordInvoiceActionAcks(cid, newInv); } catch (eAckInvoice) { console.warn('Action ack failed:', eAckInvoice); }
       }
       // Game Center hooks — CREATE only (edit path returns earlier). Never rolls back CRM.
       if (typeof gameOnInvoice === 'function') {
@@ -3177,8 +3480,6 @@ function openInvoiceForm(cid, editInv){
           console.warn('Game hook failed:', e);
         }
       }
-      if(typeof clearNavigationGuard==='function') clearNavigationGuard();
-      if(typeof clearModalCloseGuard==='function') clearModalCloseGuard();
       render(); showToast('فاکتور ثبت شد');
       openSheet(`
         <h3>فاکتور ثبت و توی حساب مشتری ذخیره شد</h3>
@@ -3217,7 +3518,7 @@ function openAddSupplier(){
       <div class="empty" style="padding:4px 0 0;text-align:right;font-size:.75rem;">بدهی که از قبل از استفاده از این برنامه داری رو اینجا بزن.</div>
     </div>
     <div class="btn-row"><button class="btn" id="save-supplier">ذخیره</button></div>
-  `);
+  `, {dirtyCheck:true});
   document.getElementById('save-supplier').addEventListener('click', async (e)=>{
     await withSubmitGuard(e.currentTarget, async ()=>{
       const name = document.getElementById('f-name').value.trim();
@@ -3267,548 +3568,9 @@ function openPurchaseReturnReasonPicker(onPick){
 
 
 function openSupplierDetail(sid){
-  if (typeof isSpaShell === 'function' && isSpaShell() && typeof AppRouter !== 'undefined' && AppRouter.navigate) {
-    AppRouter.navigate('/supplier', { id: sid });
-    return;
-  }
-  const s = data.suppliers.find(x=>x.id===sid);
-  if(!s) return;
-  const t = supplierTotals(sid);
-  const purchases = (s.purchases||[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const payments = (s.payments||[]).slice().sort((a,b)=>new Date(b.date)-new Date(a.date));
-  const isSupOff = s.active===false;
-  openSheet(`
-    <h3>${esc(s.name)}${isSupOff?' <span class="badge pending">غیرفعال</span>':''}</h3>
-    ${s.phone?`<div class="empty" style="padding:0 0 8px;text-align:right;">تلفن: ${esc(s.phone)}</div>`:''}
-    ${s.openingBalance?`<div class="empty" style="padding:0 0 8px;text-align:right;">مانده بدهی اولیه (قبل از این برنامه): ${toman(Math.abs(s.openingBalance))} ت</div>`:''}
-    <div class="cards">
-      <div class="card"><div class="label">جمع خرید</div><div class="value">${toman(t.purchaseTotal)} ت</div></div>
-      <div class="card"><div class="label">مانده بدهی شما</div><div class="value" style="color:${t.balance>0?'var(--red)':'var(--olive-dark)'}">${toman(Math.abs(t.balance))} ت</div></div>
-      ${t.returnTotal>0?`<div class="card"><div class="label">جمع برگشتی</div><div class="value">${toman(t.returnTotal)} ت</div></div>`:''}
-    </div>
-    <div class="btn-row">
-      <button class="btn" id="add-purchase">+ خرید جدید</button>
-      <button class="btn secondary" id="add-suppay">+ پرداخت</button>
-      <button class="btn secondary" id="edit-supplier">ویرایش</button>
-      <button class="btn secondary" id="toggle-supplier-active">${isSupOff?'فعال‌سازی تأمین‌کننده':'غیرفعال‌سازی تأمین‌کننده'}</button>
-    </div>
-    <h2 class="section-title">خریدها</h2>
-    ${purchases.length===0?`<div class="empty">خریدی ثبت نشده</div>`:purchases.map(p=>{
-      const returnedQty = (p.returns||[]).reduce((a,r)=>a+(r.qty||0),0);
-      const returnedAmount = (p.returns||[]).reduce((a,r)=>a+(r.amount||0),0);
-      const remainingAmount = p.amount - returnedAmount;
-      const lines = purchaseLines(p);
-      const linesLabel = lines.length ? lines.map(l=>`${esc(l.name)} × ${l.qty}`).join('، ') : '';
-      return `
-      <div class="ledger-row"><span class="name">${faDate(p.date)} ${p.desc?`<span class="sub">${esc(p.desc)}</span>`:''}${linesLabel?`<span class="sub">${linesLabel}</span>`:''}${returnedAmount>0?`<span class="sub">برگشت‌شده: ${toman(returnedAmount)} ت${p.productId?` (${returnedQty} از ${p.qty})`:''}</span>`:''}</span><span class="filler"></span><span class="amount">${toman(p.amount)} ت${remainingAmount>0?`<br><button class="btn secondary small" data-return-purchase="${esc(p.id)}">برگشت</button>`:''}</span></div>
-    `;}).join('')}
-    <h2 class="section-title">پرداختی‌ها</h2>
-    ${payments.length===0?`<div class="empty">پرداختی ثبت نشده</div>`:payments.map((p,pidx)=>{
-      const isCheck = p.method==='check';
-      const face = isCheck ? (typeof p.faceAmount==='number' ? p.faceAmount : p.amount) : p.amount;
-      const st = isCheck ? (p.status||'pending') : '';
-      const stLabel = st==='cleared'?'پرداخت‌شده':(st==='bounced'?'برگشتی':'در جریان');
-      const stBadge = st==='cleared'?'cleared':(st==='bounced'?'pending':'pending');
-      const nameBits = isCheck
-        ? `چک${p.checkNumber?` #${esc(p.checkNumber)}`:''}${p.bank?` — ${esc(p.bank)}`:''}${p.dueDate?` <span class="sub">سررسید ${faDate(p.dueDate)}</span>`:''}${p.note?` <span class="sub">(${esc(p.note)})</span>`:''}`
-        : `${faDate(p.date)}${p.note?` <span class="sub">(${esc(p.note)})</span>`:''}`;
-      return `<div class="ledger-row">
-        <span class="name">${isCheck?faDate(p.issueDate||p.date)+' — ':''}${nameBits}</span>
-        <span class="filler"></span>
-        <span class="amount">${toman(isCheck?face:p.amount)} ت${isCheck?` <span class="badge ${stBadge}">${stLabel}</span>`:''}
-          ${isCheck?`<br>
-            <button class="btn secondary small" data-sup-check-status="${pidx}">وضعیت</button>
-            <button class="btn secondary small" data-sup-check-edit="${pidx}">ویرایش</button>
-            <button class="btn danger small" data-sup-pay-del="${pidx}">حذف</button>
-          `:`<br><button class="btn danger small" data-sup-pay-del="${pidx}">حذف</button>`}
-        </span>
-      </div>`;
-    }).join('')}
-  `);
-  document.getElementById('add-purchase').addEventListener('click', ()=>{
-    let multiItems = [];
-    openSheet(`
-      <h3>خرید جدید از ${esc(s.name)}</h3>
-      <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
-      <div id="single-item-fields">
-        <div class="field"><label>مبلغ کل خرید (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
-        <div class="field">
-          <label>کالای مرتبط (اختیاری — برای افزایش خودکار موجودی)</label>
-          <select id="f-product">
-            <option value="">— بدون کالای مشخص —</option>
-            ${data.products.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="field"><label>تعداد کالا (در صورت انتخاب کالا)</label><input id="f-qty" type="text" inputmode="decimal"></div>
-      </div>
-      <div class="btn-row"><button class="btn secondary small" id="toggle-multi-item" type="button">+ چند قلم کالا در یک خرید</button></div>
-      <div id="multi-item-fields" style="display:none;">
-        <div id="multi-item-rows"></div>
-        <div class="field" style="display:flex;gap:6px;">
-          <select id="mi-product" style="flex:2;">
-            <option value="">انتخاب کالا</option>
-            ${data.products.filter(p=>p.active!==false).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
-          </select>
-          <input id="mi-qty" type="text" inputmode="decimal" placeholder="تعداد" style="flex:1;">
-          <input id="mi-price" type="text" inputmode="decimal" placeholder="قیمت واحد" style="flex:1;">
-        </div>
-        <div class="btn-row"><button class="btn secondary small" id="add-item-row" type="button">+ افزودن قلم</button></div>
-        <div class="empty" style="padding:4px 0;text-align:right;">جمع کل اقلام (خودکار): <b id="multi-item-total">۰</b> تومان</div>
-      </div>
-      <div class="field"><label>توضیح (اختیاری)</label><input id="f-desc"></div>
-      <div class="btn-row"><button class="btn" id="save-purchase">ثبت</button></div>
-    `);
-    function renderMultiRows(){
-      document.getElementById('multi-item-rows').innerHTML = multiItems.map((it,idx)=>`
-        <div class="ledger-row"><span class="name">${esc((data.products.find(x=>x.id===it.productId)||{}).name||'?')} × ${it.qty} @ ${toman(it.unitCost)} ت</span><span class="filler"></span><span class="amount">${toman(it.qty*it.unitCost)} ت<br><button class="btn danger small" data-del-item="${idx}" type="button">حذف</button></span></div>
-      `).join('');
-      document.getElementById('multi-item-total').textContent = toman(multiItems.reduce((s2,it)=>s2+it.qty*it.unitCost,0));
-      document.querySelectorAll('[data-del-item]').forEach(btn=>{
-        btn.addEventListener('click', ()=>{ multiItems.splice(+btn.dataset.delItem,1); renderMultiRows(); });
-      });
-    }
-    document.getElementById('toggle-multi-item').addEventListener('click', ()=>{
-      const single = document.getElementById('single-item-fields');
-      const multi = document.getElementById('multi-item-fields');
-      const goingMulti = multi.style.display==='none';
-      multi.style.display = goingMulti?'':'none';
-      single.style.display = goingMulti?'none':'';
-      document.getElementById('toggle-multi-item').textContent = goingMulti?'– برگشت به حالت مبلغ کل / یک کالا':'+ چند قلم کالا در یک خرید';
-    });
-    document.getElementById('add-item-row').addEventListener('click', ()=>{
-      const productId = document.getElementById('mi-product').value;
-      const qty = numVal(document.getElementById('mi-qty'));
-      const unitCost = numVal(document.getElementById('mi-price'));
-      if(!productId){ showToast('کالا رو انتخاب کن'); return; }
-      const prodCheck = data.products.find(x=>x.id===productId);
-      if(!prodCheck){ showToast('کالای انتخاب‌شده معتبر نیست'); return; }
-      if(qty<=0){ showToast('تعداد رو وارد کن'); return; }
-      if(unitCost<=0){ showToast('قیمت واحد باید بیشتر از صفر باشد'); return; }
-      let itemId = uid();
-      while(multiItems.some(it=>it.id===itemId)) itemId = uid();
-      multiItems.push({id:itemId, productId, qty, unitCost});
-      document.getElementById('mi-product').value='';
-      document.getElementById('mi-qty').value='';
-      document.getElementById('mi-price').value='';
-      renderMultiRows();
-    });
-    document.getElementById('save-purchase').addEventListener('click', async (e)=>{
-      await withSubmitGuard(e.currentTarget, async ()=>{
-      const date = document.getElementById('f-date').value || todayISO();
-      const desc = document.getElementById('f-desc').value.trim();
-      const isMulti = document.getElementById('multi-item-fields').style.display!=='none';
-      s.purchases = s.purchases||[];
-      if(isMulti){
-        if(multiItems.length===0){ showToast('حداقل یک قلم کالا اضافه کن'); throw new Error('validation'); }
-        for(const it of multiItems){
-          if(!it.productId || !data.products.find(x=>x.id===it.productId)){ showToast('یکی از کالاها معتبر نیست'); return; }
-          if(!(it.qty>0)){ showToast('تعداد همه اقلام باید بیشتر از صفر باشد'); return; }
-          if(!(it.unitCost>0)){ showToast('قیمت واحد همه اقلام باید بیشتر از صفر باشد'); return; }
-        }
-        const amount = multiItems.reduce((s2,it)=>s2+it.qty*it.unitCost,0);
-        const usedIds = new Set();
-        const items = multiItems.map(it=>{
-          let id = it.id || uid();
-          while(usedIds.has(id)) id = uid();
-          usedIds.add(id);
-          return {
-            id, productId: it.productId, name:(data.products.find(x=>x.id===it.productId)||{}).name||'',
-            qty: it.qty, unitCost: it.unitCost, lineAmount: it.qty*it.unitCost,
-          };
-        });
-        const purchase = {id:uid(), date, amount, desc, productId:'', qty:0, items};
-        // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور.
-        const previousData = JSON.parse(JSON.stringify(data));
-        s.purchases.push(purchase);
-        applyPurchaseStockEffects(purchase, s.name);
-        try{
-          await saveData();
-        }catch(saveErr){
-          restoreDataInPlace(previousData);
-          throw saveErr;
-        }
-        openSupplierDetail(sid); render(); showToast('خرید ثبت شد');
-        return;
-      } else {
-        const amount = numVal(document.getElementById('f-amount'));
-        const productId = document.getElementById('f-product').value;
-        const qty = numVal(document.getElementById('f-qty'));
-        if(amount<=0){ showToast('مبلغ رو وارد کن'); throw new Error('validation'); }
-        if(productId){
-          const prod = data.products.find(x=>x.id===productId);
-          if(!prod){ showToast('کالای انتخاب‌شده معتبر نیست'); throw new Error('validation'); }
-          if(!(qty>0)){ showToast('تعداد کالا باید بیشتر از صفر باشد'); throw new Error('validation'); }
-          // قیمت واحد ضمنی = مبلغ/تعداد؛ با amount>0 و qty>0 خودبه‌خود >0 است
-        }
-        const purchase = {id:uid(), date, amount, desc, productId, qty};
-        // اسنپ‌شات کامل قبل از هر mutation — همان الگوی ثبت/ویرایش فاکتور.
-        const previousData = JSON.parse(JSON.stringify(data));
-        s.purchases.push(purchase);
-        applyPurchaseStockEffects(purchase, s.name);
-        try{
-          await saveData();
-        }catch(saveErr){
-          restoreDataInPlace(previousData);
-          throw saveErr;
-        }
-        openSupplierDetail(sid); render(); showToast('خرید ثبت شد');
-      }
-      });
-    });
-  });
-  document.getElementById('add-suppay').addEventListener('click', ()=>{
-    openSheet(`
-      <h3>پرداخت به ${esc(s.name)}</h3>
-      <div class="field">
-        <label>روش پرداخت</label>
-        <select id="f-method">
-          <option value="cash">نقد / کارت / انتقال</option>
-          <option value="check">چک</option>
-        </select>
-      </div>
-      <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal"></div>
-      <div class="field"><label>تاریخ پرداخت / صدور</label>${shamsiDateInputHTML('f-date', todayISO())}</div>
-      <div id="check-fields" style="display:none;">
-        <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', todayISO())}</div>
-        <div class="field"><label>شماره چک</label><input id="f-check-num"></div>
-        <div class="field"><label>بانک</label><input id="f-bank"></div>
-      </div>
-      <div class="field"><label>توضیح (اختیاری)</label><input id="f-note"></div>
-      <div class="btn-row"><button class="btn" id="save-suppay">ثبت</button></div>
-    `);
-    const methodEl = document.getElementById('f-method');
-    const checkFields = document.getElementById('check-fields');
-    methodEl.addEventListener('change', ()=>{
-      checkFields.style.display = methodEl.value==='check' ? '' : 'none';
-    });
-    document.getElementById('save-suppay').addEventListener('click', async (e)=>{
-      await withSubmitGuard(e.currentTarget, async ()=>{
-      const amount = numVal(document.getElementById('f-amount'));
-      const date = document.getElementById('f-date').value || todayISO();
-      const method = methodEl.value;
-      const note = (document.getElementById('f-note').value||'').trim();
-      if(amount<=0){ showToast('مبلغ رو وارد کن'); throw new Error('validation'); }
-      s.payments = s.payments||[];
-      if(method==='check'){
-        const dueDate = document.getElementById('f-due').value || date;
-        const checkNumber = (document.getElementById('f-check-num').value||'').trim();
-        const bank = (document.getElementById('f-bank').value||'').trim();
-        // amount در مانده لحاظ می‌شود؛ faceAmount مبلغ اسمی چک است (برای برگشتی)
-        s.payments.push({
-          id: uid(),
-          date,
-          amount,
-          faceAmount: amount,
-          method: 'check',
-          checkNumber,
-          bank,
-          issueDate: date,
-          dueDate,
-          status: 'pending',
-          note,
-        });
-      } else {
-        s.payments.push({id: uid(), date, amount, method: 'cash', note});
-      }
-      await saveData(); openSupplierDetail(sid); render(); showToast('پرداخت ثبت شد');
-      });
-    });
-  });
-
-  // حذف پرداخت نقدی یا چک — با حذف، مبلغ از جمع پرداخت‌ها خارج و مانده اصلاح می‌شود
-  // توجه: pidx مربوط به آرایهٔ مرتب‌شدهٔ payments است؛ ایندکس واقعی با indexOf گرفته می‌شود
-  document.querySelectorAll('[data-sup-pay-del]').forEach(btn=>{
-    btn.addEventListener('click', async (e)=>{
-      await withSubmitGuard(e.currentTarget, async ()=>{
-        const pidx = parseInt(btn.dataset.supPayDel, 10);
-        const p = payments[pidx];
-        if(!p) throw new Error('validation');
-        const realIdx = (s.payments||[]).indexOf(p);
-        if(realIdx<0) throw new Error('validation');
-        const label = p.method==='check' ? ('چک'+(p.checkNumber?(' #'+p.checkNumber):'')) : 'پرداخت';
-        if(!(await appConfirm('«'+label+'» به مبلغ '+toman(p.method==='check'?(p.faceAmount||p.amount):p.amount)+' تومان حذف شود؟\nمانده حساب تامین‌کننده اصلاح می‌شود.'))) throw new Error('validation');
-        s.payments.splice(realIdx, 1);
-        await saveData(); openSupplierDetail(sid); render(); showToast('حذف شد');
-      });
-    });
-  });
-
-  // چرخش وضعیت چک: در جریان → پرداخت‌شده → برگشتی → در جریان
-  // برگشتی: amount=0 تا از مانده کم نشود؛ faceAmount حفظ می‌شود
-  document.querySelectorAll('[data-sup-check-status]').forEach(btn=>{
-    btn.addEventListener('click', async ()=>{
-      const pidx = parseInt(btn.dataset.supCheckStatus, 10);
-      const p = payments[pidx];
-      if(!p || p.method!=='check') return;
-      const order = ['pending','cleared','bounced'];
-      const cur = p.status||'pending';
-      const next = order[(order.indexOf(cur)+1) % order.length];
-      const face = typeof p.faceAmount==='number' ? p.faceAmount : p.amount;
-      p.faceAmount = face;
-      p.status = next;
-      p.amount = (next==='bounced') ? 0 : face;
-      await saveData(); openSupplierDetail(sid); render();
-      showToast(next==='cleared'?'چک پرداخت‌شده شد':(next==='bounced'?'چک برگشتی شد — از مانده حذف شد':'چک در جریان شد'));
-    });
-  });
-
-  document.querySelectorAll('[data-sup-check-edit]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const pidx = parseInt(btn.dataset.supCheckEdit, 10);
-      const p = payments[pidx];
-      if(!p || p.method!=='check') return;
-      const face = typeof p.faceAmount==='number' ? p.faceAmount : p.amount;
-      openSheet(`
-        <h3>ویرایش چک پرداختی</h3>
-        <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal" value="${face||''}"></div>
-        <div class="field"><label>تاریخ صدور</label>${shamsiDateInputHTML('f-date', p.issueDate||p.date||todayISO())}</div>
-        <div class="field"><label>تاریخ سررسید</label>${shamsiDateInputHTML('f-due', p.dueDate||todayISO())}</div>
-        <div class="field"><label>شماره چک</label><input id="f-check-num" value="${esc(p.checkNumber||'')}"></div>
-        <div class="field"><label>بانک</label><input id="f-bank" value="${esc(p.bank||'')}"></div>
-        <div class="field"><label>توضیح</label><input id="f-note" value="${esc(p.note||'')}"></div>
-        <div class="field">
-          <label>وضعیت</label>
-          <select id="f-status">
-            <option value="pending" ${(p.status||'pending')==='pending'?'selected':''}>در جریان</option>
-            <option value="cleared" ${p.status==='cleared'?'selected':''}>پرداخت‌شده</option>
-            <option value="bounced" ${p.status==='bounced'?'selected':''}>برگشتی</option>
-          </select>
-        </div>
-        <div class="btn-row"><button class="btn" id="save-sup-check-edit">ذخیره</button></div>
-      `);
-      document.getElementById('save-sup-check-edit').addEventListener('click', async ()=>{
-        const amount = numVal(document.getElementById('f-amount'));
-        if(amount<=0){ showToast('مبلغ رو وارد کن'); return; }
-        const status = document.getElementById('f-status').value || 'pending';
-        p.faceAmount = amount;
-        p.amount = (status==='bounced') ? 0 : amount;
-        p.status = status;
-        p.issueDate = document.getElementById('f-date').value || todayISO();
-        p.date = p.issueDate;
-        p.dueDate = document.getElementById('f-due').value || p.issueDate;
-        p.checkNumber = (document.getElementById('f-check-num').value||'').trim();
-        p.bank = (document.getElementById('f-bank').value||'').trim();
-        p.note = (document.getElementById('f-note').value||'').trim();
-        await saveData(); openSupplierDetail(sid); render(); showToast('چک ویرایش شد');
-      });
-    });
-  });
-
-  document.getElementById('edit-supplier').addEventListener('click', ()=>{
-    openSheet(`
-      <h3>ویرایش تامین‌کننده</h3>
-      <div class="field"><label>نام</label><input id="f-name" value="${esc(s.name)}"></div>
-      <div class="field"><label>شماره تماس</label><input id="f-phone" value="${esc(s.phone||'')}"></div>
-      <div class="field">
-        <label>مانده بدهی اولیه (تومان) — برای اصلاح مانده</label>
-        <input id="f-opening" type="text" inputmode="decimal" value="${s.openingBalance?s.openingBalance:''}">
-      </div>
-      <div class="btn-row"><button class="btn" id="save-sup-edit">ذخیره</button></div>
-    `);
-    document.getElementById('save-sup-edit').addEventListener('click', async (e)=>{
-      await withSubmitGuard(e.currentTarget, async ()=>{
-        const name = document.getElementById('f-name').value.trim();
-        if(!name){ showToast('نام رو وارد کن'); throw new Error('validation'); }
-        s.name = name; s.phone = document.getElementById('f-phone').value.trim();
-        s.openingBalance = numVal(document.getElementById('f-opening'));
-        await saveData(); openSupplierDetail(sid); render(); showToast('ذخیره شد');
-      });
-    });
-  });
-  // FIX 1: archive/deactivate only — never remove the supplier object or its
-  // historical purchases/payments/checks. No FIFO/inventory function is called here.
-  document.getElementById('toggle-supplier-active').addEventListener('click', async (e)=>{
-    await withSubmitGuard(e.currentTarget, async ()=>{
-      const willDeactivate = s.active!==false;
-      const msg = willDeactivate
-        ? `این تأمین‌کننده غیرفعال شود؟ اطلاعات و سوابق خرید و پرداخت حذف نخواهد شد.`
-        : `تامین‌کننده «${s.name}» دوباره فعال شود؟`;
-      if(!(await appConfirm(msg))) throw new Error('validation');
-      s.active = (s.active===false) ? true : false;
-      await saveData(); openSupplierDetail(sid); render();
-      showToast(s.active===false ? 'تأمین‌کننده غیرفعال شد' : 'تأمین‌کننده فعال شد');
-    });
-  });
-  document.querySelectorAll('[data-return-purchase]').forEach(btn=>{
-    btn.addEventListener('click', ()=>{
-      const p = (s.purchases||[]).find(x=>x.id===btn.dataset.returnPurchase);
-      if(!p) return;
-      const isMultiItem = !p.productId && Array.isArray(p.items) && p.items.length>0;
-      const returnedQtySoFar = (p.returns||[]).reduce((a,r)=>a+(r.qty||0),0);
-      const returnedAmountSoFar = (p.returns||[]).reduce((a,r)=>a+(r.amount||0),0);
-      const remainingQty = purchaseReturnRemainingQty(p);
-      const remainingAmount = purchaseReturnRemainingAmount(p);
-      const unitPrice = (p.productId && p.qty>0) ? (p.amount/p.qty) : 0;
-      const retLines = purchaseLines(p);
-      const retLinesLabel = (!p.productId && retLines.length) ? ' — ' + retLines.map(l=>`${esc(l.name)} × ${l.qty}`).join('، ') : '';
-      if(isMultiItem){
-        openSheet(`
-          <h3>برگشت خرید از ${esc(s.name)}</h3>
-          <div class="empty" style="padding:0 0 8px;text-align:right;">${faDate(p.date)}${retLinesLabel} — مبلغ کل: ${toman(p.amount)} ت${returnedAmountSoFar>0?` — قبلاً برگشت‌شده: ${toman(returnedAmountSoFar)} ت`:''}</div>
-          <div class="field"><label>تاریخ برگشت</label>${shamsiDateInputHTML('f-ret-date', todayISO())}</div>
-          <div id="ret-item-rows">
-          ${p.items.map(it=>{
-            const remLineQty = (typeof purchaseLineActualReturnableQty === 'function')
-              ? purchaseLineActualReturnableQty(p, it.id)
-              : purchaseLineRemainingQty(p, it.id);
-            if(remLineQty<=0){
-              return `<div class="field" style="opacity:.55;">
-              <label>${esc(it.name)} (خریداری‌شده: ${it.qty} — ۰ قابل‌برگشت؛ موجودی این خرید مصرف شده)</label>
-              <input class="ret-item-qty" data-item-id="${esc(it.id)}" data-product-id="${esc(it.productId)}" data-unit-cost="${it.unitCost}" data-max="0" type="text" inputmode="decimal" disabled>
-            </div>`;
-            }
-            return `<div class="field">
-              <label>${esc(it.name)} (خریداری‌شده: ${it.qty}، حداکثر قابل‌برگشت: ${remLineQty})</label>
-              <input class="ret-item-qty" data-item-id="${esc(it.id)}" data-product-id="${esc(it.productId)}" data-unit-cost="${it.unitCost}" data-max="${remLineQty}" type="text" inputmode="decimal" placeholder="تعداد برگشتی (اختیاری)">
-            </div>`;
-          }).join('')}
-          </div>
-          <div class="empty" style="padding:4px 0;text-align:right;">مبلغ برگشتی (خودکار): <b id="ret-multi-total">۰</b> تومان</div>
-          <div class="btn-row"><button class="btn" id="save-return">ثبت برگشت</button></div>
-        `);
-        function updateMultiRetTotal(){
-          let t = 0;
-          document.querySelectorAll('.ret-item-qty').forEach(inp=>{
-            const q = numVal(inp);
-            const uc = parseFloat(inp.dataset.unitCost)||0;
-            if(q>0) t += Math.round(q*uc);
-          });
-          document.getElementById('ret-multi-total').textContent = toman(t);
-        }
-        document.querySelectorAll('.ret-item-qty').forEach(inp=>{
-          inp.addEventListener('input', updateMultiRetTotal);
-        });
-        document.getElementById('save-return').addEventListener('click', async (e)=>{
-          await withSubmitGuard(e.currentTarget, async ()=>{
-          const date = document.getElementById('f-ret-date').value || todayISO();
-          const lineReturns = [];
-          let overStock = null;
-          document.querySelectorAll('.ret-item-qty').forEach(inp=>{
-            const q = numVal(inp);
-            if(q<=0) return;
-            const max = parseFloat(inp.dataset.max)||0;
-            const prod = data.products.find(x=>x.id===inp.dataset.productId);
-            if(prod && q > (prod.stockQty||0)){ overStock = prod; }
-            lineReturns.push({itemId: inp.dataset.itemId, productId: inp.dataset.productId, qty:q, unitCost: parseFloat(inp.dataset.unitCost)||0, max});
-          });
-          if(lineReturns.length===0){ showToast('حداقل مقدار برگشتی یک قلم رو وارد کن'); throw new Error('validation'); }
-          const badLine = lineReturns.find(l=>l.qty>l.max);
-          if(badLine){ showToast('مقدار برگشتی از باقیمانده‌ی قابل‌برگشت این قلم بیشتره.\n\nباقیمانده قابل‌برگشت: '+badLine.max); throw new Error('validation'); }
-          if(overStock){ showToast('موجودی واقعی «'+overStock.name+'» در انبار فقط '+(overStock.stockQty||0)+' عدد است.\n\nمقدار برگشتی نمی‌تواند از موجودی واقعی قابل‌برگشت بیشتر باشد.'); throw new Error('validation'); }
-          const totalAmount = lineReturns.reduce((a,l)=>a+Math.round(l.qty*l.unitCost),0);
-          if(totalAmount<=0){ showToast('مبلغ برگشتی رو وارد کن'); throw new Error('validation'); }
-          const liveRemainingAmount = purchaseReturnRemainingAmount(p);
-          if(totalAmount>liveRemainingAmount){ showToast('مبلغ برگشتی از مبلغ باقیمانده‌ی این خرید بیشتره.\n\nمبلغ باقیمانده قابل‌برگشت: '+toman(liveRemainingAmount)+' تومان'); throw new Error('validation'); }
-          if(!(await appConfirm('با ثبت این برگشت، موجودی انبار و بدهی به تامین‌کننده اصلاح خواهد شد. ادامه می‌دهید؟'))) throw new Error('validation');
-          const totalQty = lineReturns.reduce((a,l)=>a+l.qty,0);
-          const retLines = lineReturns.map(l=>({productId:l.productId, qty:l.qty, itemId:l.itemId}));
-          const lineItemsSnap = lineReturns.map(l=>({itemId:l.itemId, productId:l.productId, qty:l.qty, amount:Math.round(l.qty*l.unitCost)}));
-          // G4: reason required for NEW purchase returns (one reason per return transaction)
-          openPurchaseReturnReasonPicker(async function(returnReason){
-            await withSubmitGuard(document.getElementById('save-return'), async ()=>{
-              const previousData = JSON.parse(JSON.stringify(data));
-              const retResult = applyPurchaseReturnStockEffects(p, retLines, s.name, date);
-              if(!retResult.ok){ showToast(retResult.error||'برگشت خرید ممکن نشد'); throw new Error('validation'); }
-              p.returns = p.returns||[];
-              p.returns.push({
-                id:uid(), date, qty:totalQty, amount:totalAmount,
-                items: lineItemsSnap,
-                returnReason: returnReason,
-              });
-              try{
-                await saveData();
-              }catch(saveErr){
-                restoreDataInPlace(previousData);
-                throw saveErr;
-              }
-              openSupplierDetail(sid); render(); showToast('برگشت خرید ثبت شد');
-            });
-          });
-          });
-        });
-        return;
-      }
-      // G4: single-item max = actual returnable (accounting ∩ FIFO ∩ stock), same as SPA
-      const remainingQtyActual = (typeof purchaseActualReturnableQty === 'function')
-        ? purchaseActualReturnableQty(p)
-        : remainingQty;
-      openSheet(`
-        <h3>برگشت خرید از ${esc(s.name)}</h3>
-        <div class="empty" style="padding:0 0 8px;text-align:right;">${faDate(p.date)}${p.productId?` — ${esc((data.products.find(x=>x.id===p.productId)||{}).name||'')}`:''}${retLinesLabel} — مبلغ کل: ${toman(p.amount)} ت${p.productId?` (${p.qty})`:''}${returnedAmountSoFar>0?` — قبلاً برگشت‌شده: ${toman(returnedAmountSoFar)} ت`:''}</div>
-        <div class="field"><label>تاریخ برگشت</label>${shamsiDateInputHTML('f-ret-date', todayISO())}</div>
-        ${p.productId?(remainingQtyActual>0
-          ?`<div class="field"><label>مقدار برگشتی (حداکثر ${remainingQtyActual})</label><input id="f-ret-qty" type="text" inputmode="decimal"></div>`
-          :`<div class="empty" style="padding:8px 0;text-align:right;">موجودی قابل‌برگشت از این خرید: ۰ (همه مصرف/فروخته شده)</div>`)
-          :''}
-        <div class="field"><label>مبلغ برگشتی (تومان، حداکثر ${toman(remainingAmount)})</label><input id="f-ret-amount" type="text" inputmode="decimal" ${p.productId&&remainingQtyActual<=0?'disabled':''}></div>
-        <div class="btn-row"><button class="btn" id="save-return" ${p.productId&&remainingQtyActual<=0?'disabled':''}>ثبت برگشت</button></div>
-      `);
-      if(p.productId){
-        document.getElementById('f-ret-qty').addEventListener('input', ()=>{
-          const q = numVal(document.getElementById('f-ret-qty'));
-          if(unitPrice>0) document.getElementById('f-ret-amount').value = Math.round(q*unitPrice);
-        });
-      }
-      document.getElementById('save-return').addEventListener('click', async (e)=>{
-        await withSubmitGuard(e.currentTarget, async ()=>{
-        const date = document.getElementById('f-ret-date').value || todayISO();
-        const qty = p.productId ? numVal(document.getElementById('f-ret-qty')) : 0;
-        const amount = numVal(document.getElementById('f-ret-amount'));
-        if(amount<=0){ showToast('مبلغ برگشتی رو وارد کن'); throw new Error('validation'); }
-        if(p.productId && qty<=0){ showToast('مقدار برگشتی رو وارد کن'); throw new Error('validation'); }
-        // اعتبارسنجی یکسان با helper مشترک (تک‌قلمی و چندقلمی)
-        const liveRemainingQty = (typeof purchaseActualReturnableQty === 'function' && p.productId)
-          ? purchaseActualReturnableQty(p)
-          : purchaseReturnRemainingQty(p);
-        const liveRemainingAmount = purchaseReturnRemainingAmount(p);
-        if(qty>0 && qty>liveRemainingQty){
-          showToast('مقدار برگشتی از باقیمانده‌ی قابل‌برگشت این خرید بیشتره.\n\nباقیمانده قابل‌برگشت: '+liveRemainingQty);
-          throw new Error('validation');
-        }
-        if(p.productId && qty>0){
-          const realStockProd = data.products.find(x=>x.id===p.productId);
-          if(realStockProd && qty > (realStockProd.stockQty||0)){
-            showToast('موجودی واقعی «'+realStockProd.name+'» در انبار فقط '+(realStockProd.stockQty||0)+' عدد است.\n\nمقدار برگشتی نمی‌تواند از موجودی واقعی قابل‌برگشت بیشتر باشد.');
-            throw new Error('validation');
-          }
-        }
-        if(amount>liveRemainingAmount){ showToast('مبلغ برگشتی از مبلغ باقیمانده‌ی این خرید بیشتره.\n\nمبلغ باقیمانده قابل‌برگشت: '+toman(liveRemainingAmount)+' تومان'); throw new Error('validation'); }
-        if(!(await appConfirm((p.productId?'با ثبت این برگشت، موجودی انبار و بدهی به تامین‌کننده اصلاح خواهد شد.':'با ثبت این برگشت، فقط بدهی به تامین‌کننده کم می‌شود (موجودی خودکار اصلاح نمی‌شود).')+' ادامه می‌دهید?'))) throw new Error('validation');
-        // G4: reason required for NEW purchase returns (one reason per return transaction)
-        openPurchaseReturnReasonPicker(async function(returnReason){
-          await withSubmitGuard(document.getElementById('save-return'), async ()=>{
-            const previousData = JSON.parse(JSON.stringify(data));
-            if(p.productId && qty>0){
-              const retResult = applyPurchaseReturnStockEffects(p, [{productId:p.productId, qty}], s.name, date);
-              if(!retResult.ok){ showToast(retResult.error||'برگشت خرید ممکن نشد'); throw new Error('validation'); }
-            }
-            p.returns = p.returns||[];
-            p.returns.push({id:uid(), date, qty, amount, returnReason: returnReason});
-            try{
-              await saveData();
-            }catch(saveErr){
-              restoreDataInPlace(previousData);
-              throw saveErr;
-            }
-            openSupplierDetail(sid); render(); showToast('برگشت خرید ثبت شد');
-          });
-        });
-        });
-      });
-    });
-  });
+  AppRouter.navigate('/supplier', { id: sid });
 }
 
-// ---------- init ----------
-// Phase 1: auto-init only for legacy single-page tab mode (data-mode="legacy-tabs").
-// Multi-page HTML files boot themselves via js/nav.js → bootPage().
-(async function init(){
-  if(document.body && document.body.getAttribute('data-mode') === 'legacy-tabs'){
-    await loadData();
-    if (typeof hydrateMonthlySalesTarget === 'function') await hydrateMonthlySalesTarget();
-    render();
-  }
-})();
 
 /* ===========================
    Developer QA Module
