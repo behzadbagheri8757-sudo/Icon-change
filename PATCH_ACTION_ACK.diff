@@ -1,0 +1,232 @@
+--- /tmp/bagheri-v18-base/js/intelligence/action.js	2026-10-14 04:52:08.000000000 +0000
++++ /tmp/bagheri-v18/js/intelligence/action.js	2026-10-15 20:11:40.940609094 +0000
+@@ -149,12 +149,137 @@
+     reason: 'بدون Signal فعال',
+   };
+ 
++  // Action acknowledgements are operational UI state, separate from CRM/accounting data.
++  // Storage is deliberately localStorage-only: no schema/IndexedDB migration is required.
++  const ACTION_ACK_KEY = 'bagheri_action_ack_v1';
++  const ACTION_ACK_COOLDOWN_DAYS = { no_order: 3, ordered: 7, invoice_created: 5, payment: 7, dismissed: 14, deferred: 5 };
++  function _actionAckRead() {
++    try {
++      var raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(ACTION_ACK_KEY) : null;
++      var parsed = raw ? JSON.parse(raw) : {};
++      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
++    } catch (e) { return {}; }
++  }
++  function _actionAckWrite(cid, topic, details) {
++    if (cid == null || cid === '' || typeof topic !== 'string' || !topic.trim()) return false;
++    var all = _actionAckRead();
++    var key = String(cid) + '|' + topic;
++    all[key] = {
++      customerId: String(cid), signalTopic: topic,
++      lastActionAt: details && details.lastActionAt ? String(details.lastActionAt) : new Date().toISOString(),
++      actionType: details && details.actionType ? String(details.actionType) : 'visit',
++      outcome: details && details.outcome ? String(details.outcome) : 'info_only',
++      evidenceId: details && details.evidenceId ? String(details.evidenceId) : '',
++      note: details && details.note ? String(details.note).slice(0, 500) : ''
++    };
++    try { if (typeof localStorage !== 'undefined') localStorage.setItem(ACTION_ACK_KEY, JSON.stringify(all)); else return false; return true; }
++    catch (e) { return false; }
++  }
++  function _actionSignalTopic(signal, famOf) {
++    if (!signal || !signal.category) return null;
++    var base = {
++      PURCHASE_DECLINE_MILD: 'purchase_decline', PURCHASE_DECLINE_SEVERE: 'purchase_decline',
++      BEHIND_PATTERN: 'behind_pattern', SKU_DELAY: 'sku_delay', KEY_PRODUCT_LOST: 'key_product_lost',
++      MULTI_SKU_DECLINE: 'multi_sku_decline', COMBINED_SKU_DETERIORATION: 'combined_sku_deterioration',
++      PAYMENT_OVERDUE: 'payment_overdue', CHECK_BOUNCED: 'check_bounced',
++      SKU_QUANTITY_DROP: 'sku_quantity_drop', SKU_FREQUENCY_DROP: 'sku_frequency_drop', LINE_DROP: 'line_drop'
++    }[signal.category];
++    if (!base) return null;
++    if (['SKU_DELAY','SKU_QUANTITY_DROP','SKU_FREQUENCY_DROP','LINE_DROP','KEY_PRODUCT_LOST','MULTI_SKU_DECLINE','COMBINED_SKU_DETERIORATION'].indexOf(signal.category) >= 0) {
++      var pid = signal.productId;
++      if (signal.category === 'KEY_PRODUCT_LOST' && (!pid || pid === 'multi')) {
++        var lost = signal.evidence && (signal.evidence.hardLost || signal.evidence.retainedLost);
++        if (Array.isArray(lost) && lost.length === 1) pid = lost[0].productId;
++      }
++      var family = signal.familyId || (pid && pid !== 'multi' && typeof famOf === 'function' ? famOf(pid) : null);
++      if (family == null || family === '') return null;
++      return base + '|' + String(family);
++    }
++    return base;
++  }
++  function _actionAckActive(cid, topic, now) {
++    if (cid == null || !topic) return false;
++    var rec = _actionAckRead()[String(cid) + '|' + topic];
++    if (!rec || !rec.lastActionAt) return false;
++    var start = Date.parse(rec.lastActionAt);
++    var end = (now == null ? Date.now() : now);
++    if (!isFinite(start) || end < start) return false;
++    var days = ACTION_ACK_COOLDOWN_DAYS[rec.outcome] || 3;
++    return (end - start) < days * 86400000;
++  }
++  function _recordActionAck(cid, topic, details) { return _actionAckWrite(cid, topic, details); }
++  function _recordProductAcks(cid, productIds, details) {
++    if (!Array.isArray(productIds) || !productIds.length) return;
++    var famOf = typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; };
++    var cats = ['SKU_DELAY','SKU_QUANTITY_DROP','SKU_FREQUENCY_DROP','LINE_DROP','KEY_PRODUCT_LOST','MULTI_SKU_DECLINE','COMBINED_SKU_DETERIORATION'];
++    productIds.forEach(function (pid) {
++      if (!pid || pid === 'multi') return;
++      cats.forEach(function (category) {
++        var topic = _actionSignalTopic({ category: category, productId: pid }, famOf);
++        if (topic) _actionAckWrite(cid, topic, details);
++      });
++    });
++  }
++  global.recordVisitActionAcks = function (cid, visit) {
++    if (!cid || !visit || !visit.id) return false;
++    var details = {
++      actionType: 'visit',
++      outcome: visit.ordered === true ? 'ordered' :
++        (visit.nextAction && /بعداً|بعدا/.test(String(visit.nextAction)) ? 'deferred' : 'no_order'),
++      evidenceId: visit.id, note: visit.note || '', lastActionAt: new Date().toISOString()
++    };
++    if (Array.isArray(visit.offeredProducts) && visit.offeredProducts.length) {
++      _recordProductAcks(cid, visit.offeredProducts.map(function (x) { return x && x.productId; }), details);
++    } else {
++      _actionAckWrite(cid, 'purchase_decline', details);
++      _actionAckWrite(cid, 'behind_pattern', details);
++    }
++    return true;
++  };
++  global.recordInvoiceActionAcks = function (cid, invoice) {
++    if (!cid || !invoice || !invoice.id) return false;
++    var details = { actionType: 'invoice', outcome: 'invoice_created', evidenceId: invoice.id, note: '', lastActionAt: new Date().toISOString() };
++    _actionAckWrite(cid, 'purchase_decline', details);
++    _recordProductAcks(cid, (invoice.items || []).map(function (x) { return x && x.productId; }), details);
++    return true;
++  };
++  global.recordPaymentActionAcks = function (cid, payment) {
++    if (!cid || !payment || !payment.id || payment.method === 'return') return false;
++    return _actionAckWrite(cid, 'payment_overdue', {
++      actionType: 'payment', outcome: 'payment', evidenceId: payment.id, note: payment.note || '',
++      lastActionAt: new Date().toISOString()
++    });
++  };
++  global.recordWatchDismissActionAck = function (occurrence) {
++    if (!occurrence || !occurrence.customerId) return false;
++    var cat = String(occurrence.watchCategory || '');
++    var map = { PURCHASE_DECLINE_WATCH:'purchase_decline', BEHIND_PATTERN_WATCH:'behind_pattern', SKU_DELAY_WATCH:'sku_delay', SKU_QUANTITY_DROP_WATCH:'sku_quantity_drop', SKU_FREQUENCY_DROP_WATCH:'sku_frequency_drop', LINE_DROP_WATCH:'line_drop', KEY_PRODUCT_LOST_WATCH:'key_product_lost', PURCHASE_DECLINE_MILD:'purchase_decline', PURCHASE_DECLINE_SEVERE:'purchase_decline', BEHIND_PATTERN:'behind_pattern', SKU_DELAY:'sku_delay', SKU_QUANTITY_DROP:'sku_quantity_drop', SKU_FREQUENCY_DROP:'sku_frequency_drop', LINE_DROP:'line_drop', KEY_PRODUCT_LOST:'key_product_lost', MULTI_SKU_DECLINE:'multi_sku_decline', COMBINED_SKU_DETERIORATION:'combined_sku_deterioration', PAYMENT_OVERDUE:'payment_overdue', CHECK_BOUNCED:'check_bounced' };
++    var topic = map[cat];
++    if (topic && ['sku_delay','sku_quantity_drop','sku_frequency_drop','line_drop','key_product_lost','multi_sku_decline','combined_sku_deterioration'].indexOf(topic) >= 0) {
++      if (!occurrence.productId) return false;
++      var famOf = typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; };
++      topic += '|' + String(famOf(occurrence.productId) || '');
++    }
++    if (!topic) return false;
++    return _actionAckWrite(occurrence.customerId, topic, {
++      actionType: 'dismiss', outcome: 'dismissed', evidenceId: occurrence.id,
++      note: occurrence.resolution && occurrence.resolution.note ? occurrence.resolution.note : '',
++      lastActionAt: occurrence.lastEvaluatedAt || new Date().toISOString()
++    });
++  };
++  global.recordActionAck = _recordActionAck;
++  global.actionAckIsActive = _actionAckActive;
++  global.actionSignalTopic = function (signal) {
++    var famOf = typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; };
++    return _actionSignalTopic(signal, famOf);
++  };
++
+   function _actionPriorityRank(category) {
+     const idx = ACTION_PRIORITY_ORDER.indexOf(category);
+     return idx === -1 ? ACTION_PRIORITY_ORDER.length : idx;
+   }
+ 
+-  function _pickActionSignal(signals) {
++  function _pickActionSignal(signals, cid) {
+     if (!signals || !signals.length) return null;
+     let best = null;
+     let bestRank = Infinity;
+@@ -172,6 +297,9 @@
+       // active, matching the existing convention in risk.js/priority.js.
+       if (s.status === 'pending') return;
+       if (s.seasonallySuppressed === true) return;
++      // Ack filtering follows the existing pending/seasonality gates and is topic-scoped.
++      var topic = _actionSignalTopic(s, typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; });
++      if (topic && _actionAckActive(cid, topic)) return;
+       const r = _actionPriorityRank(s.category);
+       if (r < bestRank) {
+         bestRank = r;
+@@ -840,7 +968,7 @@
+       rcCtx = null;
+       actionCandidates = _applyCurrentContextFilter(cid, priority.signals, ctx);
+     }
+-    let winner = _pickActionSignal(actionCandidates);
++    let winner = _pickActionSignal(actionCandidates, cid);
+     // Action Eligibility: the winner is chosen first; if it is no longer needed
+     // given a recent related visit, the existing NO_ACTION path is used. The next
+     // candidate is deliberately NOT promoted, and the signal itself is untouched.
+--- /tmp/bagheri-v18-base/js/intelligence/watch_lifecycle.js	2026-10-13 06:36:57.000000000 +0000
++++ /tmp/bagheri-v18/js/intelligence/watch_lifecycle.js	2026-10-15 20:10:38.890414352 +0000
+@@ -855,9 +855,8 @@
+       var r = rows[i];
+       if (!r || String(r.customerId) !== String(customerId)) continue;
+       var code = r.reason && r.reason.code ? String(r.reason.code) : '';
+-      if (!code || code === 'dismiss') continue;
+       var sup = r.suppression || null;
+-      out.push({
++      if (code && code !== 'dismiss') out.push({
+         occurrenceId: r.id,
+         watchCategory: r.watchCategory,
+         productId: _normPid(r.productId),
+@@ -868,6 +867,14 @@
+         held: !!(sup && !sup.releasedAt && r.status !== 'active'),
+         decision: sup ? sup.type : null
+       });
++      // Manual dismiss is a separate response event. Preserve the earlier reason/comment.
++      if (r.status === 'dismissed' && sup && sup.type === 'dismiss') {
++        out.push({
++          occurrenceId: r.id, watchCategory: r.watchCategory, productId: _normPid(r.productId),
++          status: r.status, code: 'dismiss', comment: r.reason && r.reason.comment ? String(r.reason.comment) : '',
++          recordedAt: sup.decidedAt || r.lastEvaluatedAt || null, held: true, decision: 'dismiss'
++        });
++      }
+     }
+     return out;
+   }
+@@ -976,6 +983,9 @@
+     rec.suppression = _decisionSnapshot(rec, 'dismiss');
+     // Reason/comment history (if any was recorded earlier) is untouched.
+     _persist(rec);
++    if (typeof global.recordWatchDismissActionAck === 'function') {
++      try { global.recordWatchDismissActionAck(rec); } catch (eAckDismiss) { /* fail open */ }
++    }
+     return rec;
+   }
+ 
+--- /tmp/bagheri-v18-base/js/app.js	2026-10-11 04:43:52.000000000 +0000
++++ /tmp/bagheri-v18/js/app.js	2026-10-15 20:10:38.889623653 +0000
+@@ -996,6 +996,10 @@
+           restoreDataInPlace(previousData);
+           throw err;
+         }
++        // Operational Action acknowledgement only; never changes payment/accounting data.
++        if (typeof recordPaymentActionAcks === 'function') {
++          try { recordPaymentActionAcks(cid, payment); } catch (eAckPayment) { console.warn('Action ack failed:', eAckPayment); }
++        }
+         // Game Center hook (derived only — never rolls back CRM)
+         if (typeof gameOnPayment === 'function') {
+           try {
+@@ -2137,6 +2141,9 @@
+       showToast('ذخیره نشد');
+       return false;
+     }
++    if (typeof recordVisitActionAcks === 'function') {
++      try { recordVisitActionAcks(cid, visit); } catch (eAckVisit) { console.warn('Action ack failed:', eAckVisit); }
++    }
+     if (typeof gameOnCustomerVisit === 'function') {
+       try {
+         await gameOnCustomerVisit(cid, visit.id, visit.date);
+@@ -3454,6 +3461,10 @@
+         btn.disabled = false;
+         return;
+       }
++      // Operational Action acknowledgement only; never changes invoice/stock/FIFO data.
++      if (typeof recordInvoiceActionAcks === 'function') {
++        try { recordInvoiceActionAcks(cid, newInv); } catch (eAckInvoice) { console.warn('Action ack failed:', eAckInvoice); }
++      }
+       // Game Center hooks — CREATE only (edit path returns earlier). Never rolls back CRM.
+       if (typeof gameOnInvoice === 'function') {
+         try {
