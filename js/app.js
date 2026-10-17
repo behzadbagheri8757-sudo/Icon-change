@@ -996,10 +996,6 @@ function openAddTransaction(cid){
           restoreDataInPlace(previousData);
           throw err;
         }
-        // Operational Action acknowledgement only; never changes payment/accounting data.
-        if (typeof recordPaymentActionAcks === 'function') {
-          try { recordPaymentActionAcks(cid, payment); } catch (eAckPayment) { console.warn('Action ack failed:', eAckPayment); }
-        }
         // Game Center hook (derived only — never rolls back CRM)
         if (typeof gameOnPayment === 'function') {
           try {
@@ -1719,18 +1715,26 @@ function openAddVisit(cid){
   }
 
   openSheet(
-    '<h3>ثبت ویزیت</h3>' +
+    '<div class="visit-capture-head"><h3>ثبت ویزیت</h3><span class="visit-capture-customer">' + esc(visitCustomer ? visitCustomer.name : 'مشتری') + '</span></div>' +
     visitPreHtml +
-    '<div style="display:flex;gap:8px;">' +
-      '<div class="field" style="flex:1;"><label>تاریخ</label>' + shamsiDateInputHTML('f-date', todayISO()) + '</div>' +
-      '<div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
-    '</div>' +
-    '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
-    '<div class="field bp-next-field" style="margin-top:12px;"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
-      '<select id="f-next-action"><option value="">بدون اقدام</option>' +
-      VISIT_NEXT_ACTIONS.map(function (a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
-      '</select></div>' +
-    '<div class="field" style="margin-top:12px;"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
+    '<section class="visit-capture-section visit-capture-timing card" aria-label="زمان ویزیت"><div class="visit-capture-section-title">زمان ثبت</div>' +
+      '<div class="visit-capture-date-row">' +
+        '<div class="field"><label for="f-date">تاریخ</label>' + shamsiDateInputHTML('f-date', todayISO()) + '</div>' +
+        '<div class="field"><label for="f-time">ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
+      '</div>' +
+    '</section>' +
+    '<section class="visit-capture-section visit-capture-outcome card" aria-label="نتیجه و محصولات پیشنهادی">' +
+      '<div class="visit-capture-section-title">نتیجه و پیشنهادها</div>' +
+      '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
+    '</section>' +
+    '<section class="visit-capture-section visit-capture-followup card" aria-label="پیگیری بعدی و یادداشت">' +
+      '<div class="visit-capture-section-title">بعد از ویزیت</div>' +
+      '<div class="field bp-next-field"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
+        '<select id="f-next-action"><option value="">بدون اقدام</option>' +
+        VISIT_NEXT_ACTIONS.map(function (a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
+        '</select></div>' +
+      '<div class="field"><label for="f-visit-note">یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
+    '</section>' +
     '<div class="btn-row visit-save-actions" style="margin-top:8px;">' +
       '<button type="button" class="btn" id="save-visit">ثبت و پایان</button>' +
       '<button type="button" class="btn secondary" id="save-visit-invoice">ثبت و ایجاد فاکتور</button>' +
@@ -2140,9 +2144,6 @@ function openAddVisit(cid){
       console.error(e);
       showToast('ذخیره نشد');
       return false;
-    }
-    if (typeof recordVisitActionAcks === 'function') {
-      try { recordVisitActionAcks(cid, visit); } catch (eAckVisit) { console.warn('Action ack failed:', eAckVisit); }
     }
     if (typeof gameOnCustomerVisit === 'function') {
       try {
@@ -3460,10 +3461,6 @@ function openInvoiceForm(cid, editInv, opts){
         restoreDataInPlace(previousData);
         btn.disabled = false;
         return;
-      }
-      // Operational Action acknowledgement only; never changes invoice/stock/FIFO data.
-      if (typeof recordInvoiceActionAcks === 'function') {
-        try { recordInvoiceActionAcks(cid, newInv); } catch (eAckInvoice) { console.warn('Action ack failed:', eAckInvoice); }
       }
       // Game Center hooks — CREATE only (edit path returns earlier). Never rolls back CRM.
       if (typeof gameOnInvoice === 'function') {
