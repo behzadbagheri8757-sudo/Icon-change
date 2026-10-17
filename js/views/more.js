@@ -96,7 +96,17 @@
 
   function draw(root) {
     if (!root) return;
-    root.innerHTML = '<div class="more-page">' + GROUPS.map(groupHtml).join('') + '</div>';
+    root.innerHTML =
+      '<div class="more-page">' +
+        '<div class="more-page-intro card">' +
+          '<div class="more-page-kicker">پیمایش برنامه</div>' +
+          '<h1 class="more-page-title">بخش‌های دیگر</h1>' +
+          '<p class="more-page-hint">ابزارهای میدانی، مالی و مدیریتی در یک فهرست.</p>' +
+        '</div>' +
+        '<nav class="more-navigation" aria-label="بخش‌های برنامه">' +
+          GROUPS.map(groupHtml).join('') +
+        '</nav>' +
+      '</div>';
 
     // Explicit SPA navigation (defensive: plain hash hrefs work too, but
     // going through AppRouter preserves the scroll-position bookkeeping

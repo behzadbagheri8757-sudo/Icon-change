@@ -1180,10 +1180,12 @@
     }
 
     root.innerHTML =
-      '<div class="btn-row" style="margin-bottom:10px;">' +
+      '<div class="customer-detail-layout">' +
+      '<div class="btn-row customer-detail-back" style="margin-bottom:10px;">' +
       '<a class="btn secondary small" href="' +
       customersHref() +
       '">← مشتریان</a></div>' +
+      '<section class="customer-profile-overview" aria-label="نمای کلی مشتری">' +
       '<div class="card customer-identity-card">' +
       '<div class="customer-identity-name">' +
       esc(c.name) +
@@ -1228,6 +1230,8 @@
           esc(recommendedAction.action) +
           '</button></div>'
         : '') +
+      '</section>' +
+      '<section class="customer-actions-section" aria-label="عملیات مشتری">' +
       '<h3 class="sub-title">عملیات</h3>' +
       '<div class="btn-row cust-actions-primary" style="margin-bottom:8px;">' +
       '<button type="button" class="btn" id="act-invoice">ثبت فاکتور</button>' +
@@ -1242,6 +1246,8 @@
       '<button type="button" class="btn small secondary" id="act-print-statement">صورت‌حساب</button>' +
       '<button type="button" class="btn small secondary" id="act-toggle-active">' + (c.active === false ? 'فعال‌سازی مشتری' : 'غیرفعال‌سازی مشتری') + '</button>' +
       '</div></details>' +
+      '</section>' +
+      '<section class="customer-financial-section" aria-label="سوابق مالی مشتری">' +
       '<h3 class="sub-title">خلاصه مالی</h3>' +
       '<div class="cards cust-metrics">' +
       '<div class="card"><div class="label">مجموع خرید (فاکتورها)</div><div class="value">' +
@@ -1277,6 +1283,8 @@
       chks.length +
       ')</h3>' +
       '<div class="customer-tx-list customer-check-list">' + chkRows + '</div>' +
+      '</section>' +
+      '<section class="customer-visits-section" aria-label="ویزیت‌ها و ارزیابی‌ها">' +
       '<h3 class="sub-title">ویزیت‌ها و ارزیابی‌ها (' +
       visits.length +
       ')</h3>' +
@@ -1284,7 +1292,8 @@
       '<button type="button" class="btn small" id="act-visit-section">ثبت ویزیت برای این مشتری</button>' +
       '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a>' +
       '</div>' +
-      '<div class="customer-tx-list customer-visit-list">' + visitRows + '</div>';
+      '<div class="customer-tx-list customer-visit-list">' + visitRows + '</div>' +
+      '</section></div>';
 
     document.getElementById('act-invoice').onclick = function () {
       openAddInvoice(c.id);

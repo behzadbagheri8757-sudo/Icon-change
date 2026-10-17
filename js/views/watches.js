@@ -256,7 +256,6 @@
         var catLabel = categoryLabel(o.watchCategory);
         var sentence = humanSentence(o);
         var reviewed = !!o.reason;
-        var recentlyHandled = typeof actionAckIsActiveForWatch === 'function' && actionAckIsActiveForWatch(o);
         var target = isFollowUp
           ? ' data-watch-customer="' + esc(o.customerId) + '"'
           : ' data-watch-id="' + esc(o.id) + '"';
@@ -268,12 +267,11 @@
           '<div class="watch-list-meta">' +
             '<span class="watch-severity-badge watch-severity-' + esc(o.level || 'low') + '">' + esc(levelLabel(o.level)) + '</span>' +
             (reviewed && !isFollowUp ? '<span class="watch-reviewed-badge is-reviewed">علت ثبت شده</span>' : '') +
-            (recentlyHandled ? '<span class="watch-reviewed-badge is-reviewed">به‌تازگی رسیدگی شد</span>' : '') +
           '</div>' +
         '</div>';
       }).join('');
-      return '<section class="watch-customer-group">' +
-        '<div class="watch-customer-head"><span class="watch-customer-name">' + esc(g.name) + '</span><span class="watch-customer-count">' + faDigits(g.items.length) + ' مورد</span></div>' +
+      return '<section class="watch-customer-group" aria-label="هشدارهای ' + esc(g.name) + '">' +
+        '<header class="watch-customer-head"><span class="watch-customer-name">' + esc(g.name) + '</span><span class="watch-customer-count">' + faDigits(g.items.length) + ' مورد</span></header>' +
         '<div class="watch-customer-items">' + rows + '</div>' +
       '</section>';
     }).join('');
@@ -286,9 +284,11 @@
     var prevScroll = prevBar ? prevBar.scrollLeft : 0;
 
     root.innerHTML =
-      '<div class="watch-page-head"><div><h2 class="section-title">هشدارهای زودهنگام</h2><div class="watch-page-hint">' + esc(WATCH_FILTER_HINTS[watchFilter] || WATCH_FILTER_HINTS.all) + '</div></div><span class="watch-total-count">' + faDigits(shown.length) + '</span></div>' +
-      filtersHtml(sets) +
-      html;
+      '<div class="watch-page">' +
+      '<header class="watch-page-head"><div><h2 class="section-title">هشدارهای زودهنگام</h2><div class="watch-page-hint" aria-live="polite">' + esc(WATCH_FILTER_HINTS[watchFilter] || WATCH_FILTER_HINTS.all) + '</div></div><span class="watch-total-count" aria-label="تعداد موارد">' + faDigits(shown.length) + '</span></header>' +
+      '<nav class="watch-filter-navigation" aria-label="فیلتر هشدارها">' + filtersHtml(sets) + '</nav>' +
+      '<div class="watch-list-content">' + html + '</div>' +
+      '</div>';
 
     var bar = root.querySelector('#watch-filters');
     if (bar) {

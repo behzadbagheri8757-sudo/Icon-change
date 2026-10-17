@@ -40,7 +40,7 @@
                         '<button type="button" class="btn small" data-add-neigh="' + esc(rt.id) + '">افزودن</button></div></div>' +
                         (neighs.length
                           ? neighs.map(function (n) {
-                              return '<div class="ledger-row tx-row" data-neigh="' + esc(n.id) + '">' +
+                              return '<div class="ledger-row tx-row location-neighborhood-row" data-neigh="' + esc(n.id) + '">' +
                                 '<span class="name"><span class="tx-row-title">' + esc(n.name) + '</span></span>' +
                                 '<span class="filler"></span>' +
                                 '<button type="button" class="btn small danger tx-status-btn" data-del-neigh="' + esc(n.id) + '">حذف</button>' +
@@ -49,34 +49,36 @@
                           : '<div class="empty" style="padding:6px 0;">هنوز محله‌ای نیست</div>') +
                         '</div>';
                     }
-                    return '<div class="card" style="margin-bottom:8px;" data-route="' + esc(rt.id) + '">' +
+                    return '<section class="card location-route-card" style="margin-bottom:8px;" data-route="' + esc(rt.id) + '" aria-label="مسیر ' + esc(rt.name) + '">' +
                       '<div class="btn-row" style="justify-content:space-between;">' +
-                      '<button type="button" class="btn small secondary" data-toggle-route="' + esc(rt.id) + '" style="font-weight:700;">' +
+                      '<button type="button" class="btn small secondary" data-toggle-route="' + esc(rt.id) + '" aria-expanded="' + (rOpen ? 'true' : 'false') + '" style="font-weight:700;">' +
                       (rOpen ? '▾ ' : '▸ ') + esc(rt.name) + ' <span class="sub">(' + neighCount + ' محله)</span></button>' +
                       '<button type="button" class="btn small danger" data-del-route="' + esc(rt.id) + '">حذف مسیر</button>' +
-                      '</div>' + neighHtml + '</div>';
+                      '</div>' + neighHtml + '</section>';
                   }).join('')
                 : '<div class="empty" style="padding:6px 0;">هنوز مسیری نیست</div>') +
               '</div>';
           }
-          return '<div class="card" style="margin-bottom:10px;" data-region="' + esc(r.id) + '">' +
+          return '<section class="card location-region-card" style="margin-bottom:10px;" data-region="' + esc(r.id) + '" aria-label="منطقه ' + esc(r.name) + '">' +
             '<div class="btn-row" style="justify-content:space-between;">' +
-            '<button type="button" class="btn small secondary" data-toggle-region="' + esc(r.id) + '" style="font-weight:700;">' +
+            '<button type="button" class="btn small secondary" data-toggle-region="' + esc(r.id) + '" aria-expanded="' + (isOpen ? 'true' : 'false') + '" style="font-weight:700;">' +
             (isOpen ? '▾ ' : '▸ ') + esc(r.name) + ' <span class="sub">(' + routeCount + ' مسیر)</span></button>' +
             '<button type="button" class="btn small danger" data-del-region="' + esc(r.id) + '">حذف منطقه</button>' +
-            '</div>' + routesHtml + '</div>';
+            '</div>' + routesHtml + '</section>';
         }).join('')
-      : '<div class="empty">هنوز منطقه‌ای ثبت نشده</div>';
+      : '<div class="empty location-empty">هنوز منطقه‌ای ثبت نشده است. برای ساخت محدوده، نام منطقه را در فرم بالا وارد کنید.</div>';
 
     root.innerHTML =
       '<div class="btn-row" style="margin-bottom:10px;">' +
       '<a class="btn secondary small" href="#/settings">← تنظیمات</a></div>' +
+      '<section class="location-page-intro card" aria-label="مدیریت موقعیت مکانی">' +
       '<h2 class="section-title">موقعیت مکانی</h2>' +
-      '<p class="tx-hint">ساختار: منطقه › مسیر › محله — مشترک مشتریان و مغازه‌های بالقوه.</p>' +
-      '<div class="field"><label>منطقه جدید</label>' +
+      '<p class="tx-hint">ساختار مشترک مشتریان و مغازه‌های بالقوه: منطقه › مسیر › محله.</p></section>' +
+      '<section class="location-add-region card" aria-label="افزودن منطقه"><div class="field"><label for="new-region-input">منطقه جدید</label>' +
       '<div class="btn-row"><input id="new-region-input" placeholder="مثلاً: نوشهر" style="flex:1;">' +
-      '<button type="button" class="btn small" id="add-region-btn">افزودن</button></div></div>' +
-      '<div id="region-list" class="field-geo-list">' + regionBlocks + '</div>';
+      '<button type="button" class="btn small" id="add-region-btn">افزودن</button></div></div></section>' +
+      '<div class="location-list-heading"><span>مناطق و مسیرها</span><span class="sub">برای باز کردن هر بخش، عنوان آن را لمس کنید.</span></div>' +
+      '<div id="region-list" class="field-geo-list location-tree" aria-label="درخت موقعیت‌های مکانی">' + regionBlocks + '</div>';
 
     const addRegionBtn = document.getElementById('add-region-btn');
     addRegionHandler = async function () {

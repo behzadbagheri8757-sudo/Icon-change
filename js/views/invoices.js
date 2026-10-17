@@ -101,8 +101,8 @@
     const opts = data.customers.filter(c => c.active !== false).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
       .map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
     openSheet(`
-      <h3>فاکتور جدید</h3>
-      <div class="field"><label>مشتری</label><select id="inv-pick-customer">${opts}</select></div>
+      <div class="invoice-picker-head"><span class="invoice-picker-kicker">فاکتور فروش</span><h3>مشتری فاکتور را انتخاب کنید</h3></div>
+      <div class="field"><label for="inv-pick-customer">مشتری</label><select id="inv-pick-customer">${opts}</select></div>
       <div class="btn-row"><button class="btn" id="inv-pick-go">ادامه</button></div>
     `);
     document.getElementById('inv-pick-go').onclick = ()=>{
@@ -117,14 +117,14 @@
       return `<button type="button" class="chip ${invFilter===id?'active':''}" data-if="${id}">${label}</button>`;
     };
     root.innerHTML = `
-      <div class="field"><input id="invoice-search" placeholder="جستجوی شماره فاکتور یا نام مشتری..." value="${esc(invQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="invoice-chips">
+      <section class="invoice-list-controls card" aria-label="جستجو و فیلتر فاکتورها">
+      <div class="field"><input id="invoice-search" aria-label="جستجوی فاکتور" placeholder="جستجوی شماره فاکتور یا نام مشتری..." value="${esc(invQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="invoice-chips" role="group" aria-label="وضعیت پرداخت فاکتور">
         ${chip('all','همه')}
         ${chip('paid','پرداخت‌شده')}
         ${chip('debt','بدهکار')}
       </div>
       <div class="tx-toolbar cl-tools">
-        <span id="invoice-count" class="cl-count" aria-live="polite"></span>
         <label class="tx-toolbar-label" for="invoice-sort">مرتب‌سازی</label>
         <select id="invoice-sort" class="tx-toolbar-select">
           <option value="newest" ${invSort==='newest'?'selected':''}>جدیدترین</option>
@@ -133,7 +133,9 @@
           <option value="amountAsc" ${invSort==='amountAsc'?'selected':''}>کمترین مبلغ</option>
         </select>
       </div>
-      <div id="invoice-list" class="tx-list"></div>
+      </section>
+      <div class="invoice-list-heading"><span>دفتر فاکتورها</span><span id="invoice-count" class="cl-count" aria-live="polite"></span></div>
+      <div id="invoice-list" class="tx-list invoice-ledger-list" aria-label="فهرست فاکتورها"></div>
     `;
 
     const searchEl = document.getElementById('invoice-search');

@@ -150,11 +150,11 @@
     const prodHref = '#/products';
 
     root.innerHTML =
-      '<div class="btn-row" style="margin-bottom:10px;">' +
+      '<div class="btn-row inventory-page-actions" style="margin-bottom:10px;">' +
       '<a class="btn secondary small" href="' +
       prodHref +
       '">مدیریت کالاها</a></div>' +
-      '<div class="cards" style="margin-bottom:14px;">' +
+      '<section class="inventory-overview" aria-label="خلاصه وضعیت انبار"><div class="cards" style="margin-bottom:14px;">' +
       '<div class="card"><div class="label">تعداد کالا</div><div class="value">' +
       products.length +
       '</div></div>' +
@@ -172,11 +172,11 @@
           negN +
           ' کالا</div></div>'
         : '') +
-      '</div>' +
-      '<h3 class="sub-title">موجودی کالاها</h3>' +
-      '<div class="empty" style="padding:0 0 8px;text-align:right;font-size:.78rem;">برای اصلاح موجودی روی هر کالا بزنید (همان فرم فعلی ورود/خروج/ویرایش).</div>' +
+      '</div></section>' +
+      '<h3 class="sub-title inventory-stock-title">موجودی کالاها</h3>' +
+      '<div class="empty inventory-guidance" style="padding:0 0 8px;text-align:right;font-size:.78rem;">برای اصلاح موجودی روی هر کالا بزنید (همان فرم فعلی ورود/خروج/ویرایش).</div>' +
       '<div class="tx-list inventory-list">' + stockList + '</div>' +
-      '<h3 class="sub-title">گردش اخیر انبار</h3>' +
+      '<h3 class="sub-title inventory-log-title">گردش اخیر انبار</h3>' +
       '<div class="tx-list inventory-log-list">' + logHtml + '</div>';
 
     listClickHandler = function (e) {

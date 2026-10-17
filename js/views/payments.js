@@ -258,16 +258,18 @@
     };
 
     root.innerHTML = `
+      <section class="payment-list-controls card" aria-label="جستجو و فیلتر تراکنش‌ها">
       <div class="field">
         <input
           id="payment-search"
+          aria-label="جستجوی پرداخت‌ها"
           placeholder="جستجوی مشتری، تامین‌کننده، مبلغ، توضیح..."
           value="${esc(payQuery)}"
           autocomplete="off"
         >
       </div>
 
-      <div class="chip-row" id="payment-chips">
+      <div class="chip-row" id="payment-chips" role="group" aria-label="فیلتر نوع تراکنش">
         ${chip('all', 'همه')}
         ${chip('cash', 'نقد')}
         ${chip('card', 'کارت')}
@@ -309,6 +311,7 @@
           </option>
         </select>
       </div>
+      </section>
 
       <div
         id="payment-summary"
@@ -316,7 +319,8 @@
         style="margin-bottom:12px;"
       ></div>
 
-      <div id="payment-list" class="tx-list"></div>
+      <div class="payment-list-heading"><span>دفتر تراکنش‌ها</span></div>
+      <div id="payment-list" class="tx-list payment-ledger-list" aria-label="فهرست تراکنش‌ها"></div>
     `;
 
     const searchEl =

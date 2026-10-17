@@ -901,12 +901,12 @@
   /* ------------------------------------------------------------------ */
   function drawPage(root) {
     root.innerHTML =
-      '<div class="rp-page">' +
-      '<div class="rp-top">' +
+      '<div class="rp-page rp-report-ledger">' +
+      '<header class="rp-top" aria-label="انتخاب بازه گزارش">' +
       segHtml() +
-      '<div class="rp-context" id="rp-context"></div>' +
-      '</div>' +
-      '<div id="reports-body" class="rp-body"></div>' +
+      '<div class="rp-context" id="rp-context" aria-live="polite"></div>' +
+      '</header>' +
+      '<div id="reports-body" class="rp-body rp-report-sections" aria-label="گزارش عملکرد"></div>' +
       '</div>';
 
     rootClickHandler = function (e) {

@@ -458,29 +458,33 @@
       : '<span class="sub">نتیجه‌ای ثبت نشده</span>';
 
     root.innerHTML = `
+      <div class="prospect-detail-layout">
       <div class="btn-row" style="margin-bottom:10px;">
         <a class="btn secondary small" href="#/prospects">← لیست مغازه‌ها</a>
       </div>
       ${shop.status === 'converted' ? `<div class="converted-banner">✅ این مغازه به مشتری تبدیل شده است.</div>` : ''}
 
-      ${identityHtml}
+      <section class="prospect-profile-section" aria-label="پروفایل و ارزیابی مغازه">
+        ${identityHtml}
+      </section>
 
-      <div class="btn-row tx-actions-primary" style="margin:14px 0;">
+      <section class="prospect-detail-actions" aria-label="اقدام‌های مغازه"><div class="btn-row tx-actions-primary" style="margin:14px 0;">
         <button type="button" class="btn small" id="btn-add-visit">ثبت ویزیت پیگیری</button>
         <button type="button" class="btn small secondary" id="btn-assign-location">موقعیت</button>
         ${shop.status !== 'converted'
           ? `<button type="button" class="btn small secondary" id="btn-convert">تبدیل به مشتری</button>`
           : (shop.linkedCustomerId ? `<button type="button" class="btn small secondary" id="btn-linked-customer">پرونده مشتری</button>` : '')}
-      </div>
+      </div></section>
 
       ${last ? `
-        <div class="prospect-result-card">
+        <section class="prospect-latest-result prospect-result-card" aria-label="آخرین نتیجه">
           <div class="prospect-result-title"><span aria-hidden="true">✓</span> آخرین نتیجه</div>
           <div class="prospect-result-content">${latestResultHtml}</div>
-        </div>
+        </section>
       ` : ''}
 
-      ${renderVisitHistory(shop)}
+      <section class="prospect-visit-history-section" aria-label="تاریخچه ویزیت‌ها">${renderVisitHistory(shop)}</section>
+      </div>
     `;
 
     root.querySelectorAll('[data-snapshot-q]').forEach(function (row) {

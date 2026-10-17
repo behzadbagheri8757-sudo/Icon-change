@@ -94,10 +94,11 @@
 
     if (!rows.length) {
       list.innerHTML =
-        '<div class="empty">' +
+        '<div class="empty product-empty">' +
         ((data.products || []).length
-          ? 'موردی پیدا نشد'
+          ? 'کالایی با این جستجو یا فیلتر پیدا نشد.'
           : 'هنوز کالایی ثبت نشده. با + کالا اضافه کنید.') +
+        '<div class="sub">برای دیدن موجودی و گردش انبار، صفحهٔ انبار در دسترس است.</div>' +
         '</div>';
     } else {
       list.innerHTML = rows
@@ -117,9 +118,9 @@
           const statusExtra =
             st.key === 'low' && p.minStock ? ' (حداقل ' + p.minStock + ')' : '';
           return (
-            '<div class="ledger-row tx-row" data-edit-product="' +
+            '<div class="ledger-row tx-row product-list-row" data-edit-product="' +
             esc(p.id) +
-            '" style="' +
+            '" aria-label="' + esc(p.name) + '، ' + st.label + '، موجودی ' + fmtQty(p.stockQty) + ' ' + esc(String(unit)) + '" style="' +
             offStyle +
             '">' +
             '<span class="name">' +
@@ -165,14 +166,15 @@
       );
     };
     root.innerHTML =
-      '<div class="btn-row" style="margin-bottom:10px;">' +
+      '<div class="btn-row product-page-actions" style="margin-bottom:10px;">' +
       '<a class="btn secondary small has-chevron" href="' +
       invHref +
       '">مشاهده انبار</a></div>' +
-      '<div class="field"><input id="product-search" placeholder="جستجوی نام یا دسته‌بندی..." value="' +
+      '<section class="product-list-controls card" aria-label="جستجو و فیلتر کالاها">' +
+      '<div class="field"><input id="product-search" aria-label="جستجوی کالاها" placeholder="جستجوی نام یا دسته‌بندی..." value="' +
       esc(prodQuery) +
       '" autocomplete="off"></div>' +
-      '<div class="chip-row" id="product-chips">' +
+      '<div class="chip-row" id="product-chips" role="group" aria-label="فیلتر وضعیت موجودی">' +
       chip('all', 'همه') +
       chip('in', 'موجود') +
       chip('low', 'کم‌موجود') +
@@ -194,8 +196,9 @@
       '<option value="valueDesc"' +
       (prodSort === 'valueDesc' ? ' selected' : '') +
       '>ارزش موجودی</option>' +
-      '</select></div>' +
-      '<div id="product-list" class="tx-list"></div>';
+      '</select></div></section>' +
+      '<div class="product-list-heading"><span>فهرست کالاها</span></div>' +
+      '<div id="product-list" class="tx-list product-ledger-list" aria-label="فهرست کالاها"></div>';
 
     const searchEl = document.getElementById('product-search');
     searchHandler = function (e) {

@@ -674,15 +674,15 @@
       </div>
 
       <!-- IDENTITY -->
-      <div class="tx-identity card">
+      <section class="supplier-profile-overview" aria-label="نمای کلی تأمین‌کننده"><div class="tx-identity card">
         <div class="tx-identity-title">${esc(s.name)}${s.active === false ? ' <span class="badge tone-muted">غیرفعال</span>' : ''}</div>
         <div class="tx-identity-meta">
           ${s.phone ? '<span>تلفن: ' + esc(s.phone) + '</span>' : '<span class="sub">بدون تلفن</span>'}
         </div>
-      </div>
+      </div></section>
 
       <!-- FINANCIAL SUMMARY -->
-      <div class="tx-finance cards">
+      <section class="supplier-financial-summary" aria-label="خلاصه مالی تأمین‌کننده"><div class="tx-finance cards">
         <div class="card wide">
           <div class="label">مانده حساب</div>
           <div class="value ${color}">${balanceLine}</div>
@@ -691,23 +691,25 @@
         <div class="card"><div class="label">پرداخت‌ها</div><div class="value">${toman(t.payTotal)} ت</div></div>
         <div class="card"><div class="label">برگشت از خرید</div><div class="value">${toman(t.returnTotal)} ت</div></div>
         <div class="card"><div class="label">مانده اولیه</div><div class="value">${toman(t.openingBalance)} ت</div></div>
-      </div>
+      </div></section>
 
       <!-- PRIMARY ACTIONS -->
-      <div class="btn-row tx-actions-primary" style="margin-bottom:14px;">
+      <section class="supplier-detail-actions" aria-label="عملیات تأمین‌کننده"><div class="btn-row tx-actions-primary" style="margin-bottom:14px;">
         <button type="button" class="btn small" id="add-purchase">+ خرید جدید</button>
         <button type="button" class="btn small secondary" id="add-suppay">+ پرداخت</button>
         <button type="button" class="btn small secondary" id="edit-supplier">ویرایش</button>
         <button type="button" class="btn small secondary" id="toggle-supplier-active">${s.active === false ? 'فعال‌سازی' : 'غیرفعال‌سازی'}</button>
-      </div>
+      </div></section>
 
       <!-- PURCHASES -->
-      <h3 class="sub-title">خریدها (${purchases.length})</h3>
+      <section class="supplier-purchases-section" aria-label="خریدهای تأمین‌کننده"><h3 class="sub-title">خریدها (${purchases.length})</h3>
       <div class="tx-list">${purchaseRows}</div>
+      </section>
 
       <!-- PAYMENTS -->
-      <h3 class="sub-title">پرداخت‌ها (${payments.length})</h3>
+      <section class="supplier-payments-section" aria-label="پرداخت‌های تأمین‌کننده"><h3 class="sub-title">پرداخت‌ها (${payments.length})</h3>
       <div class="tx-list">${payRows}</div>
+      </section>
     `;
 
     // Re-attach all dynamic buttons

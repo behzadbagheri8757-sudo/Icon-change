@@ -553,10 +553,10 @@
     if (typeof isStale === 'function' && isStale()) return;
 
     /* Semantic composition (presentation only):
-         A. Today's Focus  — target + action queue (primary attention)
-         B. Financial Health — profit / inventory / debt (one surface, stacked rows)
-         C. Quick Actions — tools (de-emphasized)
-         D. Recent Activity — invoices + visits (one activity surface)
+         A. Today's Focus  — alerts + action queue (first decision surface)
+         B. Operating snapshot — real today totals + month target
+         C. Financial Health — profit / inventory / debt
+         D. Quick Actions + Recent Activity
          Data sources, helpers, IDs, and event bindings are unchanged. */
      const alertBar = dashboardAlertBar(ctx);
     const todaySnapshot = todaySnapshotHtml(ctx);
@@ -574,18 +574,22 @@
 
     root.innerHTML =
       '<div class="dashboard-shell">' +
-      '<div class="dashboard-eyebrow">مرکز فرماندهی روزانه</div>' +
+      '<header class="dashboard-eyebrow"><span>مرکز فرماندهی روزانه</span><span class="dashboard-eyebrow-date">' + faDate(todayISO()) + '</span></header>' +
       alertBar +
-      todaySnapshot +
-      targetHtml(metrics) +
 
-      /* A — Today's Focus */
+      /* A — Actionable attention precedes retrospective metrics */
       '<div class="dash-focus">' +
         '<div class="dash-focus-actions">' + focusActions + '</div>' +
       '</div>' +
       watchSummary +
 
-      /* B — Financial Health (same metrics; stacked rows for mobile) */
+      /* B — Snapshot & target make today's work legible at a glance */
+      '<section class="dash-operating-snapshot" aria-label="نمای کلی عملکرد">' +
+        todaySnapshot +
+        targetHtml(metrics) +
+      '</section>' +
+
+      /* C — Financial Health (same metrics; stacked rows for mobile) */
       '<div class="dashboard-block dash-health">' +
         '<div class="dashboard-block-head"><div class="dash-section-label"><span class="dash-section-ico" aria-hidden="true">' + dashboardIcon('card',20) + '</span><span>وضعیت مالی</span></div></div>' +
         '<div class="dash-health-surface">' +
@@ -595,10 +599,10 @@
         '</div>' +
       '</div>' +
 
-      /* C — Quick Actions (tools) */
+      /* D — Quick Actions (tools) */
       quickActionsHtml() +
 
-      /* D — Recent Activity */
+      /* E — Recent Activity */
       activityBlock +
       '</div>';
 

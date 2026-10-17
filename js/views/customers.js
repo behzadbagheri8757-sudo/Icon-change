@@ -190,6 +190,10 @@
           ? ('آخرین خرید: ' + Math.max(0, Math.round(days)) + ' روز پیش')
           : 'هنوز خریدی ثبت نشده';
         const watchTitle = watchCount > 0 ? 'هشدار فعال: ' + watchCount + ' مورد' : '';
+        const locationText = c.locationId
+          ? getLocationDisplayString(c.locationId)
+          : (c.region || '');
+        const contactBits = [c.phone, locationText].filter(Boolean);
 
         return (
           '<a class="ledger-row customer-list-row ' + riskCls + '" data-open-customer="' +
@@ -212,6 +216,9 @@
             ? '<span class="customer-row-watch" aria-label="هشدار فعال" title="' + esc(watchTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>'
             : '') +
           '</span>' +
+          (contactBits.length
+            ? '<span class="customer-row-contact" aria-label="راه ارتباط و موقعیت">' + contactBits.map(function (bit) { return '<span>' + esc(bit) + '</span>'; }).join('<span aria-hidden="true"> · </span>') + '</span>'
+            : '') +
           '</span>' +
           '<span class="customer-row-balance ' + color + '">' +
           '<span class="customer-row-balance-label">' + esc(word) + '</span>' +
@@ -309,8 +316,9 @@
       return '<button type="button" class="chip ' + (custFilter === id ? 'active' : '') + '" data-filter="' + id + '">' + label + '</button>';
     };
     root.innerHTML =
-      '<div class="field"><input id="customer-search" placeholder="جستجوی نام، آدرس، تلفن، منطقه و…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
-      '<div class="chip-row" id="customer-chips">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
+      '<section class="customer-list-controls card" aria-label="جستجو و فیلتر مشتریان">' +
+      '<div class="field customer-search-field"><input id="customer-search" aria-label="جستجوی مشتریان" placeholder="جستجوی نام، آدرس، تلفن، منطقه و…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
+      '<div class="chip-row" id="customer-chips" role="group" aria-label="فیلتر وضعیت حساب">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
       '<div class="bp-customer-secondary-filters">' +
       '<div class="btn-row cl-tools">' +
       '<button type="button" class="btn small secondary" id="customer-filter">فیلتر منطقه</button>' +
@@ -322,11 +330,11 @@
       '<option value="name" ' + (custSortBy === 'name' ? 'selected' : '') + '>نام</option>' +
       '</select>' +
       '</div>' +
-      '</div>' +
+      '</div></section>' +
       '<div id="customer-filter-indicator" class="customer-filter-indicator" aria-live="polite"></div>' +
-      '<div id="customer-count" class="cl-count" aria-live="polite"></div>' +
+      '<div class="customer-list-heading"><span class="customer-list-heading-label">دفتر مشتریان</span><div id="customer-count" class="cl-count" aria-live="polite"></div></div>' +
       '<div class="customer-list-trend-hint"><span class="customer-list-trend-sample"><i></i><b></b></span><span>روند خرید · ۸ هفته اخیر</span></div>' +
-      '<div id="customer-list"></div>';
+      '<div id="customer-list" class="customer-ledger-list" aria-label="فهرست مشتریان"></div>';
 
     const searchEl = document.getElementById('customer-search');
     searchHandler = function (e) { custQuery = e.target.value; renderCustomerListOnly(); };
