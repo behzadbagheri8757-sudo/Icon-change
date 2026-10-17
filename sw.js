@@ -39,7 +39,10 @@
    configured, so it is boot-critical, not merely a nice-to-have precache
    entry. It was already in PRECACHE_URLS; no asset list, route, or business
    logic otherwise changed.) */
-const CACHE_NAME = 'baqeri-shell-v94';
+/* CHANGED: v94 -> v95 (presentation assets only: precache the new shared CRM
+   stylesheet, expose the app icon, and invalidate the old shell cache so
+   installed PWAs load the updated presentation offline. No business data is touched.) */
+const CACHE_NAME = 'baqeri-shell-v95';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
@@ -49,6 +52,7 @@ const PRECACHE_URLS = [
   './css/visual-grammar-components.css',
   './css/visual-grammar-pages.css',
   './css/shamsi-calendar.css',
+  './css/field-refresh.css',
   './js/shamsi-calendar.js',
   './js/models.js',
   './js/ui.js',
@@ -118,6 +122,7 @@ const PRECACHE_URLS = [
 const CRITICAL_SHELLS = [
   './index.html',
   './css/app.css',
+  './css/field-refresh.css',
   './js/db.js',
   './js/nav.js',
   './js/app.js',
