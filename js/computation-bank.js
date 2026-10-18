@@ -95,47 +95,68 @@ var RECEIVABLE_ATTENTION_DEFAULTS = {
             } catch (e) { t = null; }
             if (!t || !(t.balance >= amountFloor)) continue;
 
-            var lastDate = null;
-            var refKind = 'payment';
-
-            var pays = ctx.customerPayments(c.id) || [];
-            for (var p = 0; p < pays.length; p++) {
-              var pay = pays[p];
-              if (!pay || !pay.date) continue;
-              if (['cash', 'card', 'transfer'].indexOf(pay.method) === -1) continue;
-              if (!lastDate || String(pay.date) > String(lastDate)) lastDate = String(pay.date);
+            var today = (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0, 10);
+            var invoices = (ctx.customerInvoices(c.id) || []).filter(function (inv) { return inv && inv.date; })
+              .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+            var latestInv = invoices[0] || null;
+            var pays = (ctx.customerPayments(c.id) || []).filter(function (pay) {
+              return pay && pay.date && ['cash', 'card', 'transfer'].indexOf(pay.method) !== -1;
+            }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+            var checks = (ctx.customerChecks(c.id) || []).filter(function (ch) { return ch && ch.status === 'cleared' && (ch.dueDate || ch.date); })
+              .sort(function (a, b) { return String(b.dueDate || b.date).localeCompare(String(a.dueDate || a.date)); });
+            var latestPayment = pays[0] || null;
+            var latestClearedCheck = checks[0] || null;
+            var paidDate = latestPayment ? String(latestPayment.date) : null;
+            if (latestClearedCheck) {
+              var clearedDate = String(latestClearedCheck.dueDate || latestClearedCheck.date);
+              if (!paidDate || clearedDate > paidDate) paidDate = clearedDate;
             }
 
-            var chks = ctx.customerChecks(c.id) || [];
-            for (var k = 0; k < chks.length; k++) {
-              var ch = chks[k];
-              if (!ch || ch.status !== 'cleared') continue;
-              var d = ch.dueDate || ch.date;
-              if (!d) continue;
-              if (!lastDate || String(d) > String(lastDate)) lastDate = String(d);
-            }
+            var refDate = null, refKind = 'payment', days = null, age = null;
+            var paymentAfterInvoice = !!(latestPayment && (!latestInv || String(latestPayment.date) >= String(latestInv.date)));
+            var explicitFollowUp = paymentAfterInvoice && latestPayment && latestPayment.followUpDate
+              ? String(latestPayment.followUpDate).slice(0, 10) : null;
 
-            if (!lastDate) {
-              refKind = 'no_payment_history';
-              var invs = ctx.customerInvoices(c.id) || [];
-              for (var v = 0; v < invs.length; v++) {
-                var inv = invs[v];
-                if (!inv || !inv.date) continue;
-                if (!lastDate || String(inv.date) > String(lastDate)) lastDate = String(inv.date);
+            // A seller-selected follow-up date supersedes the old payment cycle.
+            // It becomes actionable only on/after that date; no duplicate earlier reminder.
+            if (explicitFollowUp && /^\d{4}-\d{2}-\d{2}$/.test(explicitFollowUp)) {
+              age = (typeof daysAgo === 'function') ? daysAgo(explicitFollowUp) : null;
+              if (age == null || !isFinite(age) || age < 0) continue;
+              refDate = explicitFollowUp; refKind = 'scheduled_followup'; days = Math.round(age);
+            } else if (latestInv && (!paidDate || String(latestInv.date) >= paidDate)) {
+              // New invoice resets the follow-up cycle. Respect an explicit dueDate;
+              // otherwise apply a 10-day grace from invoice date.
+              if (latestInv.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(String(latestInv.dueDate).slice(0, 10))) {
+                refDate = String(latestInv.dueDate).slice(0, 10); refKind = 'invoice_due';
+                age = (typeof daysAgo === 'function') ? daysAgo(refDate) : null;
+                if (age == null || !isFinite(age) || age < 0) continue;
+                days = Math.round(age);
+              } else {
+                refDate = String(latestInv.date).slice(0, 10); refKind = 'no_payment_history';
+                age = (typeof daysAgo === 'function') ? daysAgo(refDate) : null;
+                if (age == null || !isFinite(age) || age < daysFloor) continue;
+                days = Math.round(age);
               }
+            } else {
+              // After a payment (or with no newer invoice), allow 10 days unless
+              // the seller chose an explicit follow-up date above.
+              var anchor = paidDate || (latestInv && String(latestInv.date));
+              if (!anchor) continue;
+              age = (typeof daysAgo === 'function') ? daysAgo(anchor) : null;
+              if (age == null || !isFinite(age) || age < daysFloor) continue;
+              refDate = anchor; refKind = latestPayment ? 'payment' : 'no_payment_history'; days = Math.round(age);
             }
-            if (!lastDate) continue;
-
-            var days = (typeof daysAgo === 'function') ? daysAgo(lastDate) : null;
-            if (days == null || !isFinite(days) || days < daysFloor) continue;
+            if (days == null || !isFinite(days)) continue;
 
             var row = {
               customerId: c.id,
               name: c.name || '—',
               balance: t.balance,
-              refDate: lastDate,
+              refDate: refDate,
               refKind: refKind,
-              daysSince: Math.round(days)
+              daysSince: Math.round(days),
+              dueDate: refDate,
+              followUpDate: refKind === 'scheduled_followup' ? refDate : null
             };
             out.rows.push(row);
             out.byCustomerId[c.id] = row;

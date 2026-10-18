@@ -177,12 +177,13 @@ async function restoreProspectScoutBundle(bundle){
    Runtime DBs stay separate; one user-facing backup file.
    ============================================================ */
 const INTELLIGENCE_DB_NAME = 'bagheri_intelligence_db';
-const INTELLIGENCE_DB_VERSION = 3;
-const INTELLIGENCE_STORES = ['occurrences', 'seller_feedback', 'baseline_cache'];
+const INTELLIGENCE_DB_VERSION = 4;
+const INTELLIGENCE_STORES = ['occurrences', 'seller_feedback', 'baseline_cache', 'seller_acks'];
 const INTELLIGENCE_LS_KEYS = {
   occurrences: 'bagheri_intelligence_occurrences',
   seller_feedback: 'bagheri_intelligence_seller_feedback',
-  baseline_cache: 'bagheri_intelligence_baseline_cache'
+  baseline_cache: 'bagheri_intelligence_baseline_cache',
+  seller_acks: 'bagheri_seller_acks_v1'
 };
 
 function openIntelligenceDbForBackup(){
@@ -199,6 +200,9 @@ function openIntelligenceDbForBackup(){
         }
         if(!db.objectStoreNames.contains('baseline_cache')){
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
+        }
+        if(!db.objectStoreNames.contains('seller_acks')){
+          db.createObjectStore('seller_acks', { keyPath: 'id' });
         }
       };
       req.onsuccess = (e)=> resolve(e.target.result);
@@ -228,6 +232,7 @@ async function exportIntelligenceBundle(){
     let occurrences = await intelligenceBackupGetAll(db, 'occurrences');
     let seller_feedback = await intelligenceBackupGetAll(db, 'seller_feedback');
     let baseline_cache = await intelligenceBackupGetAll(db, 'baseline_cache');
+    let seller_acks = await intelligenceBackupGetAll(db, 'seller_acks');
     // localStorage is the synchronous mirror used by the Intelligence modules
     // for immediate state. Prefer it when present so a backup taken immediately
     // after a write cannot capture a stale async IDB mirror.
@@ -238,8 +243,10 @@ async function exportIntelligenceBundle(){
       if(fbRaw){ const arr=JSON.parse(fbRaw); if(Array.isArray(arr)) seller_feedback=arr; }
       const baseRaw=localStorage.getItem(INTELLIGENCE_LS_KEYS.baseline_cache);
       if(baseRaw){ const map=JSON.parse(baseRaw); if(map && typeof map==='object' && !Array.isArray(map)) baseline_cache=Object.keys(map).map(k=>map[k]).filter(Boolean); }
+      const ackRaw=localStorage.getItem(INTELLIGENCE_LS_KEYS.seller_acks);
+      if(ackRaw){ const arr=JSON.parse(ackRaw); if(Array.isArray(arr)) seller_acks=arr; }
     }catch(lsErr){ console.warn('exportIntelligenceBundle localStorage mirror read failed',lsErr); }
-    return { dbVersion: INTELLIGENCE_DB_VERSION, occurrences: occurrences || [], seller_feedback: seller_feedback || [], baseline_cache: baseline_cache || [] };
+    return { dbVersion: INTELLIGENCE_DB_VERSION, occurrences: occurrences || [], seller_feedback: seller_feedback || [], baseline_cache: baseline_cache || [], seller_acks: seller_acks || [] };
   }catch(e){
     console.error('exportIntelligenceBundle failed', e);
     return null;
@@ -258,6 +265,9 @@ function runIntelligenceRestoreTx(db, bundle){
     };
     try{
       const storeNames = INTELLIGENCE_STORES.filter(function(name){
+        // A v3 backup has no seller_acks field. Preserve current ACKs rather than
+        // interpreting a missing field as an instruction to clear the store.
+        if (name === 'seller_acks' && !(bundle && Array.isArray(bundle.seller_acks))) return false;
         return db.objectStoreNames.contains(name);
       });
       if(!storeNames.length){
@@ -285,7 +295,7 @@ function runIntelligenceRestoreTx(db, bundle){
 
 async function restoreIntelligenceBundle(bundle){
   if(!bundle || typeof bundle !== 'object') return false;
-  if(!Array.isArray(bundle.occurrences) && !Array.isArray(bundle.seller_feedback) && !Array.isArray(bundle.baseline_cache)){
+  if(!Array.isArray(bundle.occurrences) && !Array.isArray(bundle.seller_feedback) && !Array.isArray(bundle.baseline_cache) && !Array.isArray(bundle.seller_acks)){
     return false;
   }
   let db = null;
@@ -294,7 +304,8 @@ async function restoreIntelligenceBundle(bundle){
     await runIntelligenceRestoreTx(db, {
       occurrences: Array.isArray(bundle.occurrences) ? bundle.occurrences : [],
       seller_feedback: Array.isArray(bundle.seller_feedback) ? bundle.seller_feedback : [],
-      baseline_cache: Array.isArray(bundle.baseline_cache) ? bundle.baseline_cache : []
+      baseline_cache: Array.isArray(bundle.baseline_cache) ? bundle.baseline_cache : [],
+      ...(Array.isArray(bundle.seller_acks) ? { seller_acks: _markOrphanSellerAcks(bundle.seller_acks, new Set((data.products||[]).map(x=>String(x.id)))) } : {})
     });
 
     try{
@@ -317,10 +328,12 @@ async function restoreIntelligenceBundle(bundle){
           if(row && row.key != null) baseMap[row.key] = row;
         });
         localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache, JSON.stringify(baseMap));
+        if (Array.isArray(bundle.seller_acks)) localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks, JSON.stringify(_markOrphanSellerAcks(bundle.seller_acks, new Set((data.products||[]).map(x=>String(x.id))))));
       }
     }catch(lsErr){
       console.warn('intelligence localStorage mirror refresh failed', lsErr);
     }
+    if (typeof window !== 'undefined') window.__sellerAckMigrationDone = false;
     return true;
   }catch(e){
     console.error('restoreIntelligenceBundle failed', e);
@@ -564,8 +577,9 @@ function _validateIntelligenceBundle(bundle, customerIds, productIds, products, 
   const groupIds=new Set((Array.isArray(analysisGroups)?analysisGroups:[]).map(g=>String(g&&g.id)));
   const familyOf=new Map();
   (Array.isArray(products)?products:[]).forEach(p=>{ if(p&&p.id!=null) familyOf.set(String(p.id),(p.analysisGroupId!=null&&p.analysisGroupId!=='')?String(p.analysisGroupId):String(p.id)); });
-  if(bundle.dbVersion != null && Number(bundle.dbVersion) !== 3) return false;
+  if(bundle.dbVersion != null && Number(bundle.dbVersion) !== 3 && Number(bundle.dbVersion) !== 4) return false;
   for(const k of ['occurrences','seller_feedback','baseline_cache']) if(!Array.isArray(bundle[k])) return false;
+  if(bundle.seller_acks != null && !Array.isArray(bundle.seller_acks)) return false;
   const occKeys=new Set();
   for(const row of bundle.occurrences){
     if(!_isPlainObject(row) || typeof row.key!=='string' || !row.key) return false;
@@ -592,6 +606,15 @@ function _validateIntelligenceBundle(bundle, customerIds, productIds, products, 
     if(f.source != null && !_INTEL_FEEDBACK_SOURCES.has(String(f.source))) return false;
   }
   const baseKeys=new Set();
+  const ackIds=new Set();
+  for(const a of (bundle.seller_acks||[])){
+    if(!_isPlainObject(a) || typeof a.id!=='string' || !a.id || ackIds.has(a.id)) return false; ackIds.add(a.id);
+    if(!customerIds.has(String(a.customerId))) return false;
+    if(a.scope!=='account' && a.scope!=='product') return false;
+    if(a.scope==='product' && (a.productId==null || String(a.productId)==='')) return false;
+    if(typeof a.decision!=='string' || !a.decision || !_isIsoTimestamp(a.createdAt) || !_isIsoDateOnly(a.expiresAt)) return false;
+    if(a.status!=null && !['active','reversed','superseded','orphan'].includes(String(a.status))) return false;
+  }
   for(const b of bundle.baseline_cache){
     if(!_isPlainObject(b) || typeof b.key!=='string' || !b.key) return false;
     if(baseKeys.has(b.key)) return false; baseKeys.add(b.key);
@@ -847,18 +870,29 @@ async function restoreProspectScoutBundleStrict(bundle){
   try{ await runProspectRestoreTx(db,bundle); } finally { try{db.close();}catch(e){} }
   return true;
 }
+function _markOrphanSellerAcks(rows, productIds){
+  return (Array.isArray(rows) ? rows : []).map(function(a){
+    if(!a || a.scope!=='product' || a.productId==null || productIds.has(String(a.productId))) return a;
+    return Object.assign({}, a, { status:'orphan', orphanedAt:a.orphanedAt||new Date().toISOString(), orphanReason:'product_missing_after_restore' });
+  });
+}
 async function restoreIntelligenceBundleStrict(bundle){
-  if(!_validateIntelligenceBundle(bundle,new Set((data.customers||[]).map(x=>String(x.id))),new Set((data.products||[]).map(x=>String(x.id))),data.products,data.analysisGroups)) throw new Error('Intelligence bundle validation failed');
+  const products = new Set((data.products||[]).map(x=>String(x.id)));
+  const restoreBundle = Object.assign({}, bundle);
+  if (Array.isArray(bundle && bundle.seller_acks)) restoreBundle.seller_acks = _markOrphanSellerAcks(bundle.seller_acks, products);
+  if(!_validateIntelligenceBundle(restoreBundle,new Set((data.customers||[]).map(x=>String(x.id))),products,data.products,data.analysisGroups)) throw new Error('Intelligence bundle validation failed');
   const db=await openIntelligenceDbForBackup();
   try{
-    await runIntelligenceRestoreTx(db,bundle);
+    await runIntelligenceRestoreTx(db,restoreBundle);
   }finally{ try{db.close();}catch(e){} }
-  // localStorage mirrors are part of Intelligence state; failures are fatal.
-  const occMap=Object.create(null); (bundle.occurrences||[]).forEach(r=>{occMap[r.key]=r.dates.slice();});
-  const baseMap=Object.create(null); (bundle.baseline_cache||[]).forEach(r=>{baseMap[r.key]=r;});
+  // A missing ACK field in a legacy v3 backup means preserve current ACK state.
+  const occMap=Object.create(null); (restoreBundle.occurrences||[]).forEach(r=>{occMap[r.key]=r.dates.slice();});
+  const baseMap=Object.create(null); (restoreBundle.baseline_cache||[]).forEach(r=>{baseMap[r.key]=r;});
+  if (Array.isArray(restoreBundle.seller_acks)) localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks,JSON.stringify(restoreBundle.seller_acks));
   localStorage.setItem(INTELLIGENCE_LS_KEYS.occurrences,JSON.stringify(occMap));
-  localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_feedback,JSON.stringify(bundle.seller_feedback||[]));
+  localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_feedback,JSON.stringify(restoreBundle.seller_feedback||[]));
   localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache,JSON.stringify(baseMap));
+  if (typeof window !== 'undefined') window.__sellerAckMigrationDone = false;
   return true;
 }
 

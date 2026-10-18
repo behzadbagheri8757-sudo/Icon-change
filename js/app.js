@@ -51,6 +51,9 @@ async function withSubmitGuard(btn, fn){
 // ---------- render (SPA refresh trigger; legacy MPA fallback removed —
 // isSpaShell() is always true in this single-shell app) ----------
 function render(){
+  if (!window.__sellerAckMigrationDone && typeof migrateSellerAcksFromLegacy === 'function' && typeof data !== 'undefined' && data && Array.isArray(data.customers)) {
+    try { migrateSellerAcksFromLegacy(); window.__sellerAckMigrationDone = true; } catch (eAckMigration) { console.warn('Seller ACK migration failed:', eAckMigration); }
+  }
   if (typeof isSpaShell === 'function' && isSpaShell() && typeof ViewHost !== 'undefined' && ViewHost.refreshCurrent) {
     ViewHost.refreshCurrent();
   }
@@ -748,6 +751,7 @@ function openAddTransaction(cid){
   let amountStr = '';
   let dateStr = todayISO();
   let noteStr = '';
+  let followUpDateStr = '';
   let selectedInvoiceId = '';
   let returnRows = [];
 
@@ -850,6 +854,7 @@ function openAddTransaction(cid){
         <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', dateStr)}</div>
         <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal" value="${amountStr}"></div>
         <div class="field"><label>توضیح (اختیاری)</label><input id="f-note" value="${esc(noteStr)}"></div>
+        ${['cash','card','transfer'].includes(method) ? `<div class="field"><label>تاریخ پیگیری بعدی (اختیاری)</label>${shamsiDateInputHTML('f-followup-date', followUpDateStr || '')}<div class="sub">اگر تاریخ تعیین کنی، پیگیری قبلی با این تاریخ جایگزین می‌شود.</div></div>` : ''}
         ${returnItemsSectionHtml()}
         <div class="btn-row"><button class="btn" id="save-tx">ثبت</button></div>
       ` : ''}
@@ -871,6 +876,8 @@ function openAddTransaction(cid){
     document.getElementById('f-date').addEventListener('input', e=>{ dateStr = e.target.value; });
     document.getElementById('f-amount').addEventListener('input', e=>{ amountStr = e.target.value; });
     document.getElementById('f-note').addEventListener('input', e=>{ noteStr = e.target.value; });
+    const followUpEl = document.getElementById('f-followup-date');
+    if (followUpEl) followUpEl.addEventListener('input', e=>{ followUpDateStr = e.target.value || ''; });
 
     const invoiceSelect = document.getElementById('f-return-invoice');
     if(invoiceSelect){
@@ -972,6 +979,7 @@ function openAddTransaction(cid){
         }
 
         const payment = {id:uid(), customerId:cid, date, amount, method, note, returnItems};
+        if (followUpDateStr && ['cash','card','transfer'].includes(method)) payment.followUpDate = followUpDateStr;
         if(returnInvoiceId) payment.invoiceId = returnInvoiceId;
         // بدون مقصد مشخص (بدون invoiceId) و از انواع قابل‌تخصیص به بدهی؟ همین الان،
         // در لحظهٔ ثبت، جایگاهش در بدهی مشتری مشخص و ذخیره می‌شود (نگاه کنید به
@@ -1020,6 +1028,7 @@ function openEditStandalonePayment(cid, paymentId){
   let dateStr = p.date || todayISO();
   let amountStr = String(p.amount || '');
   let noteStr = p.note || '';
+  let followUpDateStr = p.followUpDate || '';
   openSheet(`
     <h3>ویرایش دریافت</h3>
     <div class="field"><label>نوع</label><select id="ep-method">
@@ -1031,12 +1040,15 @@ function openEditStandalonePayment(cid, paymentId){
     <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('ep-date', dateStr)}</div>
     <div class="field"><label>مبلغ (تومان)</label><input id="ep-amount" type="text" inputmode="decimal" value="${esc(amountStr)}"></div>
     <div class="field"><label>توضیح (اختیاری)</label><input id="ep-note" value="${esc(noteStr)}"></div>
+    <div class="field"><label>تاریخ پیگیری بعدی (اختیاری)</label>${shamsiDateInputHTML('ep-followup-date', followUpDateStr || '')}</div>
     <div class="btn-row"><button class="btn" id="ep-save">ذخیره</button><button class="btn danger secondary" id="ep-delete">حذف دریافت</button></div>
   `, {dirtyCheck:true});
   document.getElementById('ep-method').addEventListener('change', e=>{ method=e.target.value; });
   document.getElementById('ep-date').addEventListener('input', e=>{ dateStr=e.target.value; });
   document.getElementById('ep-amount').addEventListener('input', e=>{ amountStr=e.target.value; });
   document.getElementById('ep-note').addEventListener('input', e=>{ noteStr=e.target.value; });
+  const editFollowUpEl = document.getElementById('ep-followup-date');
+  if (editFollowUpEl) editFollowUpEl.addEventListener('input', e=>{ followUpDateStr=e.target.value || ''; });
   document.getElementById('ep-save').addEventListener('click', async e=>{
     await withSubmitGuard(e.currentTarget, async()=>{
       const amount=numVal(document.getElementById('ep-amount'));
@@ -1046,6 +1058,7 @@ function openEditStandalonePayment(cid, paymentId){
         const livePayment = (data.payments||[]).find(x=>x.id===paymentId && x.customerId===cid);
         if(!livePayment) throw new Error('validation');
         livePayment.method=method; livePayment.date=dateStr||todayISO(); livePayment.amount=amount; livePayment.note=(noteStr||'').trim();
+        if (followUpDateStr) livePayment.followUpDate = followUpDateStr; else delete livePayment.followUpDate;
         // مبلغ/نوع این دریافت عوض شده — فقط تخصیص خودِ همین رکورد دوباره محاسبه می‌شود
         // (بدون دست‌زدن به debtAllocations بقیهٔ دریافت‌ها؛ excludeId یعنی تخصیص قبلیِ
         // خودش در محاسبهٔ «مصرف‌شده» حساب نشود).
@@ -1715,26 +1728,18 @@ function openAddVisit(cid){
   }
 
   openSheet(
-    '<div class="visit-capture-head"><h3>ثبت ویزیت</h3><span class="visit-capture-customer">' + esc(visitCustomer ? visitCustomer.name : 'مشتری') + '</span></div>' +
+    '<h3>ثبت ویزیت</h3>' +
     visitPreHtml +
-    '<section class="visit-capture-section visit-capture-timing card" aria-label="زمان ویزیت"><div class="visit-capture-section-title">زمان ثبت</div>' +
-      '<div class="visit-capture-date-row">' +
-        '<div class="field"><label for="f-date">تاریخ</label>' + shamsiDateInputHTML('f-date', todayISO()) + '</div>' +
-        '<div class="field"><label for="f-time">ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
-      '</div>' +
-    '</section>' +
-    '<section class="visit-capture-section visit-capture-outcome card" aria-label="نتیجه و محصولات پیشنهادی">' +
-      '<div class="visit-capture-section-title">نتیجه و پیشنهادها</div>' +
-      '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
-    '</section>' +
-    '<section class="visit-capture-section visit-capture-followup card" aria-label="پیگیری بعدی و یادداشت">' +
-      '<div class="visit-capture-section-title">بعد از ویزیت</div>' +
-      '<div class="field bp-next-field"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
-        '<select id="f-next-action"><option value="">بدون اقدام</option>' +
-        VISIT_NEXT_ACTIONS.map(function (a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
-        '</select></div>' +
-      '<div class="field"><label for="f-visit-note">یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
-    '</section>' +
+    '<div style="display:flex;gap:8px;">' +
+      '<div class="field" style="flex:1;"><label>تاریخ</label>' + shamsiDateInputHTML('f-date', todayISO()) + '</div>' +
+      '<div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
+    '</div>' +
+    '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
+    '<div class="field bp-next-field" style="margin-top:12px;"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
+      '<select id="f-next-action"><option value="">بدون اقدام</option>' +
+      VISIT_NEXT_ACTIONS.map(function (a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
+      '</select></div>' +
+    '<div class="field" style="margin-top:12px;"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
     '<div class="btn-row visit-save-actions" style="margin-top:8px;">' +
       '<button type="button" class="btn" id="save-visit">ثبت و پایان</button>' +
       '<button type="button" class="btn secondary" id="save-visit-invoice">ثبت و ایجاد فاکتور</button>' +
@@ -2151,6 +2156,16 @@ function openAddVisit(cid){
       } catch (e) {
         console.warn('Game hook failed:', e);
       }
+    }
+    // Automatically create the account-level visit ACK and independent product ACKs.
+    // This is additive Intelligence metadata; visit/accounting data is untouched.
+    if (typeof createVisitSellerAcks === 'function') {
+      try {
+        const coreIds = Object.create(null);
+        (visitBehavior.topProducts || []).slice(0, 3).forEach(function (tp) { if (tp && tp.productId) coreIds[String(tp.productId)] = true; });
+        (data.products || []).forEach(function (p) { if (p && (p.isCore === true || p.coreProduct === true)) coreIds[String(p.id)] = true; });
+        createVisitSellerAcks(cid, visit, offered, coreIds);
+      } catch (eAck) { console.warn('Seller ACK creation failed:', eAck); }
     }
     closeModal();
     if (typeof openCustomerDetail === 'function') openCustomerDetail(cid);
@@ -3461,6 +3476,20 @@ function openInvoiceForm(cid, editInv, opts){
         restoreDataInPlace(previousData);
         btn.disabled = false;
         return;
+      }
+      // A new purchase of the same product/family supersedes its temporary product ACK.
+      if (typeof listSellerAcks === 'function' && typeof supersedeSellerAck === 'function') {
+        try {
+          const acks = listSellerAcks(cid, false) || [];
+          const familyOf = function(pid) {
+            try { if (typeof resolveFamilyId === 'function') return String(resolveFamilyId(pid)); } catch (e) {}
+            const p = (data.products || []).find(function(x){return x && String(x.id)===String(pid);});
+            return p && p.analysisGroupId != null && p.analysisGroupId !== '' ? String(p.analysisGroupId) : String(pid);
+          };
+          const boughtFamilies = Object.create(null);
+          (newInv.items || []).forEach(function(it){ if(it && it.productId) boughtFamilies[familyOf(it.productId)] = true; });
+          acks.forEach(function(a){ if(a && a.scope==='product' && a.productId && boughtFamilies[familyOf(a.productId)]) supersedeSellerAck(a.id, newInv.id); });
+        } catch (eAck) { console.warn('Related seller ACK supersession failed:', eAck); }
       }
       // Game Center hooks — CREATE only (edit path returns earlier). Never rolls back CRM.
       if (typeof gameOnInvoice === 'function') {

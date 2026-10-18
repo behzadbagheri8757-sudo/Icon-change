@@ -489,6 +489,7 @@ function normalizeData(parsed){
   }));
   d.invoices = (parsed.invoices||[]).map(i=>({
     id:i.id||uid(), number:optNum(i.number), customerId:i.customerId, date:i.date,
+    dueDate: i.dueDate || null,
     visitId: i.visitId || null,
     items:(i.items||[]).map(it=>({
       productId:it.productId, name:it.name, qty:num(it.qty), price:num(it.price),
@@ -502,6 +503,7 @@ function normalizeData(parsed){
   d.payments = (parsed.payments||[]).map(p=>({
     id:p.id||uid(), customerId:p.customerId, date:p.date, amount:num(p.amount),
     method:p.method||'cash', invoiceId:p.invoiceId, note:p.note||'',
+    followUpDate: p.followUpDate || null,
     returnItems: Array.isArray(p.returnItems) ? p.returnItems.map(ri=>({
       productId: ri.productId, name: ri.name||'', qty:num(ri.qty), price:num(ri.price),
     })) : [],
