@@ -64,6 +64,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="باقری">
+<meta name="theme-color" content="#B65415">
 <!-- Home Screen App Icons only (not invoice/print logo) -->
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
@@ -83,10 +84,18 @@
 </head>
 <body class="page-dashboard">
 <header>
-  <h1>حبوبات و خشکبار باقری</h1>
+  <div class="header-brand">
+    <span class="brand-mark" aria-hidden="true"><img src="./icons/icon-192.png" alt="" width="34" height="34"></span>
+    <h1>حبوبات و خشکبار باقری</h1>
+  </div>
   <p class="header-date" id="header-date" aria-live="polite"></p>
 </header>
 <nav id="nav"></nav>
+<section id="app-splash" class="app-splash" aria-label="در حال آماده‌سازی باقری">
+  <img src="./icons/icon-192.png" alt="" width="96" height="96">
+  <strong>حبوبات و خشکبار باقری</strong>
+  <span>در حال آماده‌سازی برنامه</span>
+</section>
 <main id="main"></main>
 <button class="fab" id="fab" style="display:none;">+</button>
 <div id="modalRoot"></div>
