@@ -2628,8 +2628,7 @@ function openInvoiceForm(cid, editInv, opts){
     const paid = cashPaid+cardPaid+transferPaid+checkAmount;
     const newBalance = prevBalance + total - paid;
     const profit = invoiceProfitEstimate();
-    const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
-    const profitColor = profit<0 ? (isDarkTheme ? '#FF6973' : '#D52B36') : (isDarkTheme ? '#45C99A' : '#0F7A4A');
+    const profitColor = profit<0 ? 'var(--vg-color-danger)' : 'var(--vg-color-success-text)';
     const remainCls = newBalance>0 ? 'accent-rust' : 'accent-olive';
     const totalChipEl = document.getElementById('inv-total-chip-value');
     if(totalChipEl) totalChipEl.textContent = toman(total) + ' ت';
@@ -3687,11 +3686,11 @@ function openSupplierDetail(sid){
         border:1px dashed #bbb; background:transparent; color:#bbb;
         font-size:11px; cursor:pointer; opacity:0.25;
       }
-      #qa-dev-btn:hover{ opacity:0.85; border-color:var(--gold,#FF5C35); color:var(--olive-dark,#1F2937); }
+      #qa-dev-btn:hover{ opacity:0.85; border-color:var(--vg-color-brand); color:var(--vg-color-primary); }
       #qa-panel.overlay{ z-index:9999; }
       #qa-panel .sheet{ max-height:92vh; }
-      #qa-panel .qa-pass{ color:var(--olive-dark,#1F2937); font-weight:700; }
-      #qa-panel .qa-fail{ color:var(--red,#FA3946); font-weight:700; }
+      #qa-panel .qa-pass{ color:var(--vg-color-primary); font-weight:700; }
+      #qa-panel .qa-fail{ color:var(--vg-color-danger); font-weight:700; }
       #qa-panel .qa-log{
         max-height:280px; overflow:auto; font-size:.75rem;
         background:#fff; border:1px solid var(--line,#E0E4E8);
@@ -4588,4 +4587,3 @@ function openSupplierDetail(sid){
     setTimeout(ensureQAUI, 0);
   }
 })();
-

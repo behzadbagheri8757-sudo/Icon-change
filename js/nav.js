@@ -1404,6 +1404,9 @@ async function bootSpaShell() {
       }
     }
 
+    var appSplash = document.getElementById('app-splash');
+    if (appSplash) appSplash.classList.add('is-hidden');
+
     renderSharedNav('dashboard');
     renderBottomNav('dashboard');
     ensureAppBackButton('dashboard');
