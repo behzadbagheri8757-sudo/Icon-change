@@ -29,7 +29,7 @@
     lsKey: 'bagheri_intelligence_seller_feedback',
     idbName: 'bagheri_intelligence_db',
     idbStore: 'seller_feedback',
-    idbVersion: 3
+    idbVersion: 4
   };
 
   var REASON_MODIFIERS = {
@@ -87,7 +87,7 @@
       var req = indexedDB.open(FEEDBACK_PARAMS.idbName, FEEDBACK_PARAMS.idbVersion);
       req.onupgradeneeded = function (ev) {
         var db = ev.target.result;
-        // Shared bagheri_intelligence_db schema (v3): ensure all Intelligence stores.
+        // Shared bagheri_intelligence_db schema (v4): ensure all Intelligence stores.
         if (!db.objectStoreNames.contains('occurrences')) {
           db.createObjectStore('occurrences', { keyPath: 'key' });
         }
@@ -97,9 +97,12 @@
         if (!db.objectStoreNames.contains('baseline_cache')) {
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
         }
+        if (!db.objectStoreNames.contains('seller_acks')) {
+          db.createObjectStore('seller_acks', { keyPath: 'id' });
+        }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result;
+        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
         if (cb) cb(_idb);
       };
       req.onerror = function () { if (cb) cb(null); };
@@ -276,7 +279,18 @@
     if (!signal) return signal;
     var fb = getFeedbackForSignal(signal);
     if (!fb) {
-      // no feedback → leave signal unchanged (modifier absent = 0)
+      // No feedback does not mean no ACK: apply an active ACK independently.
+      if (typeof getSellerAckForSignal === 'function') {
+        try {
+          var ackOnly = getSellerAckForSignal(signal);
+          if (ackOnly) {
+            signal.sellerAck = { id: ackOnly.id, decision: ackOnly.decision, scope: ackOnly.scope,
+              expiresAt: ackOnly.expiresAt, actionText: ackOnly.actionText || '', priorityDelta: ackOnly.priorityDelta || 0,
+              watchMode: ackOnly.watchMode || 'defer', reason: ackOnly.reason || '' };
+            if (ackOnly.riskOverride !== false) signal.riskModifier = Number(ackOnly.riskDelta) || 0;
+          }
+        } catch (ackOnlyErr) { /* fail open */ }
+      }
       return signal;
     }
     var code = fb.reasonCode;
@@ -293,6 +307,20 @@
     signal.riskModifier = modifier;
     if (code && REASON_ACTION_HINT[code]) {
       signal.feedbackHint = REASON_ACTION_HINT[code];
+    }
+    // Unified ACK layer: a matching active ACK replaces (never adds to) the
+    // feedback modifier. Product ACKs are scope-checked by ack.js and cannot
+    // match account-level PURCHASE_DECLINE or financial signals.
+    if (typeof getSellerAckForSignal === 'function') {
+      try {
+        var ack = getSellerAckForSignal(signal);
+        if (ack) {
+          signal.sellerAck = { id: ack.id, decision: ack.decision, scope: ack.scope,
+            expiresAt: ack.expiresAt, actionText: ack.actionText || '', priorityDelta: ack.priorityDelta || 0,
+            watchMode: ack.watchMode || 'defer', reason: ack.reason || '' };
+          if (ack.riskOverride !== false) signal.riskModifier = Number(ack.riskDelta) || 0;
+        }
+      } catch (ackErr) { /* ACK failure must not break legacy feedback */ }
     }
     return signal;
   }

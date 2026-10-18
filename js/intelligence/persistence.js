@@ -32,7 +32,7 @@
     lsKey: 'bagheri_intelligence_occurrences',
     idbName: 'bagheri_intelligence_db',
     idbStore: 'occurrences',
-    idbVersion: 3
+    idbVersion: 4
   };
 
   // key -> array of ISO date strings (YYYY-MM-DD), newest not required sorted
@@ -122,7 +122,7 @@
       var req = indexedDB.open(PERSISTENCE_PARAMS.idbName, PERSISTENCE_PARAMS.idbVersion);
       req.onupgradeneeded = function (ev) {
         var db = ev.target.result;
-        // Shared bagheri_intelligence_db schema (v3): ensure all Intelligence stores.
+        // Shared bagheri_intelligence_db schema (v4): ensure all Intelligence stores.
         if (!db.objectStoreNames.contains('occurrences')) {
           db.createObjectStore('occurrences', { keyPath: 'key' });
         }
@@ -132,9 +132,12 @@
         if (!db.objectStoreNames.contains('baseline_cache')) {
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
         }
+        if (!db.objectStoreNames.contains('seller_acks')) {
+          db.createObjectStore('seller_acks', { keyPath: 'id' });
+        }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result;
+        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
         if (cb) cb(_idb);
       };
       req.onerror = function () {

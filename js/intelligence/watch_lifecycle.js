@@ -165,7 +165,7 @@
         }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result;
+        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
         if (cb) cb(_idb);
       };
       req.onerror = function () { if (cb) cb(null); };
@@ -806,6 +806,15 @@
       if (!r || r.status !== 'active') continue;
       if (customerId && String(r.customerId) !== String(customerId)) continue;
       if (!_isCustomerActive(r.customerId)) continue;
+      // Unified ACKs defer only the matching Watch subject. Financial-immediate
+      // categories are guarded in getSellerAckForSignal and remain visible.
+      if (typeof getSellerAckForSignal === 'function') {
+        try {
+          var ackSignal = { customerId: r.customerId, category: r.watchCategory, productId: r.productId == null ? null : r.productId, sourceLevel: r.productId == null ? 'account' : 'sku', familyId: r.familyId };
+          var ack = getSellerAckForSignal(ackSignal);
+          if (ack && ack.watchMode === 'defer') continue;
+        } catch (eAckFilter) { /* fail open */ }
+      }
       out.push(r);
     }
     // Sort: unreviewed first, then level desc
@@ -830,6 +839,14 @@
       if (!r || r.status === 'active' || !r.suppression || r.suppression.releasedAt) continue;
       if (r.suppression.type !== 'follow_up_later') continue;
       if (customerId && String(r.customerId) !== String(customerId)) continue;
+      if (typeof getSellerAckForSignal === 'function') {
+        try {
+          var followSignal = { customerId: r.customerId, category: r.watchCategory, productId: r.productId == null ? null : r.productId, sourceLevel: r.productId == null ? 'account' : 'sku', familyId: r.familyId };
+          var followAck = getSellerAckForSignal(followSignal);
+          var currentDay = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0,10);
+          if (followAck && followAck.decision === 'follow_up_later' && String(followAck.expiresAt) > String(currentDay)) continue;
+        } catch (eFollowAck) { /* fail open */ }
+      }
       out.push(r);
     }
     out.sort(function (a, b) {
@@ -855,8 +872,9 @@
       var r = rows[i];
       if (!r || String(r.customerId) !== String(customerId)) continue;
       var code = r.reason && r.reason.code ? String(r.reason.code) : '';
+      if (!code || code === 'dismiss') continue;
       var sup = r.suppression || null;
-      if (code && code !== 'dismiss') out.push({
+      out.push({
         occurrenceId: r.id,
         watchCategory: r.watchCategory,
         productId: _normPid(r.productId),
@@ -867,14 +885,6 @@
         held: !!(sup && !sup.releasedAt && r.status !== 'active'),
         decision: sup ? sup.type : null
       });
-      // Manual dismiss is a separate response event. Preserve the earlier reason/comment.
-      if (r.status === 'dismissed' && sup && sup.type === 'dismiss') {
-        out.push({
-          occurrenceId: r.id, watchCategory: r.watchCategory, productId: _normPid(r.productId),
-          status: r.status, code: 'dismiss', comment: r.reason && r.reason.comment ? String(r.reason.comment) : '',
-          recordedAt: sup.decidedAt || r.lastEvaluatedAt || null, held: true, decision: 'dismiss'
-        });
-      }
     }
     return out;
   }
@@ -906,6 +916,51 @@
     };
   }
 
+  function _recordUnifiedSellerAckFromWatch(rec, code, comment) {
+    if (!rec || typeof createSellerAck !== 'function' || !code) return null;
+    try {
+      var productId = _normPid(rec.productId);
+      var scope = productId != null ? 'product' : 'account';
+      var days = code === 'no_need' || code === 'not_wanted' ? 14 : code === 'price' ? 5 : code === 'follow_up_later' ? 5 : 7;
+      var coreProduct = false;
+      if (productId != null) {
+        try {
+          var appData = (typeof data !== 'undefined' && data) ? data : (global.data || {});
+          var prod = (appData.products || []).find(function(p){return p && String(p.id)===String(productId);});
+          coreProduct = !!(prod && (prod.isCore === true || prod.coreProduct === true));
+          if (!coreProduct && typeof customerBehavior === 'function') {
+            var behavior = customerBehavior(rec.customerId) || {};
+            coreProduct = (behavior.topProducts || []).slice(0,3).some(function(tp){return tp && String(tp.productId)===String(productId);});
+          }
+        } catch (eCore) {}
+      }
+      var riskDelta = code === 'still_stock' ? -10 : code === 'no_need' ? -30 : code === 'not_wanted' ? -40 : code === 'follow_up_later' ? -10 : code === 'competitor' && coreProduct ? 10 : 0;
+      var priorityDelta = code === 'still_stock' || code === 'follow_up_later' ? -3 : code === 'no_need' ? -5 : code === 'not_wanted' ? -8 : code === 'competitor' && coreProduct ? 5 : 0;
+      var actionText = code === 'still_stock' ? 'بپرس از ما دارد یا رقیب'
+        : code === 'no_need' ? 'فعلاً نیاز ندارد؛ بررسی بعد از ۱۴ روز'
+        : code === 'not_wanted' ? 'محصول را نمی‌خواهد؛ بازبینی پس از ۱۴ روز'
+        : code === 'price' ? 'پیگیری قیمت / پیدا کردن راهکار'
+        : code === 'competitor' ? (coreProduct ? 'بازگرداندن مشتری — خرید از رقیب' : 'برو بپرس این جنس را دیگر نمی‌خواهد؟')
+        : code === 'follow_up_later' ? 'پیگیری مجدد'
+        : 'بررسی علت نامشخص — پیگیری بعدی';
+      var created = (rec.reason && rec.reason.recordedAt) || _nowISO();
+      var due = rec.followUpDate || rec.nextFollowUpDate || (rec.suppression && rec.suppression.followUpDate) || null;
+      var expires = due && /^\d{4}-\d{2}-\d{2}$/.test(String(due).slice(0,10)) ? String(due).slice(0,10) : null;
+      if (expires) {
+        var nowDay = String(created).slice(0,10);
+        var diff = Math.round((new Date(expires+'T12:00:00').getTime()-new Date(nowDay+'T12:00:00').getTime())/86400000);
+        days = Math.max(0, diff);
+      }
+      return createSellerAck({ customerId: rec.customerId, scope: scope, productId: productId,
+        familyId: productId != null && typeof resolveFamilyId === 'function' ? resolveFamilyId(productId) : null,
+        decision: code, durationDays: days, createdAt: created, expiresAt: expires || undefined,
+        source: 'watch', sourceId: rec.id, subjectKey: 'watch:' + String(rec.id), reason: code,
+        comment: comment || '', riskDelta: riskDelta, priorityDelta: priorityDelta,
+        priorityUntil: priorityDelta ? (expires || undefined) : undefined, riskOverride: code !== 'other', coreProduct: coreProduct,
+        actionText: actionText, watchMode: (code === 'price' || code === 'competitor' || code === 'quality') ? 'active' : 'defer' });
+    } catch (e) { return null; }
+  }
+
   /**
    * Record seller reason + optional note.
    * - Plain reasons (price, competitor, ...): data capture only; status stays
@@ -916,12 +971,14 @@
    *   marker so the same subject does not regenerate (see "Seller decisions").
    * Both entry points (Customer page, Watch page) call this same function.
    */
-  function recordWatchReason(occurrenceId, reasonCode, comment) {
+  function recordWatchReason(occurrenceId, reasonCode, comment, followUpDate) {
     if (!occurrenceId) return null;
     var rec = _mem[occurrenceId];
     if (!rec) return null;
     if (rec.status !== 'active') return null;
     var code = reasonCode ? String(reasonCode) : null;
+    if (code === 'follow_up_later' && followUpDate && /^\d{4}-\d{2}-\d{2}$/.test(String(followUpDate).slice(0,10))) rec.followUpDate = String(followUpDate).slice(0,10);
+    else if (code === 'follow_up_later') delete rec.followUpDate;
     // 'dismiss' is an explicit close action, not a reason code. Never
     // silently reinterpret it as 'other'; callers must use
     // dismissWatchOccurrence() so the lifecycle state is actually closed.
@@ -942,6 +999,7 @@
       rec.lastEvaluatedAt = nowD;
       rec.resolution = { type: 'seller_' + code, resolvedAt: nowD, note: null };
       rec.suppression = _decisionSnapshot(rec, code);
+      _recordUnifiedSellerAckFromWatch(rec, code, text);
       _persist(rec);
       return rec;
     }
@@ -950,6 +1008,7 @@
       comment: comment ? String(comment).slice(0, 500) : '',
       recordedAt: _nowISO()
     };
+    _recordUnifiedSellerAckFromWatch(rec, code, rec.reason.comment);
     _persist(rec);
     return rec;
   }
@@ -983,9 +1042,6 @@
     rec.suppression = _decisionSnapshot(rec, 'dismiss');
     // Reason/comment history (if any was recorded earlier) is untouched.
     _persist(rec);
-    if (typeof global.recordWatchDismissActionAck === 'function') {
-      try { global.recordWatchDismissActionAck(rec); } catch (eAckDismiss) { /* fail open */ }
-    }
     return rec;
   }
 
@@ -1012,6 +1068,13 @@
       var held = false;
       for (var k = 0; k < ts.length; k++) {
         if (!_releaseReasonFor(ts[k], w, ctx)) { held = true; break; }
+      }
+      if (!held && typeof getSellerAckForSignal === 'function') {
+        try {
+          var ackSignal = { customerId: customerId, category: w.category, productId: w.productId == null ? null : w.productId, sourceLevel: w.productId == null ? 'account' : 'sku' };
+          var ack = getSellerAckForSignal(ackSignal);
+          if (ack && ack.watchMode === 'defer') held = true;
+        } catch (eAckRawFilter) { /* fail open */ }
       }
       if (!held) out.push(w);
     }
@@ -1069,6 +1132,7 @@
     rec.suppression.resultComment = text;
     rec.suppression.releasedAt = null;
     rec.suppression.releasedBy = null;
+    _recordUnifiedSellerAckFromWatch(rec, code, text);
     _persist(rec);
     return rec;
   }
@@ -1078,6 +1142,9 @@
     var rec = _mem[occurrenceId];
     if (!rec || !rec.suppression || rec.suppression.releasedAt) return null;
     _releaseSuppression(rec, 'seller_reversal');
+    if (typeof listSellerAcks === 'function' && typeof reverseSellerAck === 'function') {
+      try { (listSellerAcks(rec.customerId, true) || []).forEach(function(a){ if(a && (a.source === 'watch' || a.source === 'watch_migration') && String(a.sourceId) === String(rec.id)) reverseSellerAck(a.id); }); } catch (eAckReverse) {}
+    }
     return rec;
   }
 
@@ -1102,9 +1169,6 @@
         resolve(false);
         return;
       }
-      // Action acknowledgements are device-local operational state, not part of
-      // the Watch history backup. Clear stale acknowledgements on valid restore.
-      if (typeof global.clearActionAcks === 'function') global.clearActionAcks();
       var rows = Array.isArray(bundle.occurrences) ? bundle.occurrences : [];
       // Soft validation + backward-compatible migration. Old V1 dismissed rows
       // may have resolution/reason data but no suppression marker. We reconstruct
@@ -1156,10 +1220,19 @@
   }
 
   function clearWatchLifecycle() {
-    // Clear only device-local operational Action Acks. Watch occurrences and
-    // their reason/comment history are durable business context and must not
-    // be erased as a side effect of resetting the Action queue.
-    if (typeof global.clearActionAcks === 'function') global.clearActionAcks();
+    _mem = Object.create(null);
+    _dirtyIds = Object.create(null);
+    try {
+      if (typeof localStorage !== 'undefined' && localStorage) {
+        localStorage.removeItem(WATCH_LS_KEY);
+      }
+    } catch (e) { /* ignore */ }
+    if (_idb) {
+      try {
+        var tx = _idb.transaction(WATCH_STORE, 'readwrite');
+        tx.objectStore(WATCH_STORE).clear();
+      } catch (e2) { /* ignore */ }
+    }
   }
 
   /** Label helper for UI */

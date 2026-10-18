@@ -290,6 +290,27 @@
       W_TIMING * timingComponent;
 
     var priorityScore = Math.round(weighted * 10) / 10;
+    // ACK adjustments are score-only; they never remove a customer from Priority.
+    var ackIds = Object.create(null), ackDelta = 0;
+    var hasBounced = signals.some(function (sig) { return sig && sig.category === 'CHECK_BOUNCED'; });
+    if (typeof getSellerAckForSignal === 'function') {
+      signals.forEach(function (sig) {
+        try {
+          var ack = getSellerAckForSignal(sig);
+          if (ack && !ackIds[ack.id]) { ackIds[ack.id] = true; var delta = Number(ack.priorityDelta) || 0; if (ack.decision === 'visit_reviewed' && ack.priorityUntil) { var pd = String(ack.priorityUntil).slice(0,10); var td = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0,10); if (pd < td || hasBounced) delta = 0; } ackDelta += delta; }
+        } catch (eAck) { /* fail open */ }
+      });
+    }
+    // Ordinary visit ACK gives a small temporary reduction only when no bounced check exists.
+    if (!hasBounced && typeof getSellerAckPriorityAdjustment === 'function') {
+      try { var visitAck = getSellerAckPriorityAdjustment(cid); if (visitAck && !ackIds[visitAck.id]) ackDelta += Number(visitAck.priorityDelta) || -5; } catch (eVisitAck) {}
+    }
+    // A single visit may create several product ACKs. Cap their combined
+    // negative effect at -10 and positive effect at +5 so one event cannot
+    // swing a customer's priority excessively in either direction.
+    if (ackDelta < -10) ackDelta = -10;
+    if (ackDelta > 5) ackDelta = 5;
+    priorityScore += ackDelta;
     if (priorityScore > 100) priorityScore = 100;
     if (priorityScore < 0) priorityScore = 0;
 
@@ -326,6 +347,7 @@
         economic: economicComponent,
         opportunity: opportunityComponent,
         timing: timingComponent,
+        sellerAckDelta: ackDelta,
         weights: {
           risk: W_RISK,
           economic: W_ECONOMIC,

@@ -149,200 +149,12 @@
     reason: 'بدون Signal فعال',
   };
 
-  // Action acknowledgements are operational UI state, separate from CRM/accounting data.
-  // Storage is deliberately localStorage-only: no schema/IndexedDB migration is required.
-  const ACTION_ACK_KEY = 'bagheri_action_ack_v1';
-  const ACTION_ACK_COOLDOWN_DAYS = { no_order: 5, ordered: 7, invoice_created: 5, payment: 7, dismissed: 7, deferred: 5 };
-  function _actionAckRead() {
-    try {
-      var raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(ACTION_ACK_KEY) : null;
-      var parsed = raw ? JSON.parse(raw) : {};
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch (e) { return {}; }
-  }
-  function _actionAckWrite(cid, topic, details) {
-    if (cid == null || cid === '' || typeof topic !== 'string' || !topic.trim()) return false;
-    var all = _actionAckRead();
-    var key = String(cid) + '|' + topic;
-    all[key] = {
-      customerId: String(cid), signalTopic: topic,
-      lastActionAt: details && details.lastActionAt ? String(details.lastActionAt) : new Date().toISOString(),
-      actionType: details && details.actionType ? String(details.actionType) : 'visit',
-      outcome: details && details.outcome ? String(details.outcome) : 'info_only',
-      evidenceId: details && details.evidenceId ? String(details.evidenceId) : '',
-      note: details && details.note ? String(details.note).slice(0, 500) : ''
-    };
-    try { if (typeof localStorage !== 'undefined') localStorage.setItem(ACTION_ACK_KEY, JSON.stringify(all)); else return false; return true; }
-    catch (e) { return false; }
-  }
-  function _actionSignalTopic(signal, famOf) {
-    if (!signal || !signal.category) return null;
-    var base = {
-      PURCHASE_DECLINE_MILD: 'purchase_decline', PURCHASE_DECLINE_SEVERE: 'purchase_decline',
-      BEHIND_PATTERN: 'behind_pattern', SKU_DELAY: 'sku_delay', KEY_PRODUCT_LOST: 'key_product_lost',
-      MULTI_SKU_DECLINE: 'multi_sku_decline', COMBINED_SKU_DETERIORATION: 'combined_sku_deterioration',
-      PAYMENT_OVERDUE: 'payment_overdue', CHECK_BOUNCED: 'check_bounced',
-      SKU_QUANTITY_DROP: 'sku_quantity_drop', SKU_FREQUENCY_DROP: 'sku_frequency_drop', LINE_DROP: 'line_drop'
-    }[signal.category];
-    if (!base) return null;
-    if (['SKU_DELAY','SKU_QUANTITY_DROP','SKU_FREQUENCY_DROP','LINE_DROP','KEY_PRODUCT_LOST','MULTI_SKU_DECLINE','COMBINED_SKU_DETERIORATION'].indexOf(signal.category) >= 0) {
-      var pid = signal.productId;
-      if (signal.category === 'KEY_PRODUCT_LOST' && (!pid || pid === 'multi')) {
-        var lost = signal.evidence && (signal.evidence.hardLost || signal.evidence.retainedLost);
-        if (Array.isArray(lost) && lost.length === 1) pid = lost[0].productId;
-      }
-      var family = signal.familyId || (pid && pid !== 'multi' && typeof famOf === 'function' ? famOf(pid) : null);
-      if (family == null || family === '') return null;
-      return base + '|' + String(family);
-    }
-    return base;
-  }
-  function _actionAckActive(cid, topic, now) {
-    if (cid == null || !topic) return false;
-    var rec = _actionAckRead()[String(cid) + '|' + topic];
-    if (!rec || !rec.lastActionAt) return false;
-    var start = Date.parse(rec.lastActionAt);
-    var end = (now == null ? Date.now() : now);
-    if (!isFinite(start) || end < start) return false;
-    var days = ACTION_ACK_COOLDOWN_DAYS[rec.outcome] || 3;
-    return (end - start) < days * 86400000;
-  }
-  function _recordActionAck(cid, topic, details) { return _actionAckWrite(cid, topic, details); }
-  function _recordProductAcks(cid, productIds, details) {
-    if (!Array.isArray(productIds) || !productIds.length) return;
-    var famOf = typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; };
-    var cats = ['SKU_DELAY','SKU_QUANTITY_DROP','SKU_FREQUENCY_DROP','LINE_DROP','KEY_PRODUCT_LOST','MULTI_SKU_DECLINE','COMBINED_SKU_DETERIORATION'];
-    productIds.forEach(function (pid) {
-      if (!pid || pid === 'multi') return;
-      cats.forEach(function (category) {
-        var topic = _actionSignalTopic({ category: category, productId: pid }, famOf);
-        if (topic) _actionAckWrite(cid, topic, details);
-      });
-    });
-  }
-  function _visitWithoutProductTopics(visit) {
-    // Classify only from persisted visit fields; unknown or unrelated subjects fail closed.
-    var result = String(visit && visit.result || '').trim();
-    var note = String(visit && visit.note || '').trim();
-    var nextAction = String(visit && visit.nextAction || '').trim();
-    var text = [result, note, nextAction].join(' ').toLowerCase();
-    if (!text.trim()) return [];
-
-    // Explicitly unrelated visit purposes take precedence over the generic no-order result.
-    if (/(پرداخت|وصول|چک|فاکتور|مطالبات|اطلاعات.?گیر|اطلاعات.?گیری|ثبت.?اطلاعات|پیگیری.?فاکتور|پیگیری.?چک)/i.test(text)) return [];
-
-    // The exact persisted result means no order. Handle it before broad topic
-    // extraction, otherwise the purchase_decline match makes the old !topics.length
-    // fallback unreachable and behind_pattern is missed.
-    if (result === 'سفارش گرفته نشد') return ['purchase_decline', 'behind_pattern'];
-
-    var topics = [];
-    if (/(کاهش.?خرید|افت.?خرید|خرید.?کمتر|کم.?خرید|سفارش.?نگرفت|سفارش.?گرفته.?نشد|خرید.?نکرد|بدون.?سفارش)/i.test(text)) topics.push('purchase_decline');
-    if (/(موعد.?خرید|موعد.?سفارش|الگوی.?خرید|الگوی.?عقب.?ماندگی|عقب.?ماندگی|عقب.?افتاده|دوره.?خرید|زمان.?خرید)/i.test(text)) topics.push('behind_pattern');
-    return topics;
-  }
-  global.recordVisitActionAcks = function (cid, visit) {
-    if (!cid || !visit || !visit.id) return false;
-    var deferred = visit.nextAction && /بعداً|بعدا|فعلاً نه|فعلا نه/.test(String(visit.nextAction));
-    var details = {
-      actionType: 'visit',
-      outcome: deferred ? 'deferred' : (visit.ordered === true ? 'ordered' : 'no_order'),
-      evidenceId: visit.id, note: visit.note || '', lastActionAt: new Date().toISOString()
-    };
-    if (Array.isArray(visit.offeredProducts) && visit.offeredProducts.length) {
-      _recordProductAcks(cid, visit.offeredProducts.map(function (x) { return x && x.productId; }), details);
-
-      // A no-order visit that included offered products also acknowledges the
-      // customer-level decline/pattern topics — only for the exact persisted
-      // no-order result, and never when the visit subject is explicitly about
-      // payment/collection/invoice/information gathering. Ordered visits keep
-      // product/family-only acknowledgements.
-      var result = String(visit.result || '').trim();
-      var note = String(visit.note || '').trim();
-      var nextAction = String(visit.nextAction || '').trim();
-      var text = [result, note, nextAction].join(' ').toLowerCase();
-      var paymentLike = /(پرداخت|وصول|چک|فاکتور|مطالبات|اطلاعات.?گیر|اطلاعات.?گیری|ثبت.?اطلاعات|پیگیری.?فاکتور|پیگیری.?چک)/i.test(text);
-      if (result === 'سفارش گرفته نشد' && !paymentLike) {
-        _actionAckWrite(cid, 'purchase_decline', details);
-        _actionAckWrite(cid, 'behind_pattern', details);
-      }
-    } else {
-      _visitWithoutProductTopics(visit).forEach(function (topic) { _actionAckWrite(cid, topic, details); });
-    }
-    return true;
-  };
-  global.recordInvoiceActionAcks = function (cid, invoice) {
-    if (!cid || !invoice || !invoice.id) return false;
-    var details = { actionType: 'invoice', outcome: 'invoice_created', evidenceId: invoice.id, note: '', lastActionAt: new Date().toISOString() };
-    _actionAckWrite(cid, 'purchase_decline', details);
-    _recordProductAcks(cid, (invoice.items || []).map(function (x) { return x && x.productId; }), details);
-    return true;
-  };
-  global.recordPaymentActionAcks = function (cid, payment) {
-    if (!cid || !payment || !payment.id || payment.method === 'return') return false;
-    return _actionAckWrite(cid, 'payment_overdue', {
-      actionType: 'payment', outcome: 'payment', evidenceId: payment.id, note: payment.note || '',
-      lastActionAt: new Date().toISOString()
-    });
-  };
-  global.recordWatchDismissActionAck = function (occurrence) {
-    if (!occurrence || !occurrence.customerId) return false;
-    var cat = String(occurrence.watchCategory || '');
-    var map = { PURCHASE_DECLINE_WATCH:'purchase_decline', BEHIND_PATTERN_WATCH:'behind_pattern', SKU_DELAY_WATCH:'sku_delay', SKU_QUANTITY_DROP_WATCH:'sku_quantity_drop', SKU_FREQUENCY_DROP_WATCH:'sku_frequency_drop', LINE_DROP_WATCH:'line_drop', KEY_PRODUCT_LOST_WATCH:'key_product_lost', PURCHASE_DECLINE_MILD:'purchase_decline', PURCHASE_DECLINE_SEVERE:'purchase_decline', BEHIND_PATTERN:'behind_pattern', SKU_DELAY:'sku_delay', SKU_QUANTITY_DROP:'sku_quantity_drop', SKU_FREQUENCY_DROP:'sku_frequency_drop', LINE_DROP:'line_drop', KEY_PRODUCT_LOST:'key_product_lost', MULTI_SKU_DECLINE:'multi_sku_decline', COMBINED_SKU_DETERIORATION:'combined_sku_deterioration', PAYMENT_OVERDUE:'payment_overdue', CHECK_BOUNCED:'check_bounced' };
-    var topic = map[cat];
-    if (topic && ['sku_delay','sku_quantity_drop','sku_frequency_drop','line_drop','key_product_lost','multi_sku_decline','combined_sku_deterioration'].indexOf(topic) >= 0) {
-      if (!occurrence.productId) return false;
-      var famOf = typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; };
-      topic += '|' + String(famOf(occurrence.productId) || '');
-    }
-    if (!topic) return false;
-    return _actionAckWrite(occurrence.customerId, topic, {
-      actionType: 'dismiss', outcome: 'dismissed', evidenceId: occurrence.id,
-      note: occurrence.resolution && occurrence.resolution.note ? occurrence.resolution.note : '',
-      // decidedAt is written by the seller decision itself. resolvedAt is the
-      // timestamp from the manual-dismiss event; lastEvaluatedAt is evaluation
-      // metadata and must never extend/shorten the seller's cooldown.
-      lastActionAt: (occurrence.suppression && isFinite(Date.parse(occurrence.suppression.decidedAt))
-        ? occurrence.suppression.decidedAt
-        : (occurrence.resolution && isFinite(Date.parse(occurrence.resolution.resolvedAt))
-          ? occurrence.resolution.resolvedAt : new Date().toISOString()))
-    });
-  };
-  global.recordActionAck = _recordActionAck;
-  global.actionAckIsActive = _actionAckActive;
-  global.actionSignalTopic = function (signal) {
-    var famOf = typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; };
-    return _actionSignalTopic(signal, famOf);
-  };
-  global.actionAckIsActiveForWatch = function (occurrence) {
-    if (!occurrence || !occurrence.customerId) return false;
-    var watchToSignal = {
-      PURCHASE_DECLINE_WATCH: 'PURCHASE_DECLINE_MILD', PURCHASE_DECLINE_MILD: 'PURCHASE_DECLINE_MILD',
-      PURCHASE_DECLINE_SEVERE: 'PURCHASE_DECLINE_SEVERE', BEHIND_PATTERN_WATCH: 'BEHIND_PATTERN',
-      BEHIND_PATTERN: 'BEHIND_PATTERN', SKU_DELAY_WATCH: 'SKU_DELAY', SKU_DELAY: 'SKU_DELAY',
-      SKU_QUANTITY_DROP_WATCH: 'SKU_QUANTITY_DROP', SKU_QUANTITY_DROP: 'SKU_QUANTITY_DROP',
-      SKU_FREQUENCY_DROP_WATCH: 'SKU_FREQUENCY_DROP', SKU_FREQUENCY_DROP: 'SKU_FREQUENCY_DROP',
-      LINE_DROP_WATCH: 'LINE_DROP', LINE_DROP: 'LINE_DROP', KEY_PRODUCT_LOST_WATCH: 'KEY_PRODUCT_LOST',
-      KEY_PRODUCT_LOST: 'KEY_PRODUCT_LOST', MULTI_SKU_DECLINE: 'MULTI_SKU_DECLINE',
-      COMBINED_SKU_DETERIORATION: 'COMBINED_SKU_DETERIORATION', PAYMENT_OVERDUE_WATCH: 'PAYMENT_OVERDUE',
-      PAYMENT_OVERDUE: 'PAYMENT_OVERDUE', CHECK_BOUNCED_WATCH: 'CHECK_BOUNCED', CHECK_BOUNCED: 'CHECK_BOUNCED'
-    };
-    var category = watchToSignal[String(occurrence.watchCategory || '')];
-    if (!category) return false;
-    var signal = { category: category, productId: occurrence.productId, familyId: occurrence.familyId };
-    var topic = global.actionSignalTopic(signal);
-    return !!(topic && _actionAckActive(occurrence.customerId, topic));
-  };
-  global.clearActionAcks = function () {
-    try { if (typeof localStorage !== 'undefined') localStorage.removeItem(ACTION_ACK_KEY); } catch (e) { /* fail safe */ }
-  };
-
   function _actionPriorityRank(category) {
     const idx = ACTION_PRIORITY_ORDER.indexOf(category);
     return idx === -1 ? ACTION_PRIORITY_ORDER.length : idx;
   }
 
-  function _pickActionSignal(signals, cid) {
+  function _pickActionSignal(signals) {
     if (!signals || !signals.length) return null;
     let best = null;
     let bestRank = Infinity;
@@ -360,9 +172,6 @@
       // active, matching the existing convention in risk.js/priority.js.
       if (s.status === 'pending') return;
       if (s.seasonallySuppressed === true) return;
-      // Ack filtering follows the existing pending/seasonality gates and is topic-scoped.
-      var topic = _actionSignalTopic(s, typeof makeFamilyResolver === 'function' ? makeFamilyResolver(null) : function (pid) { return pid; });
-      if (topic && _actionAckActive(cid, topic)) return;
       const r = _actionPriorityRank(s.category);
       if (r < bestRank) {
         bestRank = r;
@@ -648,7 +457,7 @@
         // bought this Family after that visit => the recorded outcome is superseded: keep the action
         for (let ii = 0; ii < invoices.length; ii++) {
           const inv = invoices[ii];
-          if (!inv || inv.customerId !== cid || typeof inv.date !== 'string' || !(inv.date > latest.date)) continue;
+          if (!inv || inv.customerId !== cid || typeof inv.date !== 'string' || !(inv.date >= latest.date)) continue;
           const items = Array.isArray(inv.items) ? inv.items : [];
           for (let ti = 0; ti < items.length; ti++) {
             const it = items[ti];
@@ -824,7 +633,7 @@
       var list = byFam[fam];
       if (!list || !list.length) return CTX_NONE;
       var r = list[0];                                   // the newest recorded response decides
-      if (lastPurchase[fam] && lastPurchase[fam] > r.date) return CTX_NONE;   // superseded by a later purchase
+      if (lastPurchase[fam] && lastPurchase[fam] >= r.date) return CTX_NONE;   // superseded by a later purchase
       var current = false;
       if (r.source === 'watch' && r.held) {
         current = true;                                  // unreleased seller decision: held by the lifecycle
@@ -1031,12 +840,39 @@
       rcCtx = null;
       actionCandidates = _applyCurrentContextFilter(cid, priority.signals, ctx);
     }
-    let winner = _pickActionSignal(actionCandidates, cid);
+    let winner = _pickActionSignal(actionCandidates);
+    // A core-product competitor ACK is itself an actionable Watch decision.
+    // Promote only its exact product/family subject, and never ahead of immediate
+    // financial warnings. Account-level signals remain intact in Priority/Risk.
+    if (typeof listSellerAcks === 'function') {
+      try {
+        var hasImmediateAction = actionCandidates.some(function(s){return s && (s.category === 'CHECK_BOUNCED' || s.category === 'PAYMENT_OVERDUE');});
+        if (!hasImmediateAction) {
+          var coreCompetitorAck = (listSellerAcks(cid, false) || []).find(function(a){return a && a.scope === 'product' && a.decision === 'competitor' && a.coreProduct && a.actionText;});
+          if (coreCompetitorAck) {
+            var subjectSignals = (priority.signals || []).filter(function(s){
+              if (!s || s.productId == null || s.productId === '' || typeof getSellerAckForSignal !== 'function') return false;
+              var matchingAck = getSellerAckForSignal(s);
+              if (!matchingAck || matchingAck.id !== coreCompetitorAck.id) return false;
+              var sf = s.familyId;
+              if (sf == null || sf === '') { try { sf = typeof resolveFamilyId === 'function' ? resolveFamilyId(s.productId) : s.productId; } catch(e) { sf = s.productId; } }
+              var af = coreCompetitorAck.familyId || coreCompetitorAck.productId;
+              return String(s.productId) === String(coreCompetitorAck.productId) || String(sf) === String(af);
+            });
+            if (subjectSignals.length) winner = subjectSignals[0];
+          }
+        }
+      } catch (eCoreCompetitorAction) { /* fail open */ }
+    }
     // Action Eligibility: the winner is chosen first; if it is no longer needed
     // given a recent related visit, the existing NO_ACTION path is used. The next
     // candidate is deliberately NOT promoted, and the signal itself is untouched.
     if (winner && !_isActionEligible(winner, cid, ctx)) {
-      winner = null;
+      var visitAckKeepsAction = false;
+      if (typeof getSellerAckForSignal === 'function') {
+        try { var eligibilityAck = getSellerAckForSignal(winner); visitAckKeepsAction = !!(eligibilityAck && eligibilityAck.scope === 'account' && eligibilityAck.decision === 'visit_reviewed'); } catch (eEligibilityAck) {}
+      }
+      if (!visitAckKeepsAction) winner = null;
     }
 
     if (!winner) {
@@ -1053,6 +889,27 @@
     var decision = _composeDecisionText(winner, rule, rcCtx);
     var actionText = decision.text;
     var winnerReason = decision.reason;
+    // ACK is a reversible, temporary decision layer. Preserve the customer and
+    // primary signal in the queue; display the follow-up instruction instead of
+    // pretending the underlying condition vanished.
+    if (typeof getSellerAckForSignal === 'function') {
+      try {
+        var actionAck = getSellerAckForSignal(winner);
+        if (actionAck && actionAck.actionText) {
+          actionText = actionAck.actionText;
+          if (actionAck.decision === 'visit_reviewed' && /^PURCHASE_DECLINE/.test(String(winner.category || ''))) {
+            var visitDateLabel = String(actionAck.visitDate || actionAck.createdAt || '').slice(0, 10);
+            var currentDayLabel = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10);
+            var visitLabel;
+            if (visitDateLabel && visitDateLabel === currentDayLabel) visitLabel = 'ویزیت امروز';
+            else if (visitDateLabel) visitLabel = 'ویزیت مورخ ' + _fmtDateFa(visitDateLabel);
+            else visitLabel = 'ویزیت اخیر';
+            actionText = 'بررسی‌شده در ' + visitLabel + '؛ پیگیری افت خرید در تاریخ ' + _fmtDateFa(actionAck.expiresAt);
+          }
+          winnerReason = 'تصمیم فروشنده تا ' + _fmtDateFa(actionAck.expiresAt) + ' معتبر است؛ هشدار پایه حذف نشده است.';
+        }
+      } catch (eActionAck) { /* fail open */ }
+    }
 
     // P-07: append real operational contexts only (short, non-duplicative).
     var contexts = [];

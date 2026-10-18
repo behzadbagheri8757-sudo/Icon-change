@@ -30,7 +30,7 @@
 <script src="js/intelligence/action.js"></script>
 ```
 
-Shared IndexedDB: `bagheri_intelligence_db` version **3**  
+Shared IndexedDB: `bagheri_intelligence_db` version **4** (adds `seller_acks`; v3 stores are retained)  
 Stores: `occurrences`, `seller_feedback`, `baseline_cache`
 
 P-09 / P-10 were intentionally not implemented.
