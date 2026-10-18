@@ -2145,3 +2145,14 @@ html .sheet.inv-sheet-host .inv-mini-input:focus{
   border-color:var(--vg-color-primary);
   box-shadow:0 0 0 3px var(--vg-color-primary-soft);
 }
+
+/* Reversible seller ACKs — compact native list, not a dashboard card grid. */
+.seller-ack-panel{margin:10px 0 0;padding:10px 0;border-top:1px solid var(--line,#e4e7eb)}
+.seller-ack-title{font-size:.82rem;font-weight:650;margin:0 0 7px;color:var(--text,#20242a)}
+.seller-ack-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line,#e4e7eb)}
+.seller-ack-row:last-child{border-bottom:0}
+.seller-ack-copy{min-width:0;display:flex;flex-direction:column;gap:3px}
+.seller-ack-copy strong{font-size:.8rem;font-weight:650}
+.seller-ack-copy span{font-size:.76rem;line-height:1.5;color:var(--text-secondary,#606873)}
+.seller-ack-copy small{font-size:.7rem;color:var(--text-tertiary,#858c96)}
+.seller-ack-reverse{flex:0 0 auto;min-height:36px}
