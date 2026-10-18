@@ -341,7 +341,11 @@
     if (!att.rows.length) return;
 
     var rowsHtml = att.rows.map(function (r) {
-      var line = r.refKind === 'no_payment_history'
+      var line = r.refKind === 'scheduled_followup'
+        ? 'تاریخ پیگیری پرداخت رسیده'
+        : r.refKind === 'invoice_due'
+        ? faDigits(r.daysSince) + ' روز از سررسید فاکتور'
+        : r.refKind === 'no_payment_history'
         ? faDigits(r.daysSince) + ' روز از آخرین فاکتور، بدون پرداخت'
         : faDigits(r.daysSince) + ' روز از آخرین پرداخت';
       return '<button type="button" class="bp-attention-row" data-attention-cid="' + esc(r.customerId) + '">' +
@@ -553,10 +557,10 @@
     if (typeof isStale === 'function' && isStale()) return;
 
     /* Semantic composition (presentation only):
-         A. Today's Focus  — alerts + action queue (first decision surface)
-         B. Operating snapshot — real today totals + month target
-         C. Financial Health — profit / inventory / debt
-         D. Quick Actions + Recent Activity
+         A. Today's Focus  — target + action queue (primary attention)
+         B. Financial Health — profit / inventory / debt (one surface, stacked rows)
+         C. Quick Actions — tools (de-emphasized)
+         D. Recent Activity — invoices + visits (one activity surface)
          Data sources, helpers, IDs, and event bindings are unchanged. */
      const alertBar = dashboardAlertBar(ctx);
     const todaySnapshot = todaySnapshotHtml(ctx);
@@ -574,22 +578,18 @@
 
     root.innerHTML =
       '<div class="dashboard-shell">' +
-      '<header class="dashboard-eyebrow"><span>مرکز فرماندهی روزانه</span><span class="dashboard-eyebrow-date">' + faDate(todayISO()) + '</span></header>' +
+      '<div class="dashboard-eyebrow">مرکز فرماندهی روزانه</div>' +
       alertBar +
+      todaySnapshot +
+      targetHtml(metrics) +
 
-      /* A — Actionable attention precedes retrospective metrics */
+      /* A — Today's Focus */
       '<div class="dash-focus">' +
         '<div class="dash-focus-actions">' + focusActions + '</div>' +
       '</div>' +
       watchSummary +
 
-      /* B — Snapshot & target make today's work legible at a glance */
-      '<section class="dash-operating-snapshot" aria-label="نمای کلی عملکرد">' +
-        todaySnapshot +
-        targetHtml(metrics) +
-      '</section>' +
-
-      /* C — Financial Health (same metrics; stacked rows for mobile) */
+      /* B — Financial Health (same metrics; stacked rows for mobile) */
       '<div class="dashboard-block dash-health">' +
         '<div class="dashboard-block-head"><div class="dash-section-label"><span class="dash-section-ico" aria-hidden="true">' + dashboardIcon('card',20) + '</span><span>وضعیت مالی</span></div></div>' +
         '<div class="dash-health-surface">' +
@@ -599,10 +599,10 @@
         '</div>' +
       '</div>' +
 
-      /* D — Quick Actions (tools) */
+      /* C — Quick Actions (tools) */
       quickActionsHtml() +
 
-      /* E — Recent Activity */
+      /* D — Recent Activity */
       activityBlock +
       '</div>';
 

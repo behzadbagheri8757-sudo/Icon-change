@@ -116,9 +116,7 @@
     `;
 
     if (!rows.length) {
-      listEl.innerHTML = `<div class="empty visit-empty">${totalAll
-        ? 'موردی با این جستجو یا فیلتر پیدا نشد.'
-        : 'هنوز ویزیتی ثبت نشده است. برای شروع، از دکمه + یک مشتری را انتخاب کنید.'}</div>`;
+      listEl.innerHTML = `<div class="empty">${totalAll ? 'موردی پیدا نشد' : 'هنوز ویزیتی ثبت نشده. با + ثبت کنید.'}</div>`;
       return;
     }
 
@@ -135,14 +133,15 @@
         : '';
       // <div> (not <a>) so a <details> can live inside; navigation is delegated
       // from #visit-list (see drawVisitsPage) and ignores clicks inside the details.
-      return `<div class="ledger-row tx-row visit-history-row${offersHtml ? ' has-row-details' : ''}" data-visit-customer="${esc(r.customerId)}" role="link" tabindex="0" aria-label="ویزیت ${esc(r.customerName)}، ${esc(v.result || 'ثبت ویزیت')}">
-        <span class="name visit-history-main">
-          <span class="visit-history-heading"><span class="tx-row-title">${esc(r.customerName)}</span><span class="visit-history-result ${cls}">${esc(v.result || 'ویزیت')}</span></span>
-          <span class="sub visit-history-meta">${faDate(v.date)}${v.time ? ' · ' + esc(v.time) : ''}${r.region ? ' · ' + esc(r.region) : ''}${scoreBit}</span>
-          ${r.phone ? `<span class="sub visit-history-phone" dir="ltr">${esc(r.phone)}</span>` : ''}
-          ${ctxLines.length ? `<span class="visit-history-context">${ctxLines}</span>` : ''}
+      return `<div class="ledger-row tx-row${offersHtml ? ' has-row-details' : ''}" data-visit-customer="${esc(r.customerId)}" role="link" tabindex="0">
+        <span class="name">
+          <span class="tx-row-title">${esc(r.customerName)}</span>
+          <span class="sub">${faDate(v.date)}${v.time ? ' ' + esc(v.time) : ''}${r.region ? ' · ' + esc(r.region) : ''}${scoreBit}</span>
+          <span class="sub ${cls}">${esc(v.result || 'ویزیت')}</span>
+          ${ctxLines}
           ${offersHtml}
         </span>
+        <span class="filler"></span>
       </div>`;
     }).join('');
   }
@@ -156,8 +155,8 @@
     const opts = data.customers.filter(c => c.active !== false).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
       .map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
     openSheet(`
-      <div class="visit-picker-head"><span class="visit-picker-kicker">ثبت رویداد میدانی</span><h3>مشتری ویزیت را انتخاب کنید</h3></div>
-      <div class="field"><label for="visit-pick-customer">مشتری</label><select id="visit-pick-customer">${opts}</select></div>
+      <h3>ثبت ویزیت</h3>
+      <div class="field"><label>مشتری</label><select id="visit-pick-customer">${opts}</select></div>
       <div class="btn-row"><button class="btn" id="visit-pick-go">ادامه</button></div>
     `);
     document.getElementById('visit-pick-go').onclick = ()=>{
@@ -172,9 +171,8 @@
       return `<button type="button" class="chip ${visitFilter === id ? 'active' : ''}" data-vf="${id}">${label}</button>`;
     };
     root.innerHTML = `
-      <section class="visit-list-controls card" aria-label="جستجو و فیلتر ویزیت‌ها">
-      <div class="field"><input id="visit-search" aria-label="جستجوی ویزیت‌ها" placeholder="جستجوی نام مشتری، منطقه، نتیجه..." value="${esc(visitQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="visit-chips" role="group" aria-label="فیلتر نتیجه ویزیت">
+      <div class="field"><input id="visit-search" placeholder="جستجوی نام مشتری، منطقه، نتیجه..." value="${esc(visitQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="visit-chips">
         ${chip('all','همه')}
         ${chip('ordered','سفارش گرفته شد')}
         ${chip('noorder','سفارش گرفته نشد')}
@@ -188,10 +186,8 @@
           <option value="oldest" ${visitSort === 'oldest' ? 'selected' : ''}>قدیمی‌ترین</option>
         </select>
       </div>
-      </section>
-      <div class="visit-history-heading"><span>دفتر ویزیت‌ها</span></div>
-      <div id="visit-summary" class="cards visit-summary" style="margin-bottom:12px;" aria-live="polite"></div>
-      <div id="visit-list" class="tx-list visit-history-list" aria-label="فهرست ویزیت‌ها"></div>
+      <div id="visit-summary" class="cards" style="margin-bottom:12px;"></div>
+      <div id="visit-list" class="tx-list"></div>
     `;
 
     const searchEl = document.getElementById('visit-search');

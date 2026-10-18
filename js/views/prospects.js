@@ -145,11 +145,10 @@
     list.innerHTML = rows.map(s => {
       const converted = s.status === 'converted';
       return `
-      <a class="ledger-row tx-row prospect-list-row" data-open-prospect="${esc(s.id)}" style="text-decoration:none;color:inherit;" aria-label="${esc(s.name)}، امتیاز ${s.latestScore}، رتبه ${esc(s.latestRank)}">
+      <a class="ledger-row tx-row" data-open-prospect="${esc(s.id)}" style="text-decoration:none;color:inherit;">
         <span class="name">
           <span class="tx-row-title">${esc(s.name)}${converted ? ' <span class="badge pending" style="font-size:.7em;">تبدیل‌شده</span>' : ''}</span>
-          <span class="sub prospect-row-meta">${esc(getLocationDisplayString(s.locationId))}<span aria-hidden="true"> · </span>${prospectFaDate(s.updatedAt)}</span>
-          <span class="tx-row-meta">${converted ? 'پرونده تبدیل‌شده' : 'مغازه بالقوه'}</span>
+          <span class="sub">${esc(getLocationDisplayString(s.locationId))} · ${prospectFaDate(s.updatedAt)}</span>
         </span>
         <span class="filler"></span>
         <span class="amount tx-row-amount">
@@ -188,9 +187,8 @@
         <a class="btn small secondary" data-nav-routes href="#/locations">موقعیت‌ها</a>
       </div>
       <div id="prospect-target" class="cards" style="margin-bottom:12px;"></div>
-      <section class="prospect-list-controls card" aria-label="جستجو و فیلتر مغازه‌های بالقوه">
-      <div class="field"><input id="prospect-search" aria-label="جستجوی مغازه‌های بالقوه" placeholder="جستجوی نام مغازه..." value="${esc(pQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="prospect-chips" role="group" aria-label="فیلتر وضعیت و رتبه">
+      <div class="field"><input id="prospect-search" placeholder="جستجوی نام مغازه..." value="${esc(pQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="prospect-chips">
         ${chip('all','همه')}
         ${chip('active','فعال')}
         ${chip('converted','تبدیل‌شده')}
@@ -212,9 +210,7 @@
       <div class="chip-row" style="margin-bottom:8px;">
         <button type="button" class="chip ${pLocFilter.unassigned ? 'active' : ''}" id="p-loc-filter-unassigned">بدون موقعیت</button>
       </div>
-      </section>
-      <div class="prospect-list-heading"><span>دفتر فرصت‌ها</span><span class="sub">امتیاز و رتبه ارزیابی جاری</span></div>
-      <div id="prospect-list" class="tx-list prospect-ledger-list" aria-label="فهرست مغازه‌های بالقوه"></div>
+      <div id="prospect-list" class="tx-list"></div>
     `;
 
     const searchEl = document.getElementById('prospect-search');

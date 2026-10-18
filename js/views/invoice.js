@@ -95,14 +95,12 @@
       const line = (it.qty || 0) * (it.price || 0) - (it.discount || 0);
       const prod = data.products.find(p => p.id === it.productId);
       const unit = prod && prod.packageWeight ? ('بسته ' + prod.packageWeight) : 'عدد';
-      return `<div class="ledger-row invoice-item-row" style="align-items:flex-start;cursor:default;">
-        <span class="invoice-item-index" aria-hidden="true">${idx + 1}</span>
-        <span class="name invoice-item-main"><span class="invoice-item-name">${esc(it.name || '—')}</span>
-          <span class="sub invoice-item-quantity">${it.qty} ${esc(String(unit))} × ${toman(it.price)} ت</span>
-          ${it.discount ? '<span class="sub invoice-item-discount">تخفیف ردیف: ' + toman(it.discount) + ' ت</span>' : ''}
+      return `<div class="ledger-row" style="align-items:flex-start;cursor:default;">
+        <span class="name">${idx + 1}. ${esc(it.name || '—')}
+          <span class="sub">${it.qty} ${esc(String(unit))} × ${toman(it.price)} ت${it.discount ? ' — تخفیف ردیف: ' + toman(it.discount) + ' ت' : ''}</span>
         </span>
         <span class="filler"></span>
-        <span class="amount invoice-item-total">${toman(line)} ت</span>
+        <span class="amount">${toman(line)} ت</span>
       </div>`;
     }).join('') || '<div class="empty">اقلامی ثبت نشده</div>';
 
@@ -135,7 +133,7 @@
       </div>
 
       <!-- FINANCIAL SUMMARY -->
-      <section class="invoice-financial-summary" aria-label="خلاصه مبلغ فاکتور"><div class="tx-finance cards">
+      <div class="tx-finance cards">
         <div class="card wide">
           <div class="label">مبلغ کل</div>
           <div class="value">${toman(inv.total)} ت</div>
@@ -148,7 +146,7 @@
           <div class="label">مانده</div>
           <div class="value ${remain > 0.5 ? 'accent-rust' : 'accent-olive'}">${toman(Math.max(0, remain))} ت</div>
         </div>
-      </div></section>
+      </div>
 
       <!-- PRIMARY ACTIONS -->
       <div class="btn-row tx-actions-primary" style="margin-bottom:14px;">
@@ -159,9 +157,8 @@
       </div>
 
       <!-- ITEMS -->
-      <section class="invoice-items-section" aria-label="مرور اقلام فاکتور"><h3 class="sub-title">اقلام (${(inv.items || []).length})</h3>
+      <h3 class="sub-title">اقلام</h3>
       <div class="tx-items inv-surface">${itemRows}</div>
-      </section>
 
       <!-- PAYMENT DETAILS (progressive) -->
       <details class="tx-details">

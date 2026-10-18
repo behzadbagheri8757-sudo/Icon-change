@@ -74,9 +74,8 @@
       return `<button type="button" class="chip ${supFilter === id ? 'active' : ''}" data-sf="${id}">${label}</button>`;
     };
     root.innerHTML = `
-      <section class="supplier-list-controls card" aria-label="جستجو و فیلتر تأمین‌کنندگان">
-      <div class="field"><input id="supplier-search" aria-label="جستجوی تأمین‌کننده" placeholder="جستجوی نام یا تلفن..." value="${esc(supQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="supplier-chips" role="group" aria-label="وضعیت حساب تأمین‌کننده">
+      <div class="field"><input id="supplier-search" placeholder="جستجوی نام یا تلفن..." value="${esc(supQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="supplier-chips">
         ${chip('all', 'همه')}
         ${chip('debt', 'بدهکار')}
         ${chip('settled', 'تسویه')}
@@ -90,9 +89,7 @@
           <option value="debtAsc" ${supSort === 'debtAsc' ? 'selected' : ''}>کمترین بدهی</option>
         </select>
       </div>
-      </section>
-      <div class="supplier-list-heading"><span>دفتر تأمین‌کنندگان</span></div>
-      <div id="supplier-list" class="tx-list supplier-ledger-list" aria-label="فهرست تأمین‌کنندگان"></div>
+      <div id="supplier-list" class="tx-list"></div>
     `;
 
     const searchEl = document.getElementById('supplier-search');

@@ -92,6 +92,7 @@
       '<div class="report-note watch-sheet-note">سه پاسخ اول هشدار را می‌بندند و همان مورد را فوراً برنمی‌گردانند؛ سایر علت‌ها فقط ثبت می‌شوند.</div>' +
       '<div class="watch-reason-options">' + optsHtml + '</div>' +
       '<div class="field watch-sheet-note-field"><label>یادداشت (اختیاری)</label><input type="text" id="watch-detail-reason-note" autocomplete="off" placeholder="توضیح کوتاه..."></div>' +
+      '<div class="field watch-sheet-note-field"><label>تاریخ پیگیری بعدی (اختیاری؛ برای «بعداً پیگیری می‌کنم»)</label>' + (typeof shamsiDateInputHTML === 'function' ? shamsiDateInputHTML('watch-detail-followup-date', '') : '<input type="date" id="watch-detail-followup-date">') + '</div>' +
       '<div class="btn-row watch-sheet-actions"><button type="button" class="btn secondary" id="watch-detail-dismiss">بستن هشدار</button><button type="button" class="btn secondary" id="watch-detail-cancel">انصراف</button></div>'
     );
     var cancel = document.getElementById('watch-detail-cancel');
@@ -115,8 +116,9 @@
       var btn = e.target.closest('[data-watch-reason]');
       if (!btn) return;
       var noteEl = document.getElementById('watch-detail-reason-note');
+      var followUpEl = document.getElementById('watch-detail-followup-date');
       try {
-        recordWatchReason(occurrenceId, btn.getAttribute('data-watch-reason'), noteEl ? noteEl.value : '');
+        recordWatchReason(occurrenceId, btn.getAttribute('data-watch-reason'), noteEl ? noteEl.value : '', followUpEl ? followUpEl.value : '');
         if (typeof showToast === 'function') showToast('علت ثبت شد');
       } catch (err) {
         console.error(err);
@@ -270,8 +272,8 @@
           '</div>' +
         '</div>';
       }).join('');
-      return '<section class="watch-customer-group" aria-label="هشدارهای ' + esc(g.name) + '">' +
-        '<header class="watch-customer-head"><span class="watch-customer-name">' + esc(g.name) + '</span><span class="watch-customer-count">' + faDigits(g.items.length) + ' مورد</span></header>' +
+      return '<section class="watch-customer-group">' +
+        '<div class="watch-customer-head"><span class="watch-customer-name">' + esc(g.name) + '</span><span class="watch-customer-count">' + faDigits(g.items.length) + ' مورد</span></div>' +
         '<div class="watch-customer-items">' + rows + '</div>' +
       '</section>';
     }).join('');
@@ -284,11 +286,9 @@
     var prevScroll = prevBar ? prevBar.scrollLeft : 0;
 
     root.innerHTML =
-      '<div class="watch-page">' +
-      '<header class="watch-page-head"><div><h2 class="section-title">هشدارهای زودهنگام</h2><div class="watch-page-hint" aria-live="polite">' + esc(WATCH_FILTER_HINTS[watchFilter] || WATCH_FILTER_HINTS.all) + '</div></div><span class="watch-total-count" aria-label="تعداد موارد">' + faDigits(shown.length) + '</span></header>' +
-      '<nav class="watch-filter-navigation" aria-label="فیلتر هشدارها">' + filtersHtml(sets) + '</nav>' +
-      '<div class="watch-list-content">' + html + '</div>' +
-      '</div>';
+      '<div class="watch-page-head"><div><h2 class="section-title">هشدارهای زودهنگام</h2><div class="watch-page-hint">' + esc(WATCH_FILTER_HINTS[watchFilter] || WATCH_FILTER_HINTS.all) + '</div></div><span class="watch-total-count">' + faDigits(shown.length) + '</span></div>' +
+      filtersHtml(sets) +
+      html;
 
     var bar = root.querySelector('#watch-filters');
     if (bar) {

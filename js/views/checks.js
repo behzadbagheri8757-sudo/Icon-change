@@ -150,9 +150,8 @@
       return `<button type="button" class="chip ${chkFilter === id ? 'active' : ''}" data-cf="${id}">${label}</button>`;
     };
     root.innerHTML = `
-      <section class="check-list-controls card" aria-label="جستجو و فیلتر چک‌ها">
-      <div class="field"><input id="check-search" aria-label="جستجوی چک" placeholder="جستجوی مشتری، شماره چک، مبلغ..." value="${esc(chkQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="check-chips" role="group" aria-label="وضعیت و سررسید چک">
+      <div class="field"><input id="check-search" placeholder="جستجوی مشتری، شماره چک، مبلغ..." value="${esc(chkQuery)}" autocomplete="off"></div>
+      <div class="chip-row" id="check-chips">
         ${chip('all','همه')}
         ${chip('pending','در جریان')}
         ${chip('cleared','وصول‌شده')}
@@ -168,11 +167,9 @@
           <option value="newest" ${chkSort === 'newest' ? 'selected' : ''}>جدیدترین ثبت</option>
         </select>
       </div>
-      </section>
       <div id="check-summary" class="cards" style="margin-bottom:12px;"></div>
       <p class="tx-hint">برای تغییر وضعیت وصول، روی دکمه وضعیت هر چک بزنید.</p>
-      <div class="check-list-heading"><span>دفتر چک‌ها</span></div>
-      <div id="check-list" class="tx-list check-ledger-list" aria-label="فهرست چک‌ها"></div>
+      <div id="check-list" class="tx-list"></div>
     `;
 
     const searchEl = document.getElementById('check-search');

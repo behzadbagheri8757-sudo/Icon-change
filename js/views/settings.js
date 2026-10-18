@@ -68,10 +68,9 @@
     }
 
     root.innerHTML = `
-      <div class="settings-page">
-      <header class="settings-page-head"><p class="tx-hint">مدیریت داده‌ها، پشتیبان‌گیری و امنیت برنامه.</p></header>
+      <p class="tx-hint">مدیریت داده‌ها، پشتیبان‌گیری و امنیت برنامه.</p>
 
-      <section class="mgmt-section settings-appearance-section" aria-label="ظاهر برنامه">
+      <div class="mgmt-section">
         <h3 class="mgmt-section-title">ظاهر برنامه</h3>
         <div class="settings-section">
           <div class="field">
@@ -84,9 +83,9 @@
           </div>
           <div class="sub settings-description">در حالت سیستمی، ظاهر برنامه با حالت روشن/تیره دستگاه هماهنگ می‌شود.</div>
         </div>
-      </section>
+      </div>
 
-      <section class="mgmt-section settings-backup-section" aria-label="داده و پشتیبان‌گیری">
+      <div class="mgmt-section">
         <h3 class="mgmt-section-title">داده و پشتیبان‌گیری</h3>
         <div class="settings-section">
           <div class="settings-warn">
@@ -97,9 +96,9 @@
             <button type="button" class="btn secondary settings-action-link" id="export-excel">خروجی اکسل</button>
           </div>
         </div>
-      </section>
+      </div>
 
-      <section class="mgmt-section settings-restore-section" aria-label="بازیابی از فایل">
+      <div class="mgmt-section">
         <h3 class="mgmt-section-title">بازیابی از فایل</h3>
         <div class="settings-section">
           <div class="settings-warn">
@@ -120,17 +119,17 @@
               : 'هنوز نسخهٔ قبل از Restore ذخیره نشده (بعد از یک بازیابی موفق فعال می‌شود).'}
           </div>
         </div>
-      </section>
+      </div>
 
-      <section class="mgmt-section settings-auto-backup-section" aria-label="پشتیبان خودکار داخلی">
+      <div class="mgmt-section">
         <h3 class="mgmt-section-title">پشتیبان خودکار داخلی</h3>
         <div class="settings-section">
           <div class="sub settings-description">
             برنامه در صورت استفاده، حداکثر هر ۱۲ ساعت یک نسخه از داده‌های CRM، FIFO، هدف فروش، ProspectScout و Intelligence داخل IndexedDB نگه می‌دارد (تا ۵ نسخه). این جایگزین فایل پشتیبان JSON نیست.
           </div>
-          <div class="card settings-backup-ledger" aria-label="نسخه‌های پشتیبان">${autoHtml}</div>
+          <div class="card">${autoHtml}</div>
         </div>
-      </section>
+      </div>
 
       <div class="mgmt-section">
         <h3 class="mgmt-section-title">موقعیت مکانی</h3>
@@ -178,7 +177,6 @@
           <span class="tech-label">اطلاعات فنی</span>
           <span class="tech-chevron">‹</span>
         </div>
-      </div>
       </div>
     `;
 

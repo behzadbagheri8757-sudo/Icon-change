@@ -165,7 +165,7 @@
             '<h3 class="gc-section-title">مأموریت‌های امروز</h3>' +
           '</div>' +
           '<div class="gc-missions">' +
-            (missions || '<div class="empty gc-empty">برای امروز مأموریتی تعریف نشده است.</div>') +
+            (missions || '<div class="empty">مأموریتی تعریف نشده</div>') +
           '</div>' +
         '</section>' +
         monthlyBlock(snap.monthly) +
@@ -261,11 +261,11 @@
         if (unmounted || !root) return;
 
         var body = errMsg
-          ? '<div class="empty gc-empty" role="status">' + esc(errMsg) + '</div>'
+          ? '<div class="empty">' + esc(errMsg) + '</div>'
           : (mode === 'morning' ? renderMorning(snap) : renderEvening(snap));
 
         root.innerHTML =
-            '<div class="gc-page">' +
+          '<div class="gc-page">' +
             /* Use div, NOT <header>: global app.css styles ALL header tags as navy app bar */
             '<div class="gc-header">' +
               '<div class="gc-title-row">' +
@@ -273,14 +273,12 @@
                 '<span class="gc-title-line" aria-hidden="true"></span>' +
                 '<span class="gc-title-mark" aria-hidden="true">' + gameIcon('brandMark',28) + '</span>' +
               '</div>' +
-              '<div class="gc-seg" role="tablist" aria-label="نمای روزانه">' +
+              '<div class="gc-seg" role="tablist">' +
                 '<button type="button" role="tab" class="gc-seg-btn' + (mode === 'morning' ? ' is-active' : '') + '" data-gc-mode="morning" aria-selected="' + (mode === 'morning') + '">صبح</button>' +
                 '<button type="button" role="tab" class="gc-seg-btn' + (mode === 'evening' ? ' is-active' : '') + '" data-gc-mode="evening" aria-selected="' + (mode === 'evening') + '">نتیجه</button>' +
               '</div>' +
             '</div>' +
-            '<div class="gc-content" role="region" aria-label="' + (mode === 'morning' ? 'نمای صبح' : 'نتیجه امروز') + '">' +
-              body +
-            '</div>' +
+            body +
           '</div>';
 
         root.querySelectorAll('[data-gc-mode]').forEach(function (btn) {

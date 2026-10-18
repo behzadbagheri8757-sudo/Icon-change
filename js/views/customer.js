@@ -659,6 +659,7 @@
       '<div id="watch-reason-list">' + optsHtml + '</div>' +
       '<div class="field" style="margin-top:10px;"><label>یادداشت (اختیاری)</label>' +
       '<input type="text" id="watch-reason-note" autocomplete="off" placeholder="توضیح کوتاه..."></div>' +
+      '<div class="field" style="margin-top:10px;"><label>تاریخ پیگیری بعدی (اختیاری؛ برای «بعداً پیگیری می‌کنم»)</label>' + (typeof shamsiDateInputHTML === 'function' ? shamsiDateInputHTML('watch-reason-followup-date', '') : '<input type="date" id="watch-reason-followup-date">') + '</div>' +
       '<div class="btn-row" style="margin-top:12px;justify-content:space-between;">' +
       '<button type="button" class="btn secondary" id="watch-dismiss-btn">بستن هشدار</button>' +
       '<button type="button" class="btn secondary" id="watch-reason-cancel">انصراف</button></div>'
@@ -690,8 +691,10 @@
         var code = btn.getAttribute('data-watch-reason');
         var noteEl = document.getElementById('watch-reason-note');
         var note = noteEl ? noteEl.value : '';
+        var followUpEl = document.getElementById('watch-reason-followup-date');
+        var followUpDate = followUpEl ? followUpEl.value : '';
         try {
-          recordWatchReason(occurrenceId, code, note);
+          recordWatchReason(occurrenceId, code, note, followUpDate);
           if (typeof showToast === 'function') showToast('علت ثبت شد');
         } catch (err) {
           console.error(err);
@@ -846,6 +849,13 @@
     } catch (eAtt) { attRow = null; }
     const focus = customerFocusHtml(c.id, ctx, watchData);
     const followUpTopHtml = pendingFollowUpHtml(c.id);
+    var sellerAckRows = [];
+    try { sellerAckRows = typeof listSellerAcks === 'function' ? (listSellerAcks(c.id, false) || []) : []; } catch (eAckList) { sellerAckRows = []; }
+    var sellerAckHtml = sellerAckRows.length ? '<section class="seller-ack-panel"><div class="seller-ack-title">تصمیم‌ها و پیگیری‌های موقت</div>' + sellerAckRows.map(function(a){
+      var scopeLabel = a.scope === 'account' ? 'کل حساب' : (a.productName || ((data.products||[]).find(function(p){return p&&String(p.id)===String(a.productId);})||{}).name || 'محصول');
+      var decisionLabel = a.decision === 'visit_reviewed' ? 'ویزیت بررسی شد' : (a.actionText || a.reason || a.decision);
+      return '<div class="seller-ack-row"><div class="seller-ack-copy"><strong>' + esc(scopeLabel) + '</strong><span>' + esc(decisionLabel) + '</span><small>' + (a.expiresAt ? ('تا ' + esc(faDate(a.expiresAt) || a.expiresAt)) : 'بدون تاریخ انقضا') + '</small></div><button type="button" class="btn secondary small seller-ack-reverse" data-seller-ack-reverse="' + esc(a.id) + '" data-seller-ack-source="' + esc(a.source || '') + '" data-seller-ack-source-id="' + esc(a.sourceId || '') + '">لغو تصمیم</button></div>';
+    }).join('') + '</section>' : '';
 
     const invs = customerInvoices(c.id, ctx)
       .slice()
@@ -1180,12 +1190,10 @@
     }
 
     root.innerHTML =
-      '<div class="customer-detail-layout">' +
-      '<div class="btn-row customer-detail-back" style="margin-bottom:10px;">' +
+      '<div class="btn-row" style="margin-bottom:10px;">' +
       '<a class="btn secondary small" href="' +
       customersHref() +
       '">← مشتریان</a></div>' +
-      '<section class="customer-profile-overview" aria-label="نمای کلی مشتری">' +
       '<div class="card customer-identity-card">' +
       '<div class="customer-identity-name">' +
       esc(c.name) +
@@ -1213,13 +1221,18 @@
             '<span class="bp-attention-icon" aria-hidden="true"></span>' +
             '<span>نیازمند پیگیری — ' +
               toman(attRow.balance) + ' ت' +
-              (attRow.refKind === 'no_payment_history'
-                ? '، ' + toman(attRow.daysSince) + ' روز از آخرین فاکتور، بدون پرداخت'
-                : '، ' + toman(attRow.daysSince) + ' روز از آخرین پرداخت') +
+              (attRow.refKind === 'scheduled_followup'
+                ? '، تاریخ پیگیری پرداخت رسیده'
+                : attRow.refKind === 'invoice_due'
+                ? '، ' + faDigits(attRow.daysSince) + ' روز از سررسید فاکتور'
+                : attRow.refKind === 'no_payment_history'
+                ? '، ' + faDigits(attRow.daysSince) + ' روز از آخرین فاکتور، بدون پرداخت'
+                : '، ' + faDigits(attRow.daysSince) + ' روز از آخرین پرداخت') +
             '</span>' +
           '</div>'
         : '') +
       unifiedSummaryHtml +
+      sellerAckHtml +
       '</div>' +
       focus.html +
       followUpTopHtml +
@@ -1230,8 +1243,6 @@
           esc(recommendedAction.action) +
           '</button></div>'
         : '') +
-      '</section>' +
-      '<section class="customer-actions-section" aria-label="عملیات مشتری">' +
       '<h3 class="sub-title">عملیات</h3>' +
       '<div class="btn-row cust-actions-primary" style="margin-bottom:8px;">' +
       '<button type="button" class="btn" id="act-invoice">ثبت فاکتور</button>' +
@@ -1246,8 +1257,6 @@
       '<button type="button" class="btn small secondary" id="act-print-statement">صورت‌حساب</button>' +
       '<button type="button" class="btn small secondary" id="act-toggle-active">' + (c.active === false ? 'فعال‌سازی مشتری' : 'غیرفعال‌سازی مشتری') + '</button>' +
       '</div></details>' +
-      '</section>' +
-      '<section class="customer-financial-section" aria-label="سوابق مالی مشتری">' +
       '<h3 class="sub-title">خلاصه مالی</h3>' +
       '<div class="cards cust-metrics">' +
       '<div class="card"><div class="label">مجموع خرید (فاکتورها)</div><div class="value">' +
@@ -1283,8 +1292,6 @@
       chks.length +
       ')</h3>' +
       '<div class="customer-tx-list customer-check-list">' + chkRows + '</div>' +
-      '</section>' +
-      '<section class="customer-visits-section" aria-label="ویزیت‌ها و ارزیابی‌ها">' +
       '<h3 class="sub-title">ویزیت‌ها و ارزیابی‌ها (' +
       visits.length +
       ')</h3>' +
@@ -1292,8 +1299,7 @@
       '<button type="button" class="btn small" id="act-visit-section">ثبت ویزیت برای این مشتری</button>' +
       '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a>' +
       '</div>' +
-      '<div class="customer-tx-list customer-visit-list">' + visitRows + '</div>' +
-      '</section></div>';
+      '<div class="customer-tx-list customer-visit-list">' + visitRows + '</div>';
 
     document.getElementById('act-invoice').onclick = function () {
       openAddInvoice(c.id);
@@ -1371,6 +1377,20 @@
         });
       };
     }
+    root.querySelectorAll('[data-seller-ack-reverse]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var ackId = btn.getAttribute('data-seller-ack-reverse');
+        var ackSource = btn.getAttribute('data-seller-ack-source') || '';
+        var ackSourceId = btn.getAttribute('data-seller-ack-source-id') || '';
+        var result = null;
+        try {
+          if ((ackSource === 'watch' || ackSource === 'watch_migration') && ackSourceId && typeof reverseWatchDecision === 'function') result = reverseWatchDecision(ackSourceId);
+          if (!result && typeof reverseSellerAck === 'function') result = reverseSellerAck(ackId);
+        } catch (eAckReverse) {}
+        if (typeof showToast === 'function') showToast(result ? 'تصمیم لغو شد؛ هشدار در صورت تداوم شرط برمی‌گردد' : 'لغو تصمیم انجام نشد');
+        drawCustomerPage(rootEl || root, ctx);
+      });
+    });
     bindWatchLifecycleRows(root);
     bindWatchFollowUps(root, id);
   }

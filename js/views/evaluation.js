@@ -109,15 +109,14 @@
 
   function renderIdentitySection() {
     return `
-      <section class="eval-identity-section" aria-label="مشخصات مغازه">
-      <div class="field"><label for="eval-shop-name">نام مغازه</label><input id="eval-shop-name" value="${esc(formState.name)}" autocomplete="off"></div>
+      <div class="field"><label>نام مغازه</label><input id="eval-shop-name" value="${esc(formState.name)}" autocomplete="off"></div>
       <div class="eval-location-context card" style="margin-top:10px;margin-bottom:14px;">
         <div class="eval-location-context-main">
           <span class="eval-location-pin" aria-hidden="true">${(typeof AppIcons !== 'undefined' && AppIcons.render) ? AppIcons.render('mapPin', { size: 18 }) : ''}</span>
           <span class="eval-location-context-text">${esc(formState.locationId ? getLocationDisplayString(formState.locationId) : 'محدوده انتخاب نشده')}</span>
         </div>
         <button type="button" class="btn secondary small" id="eval-change-location">تغییر</button>
-      </div></section>
+      </div>
     `;
   }
 
@@ -130,9 +129,8 @@
     }).join('');
     return `
       ${renderIdentitySection()}
-      <section class="eval-choice-step" aria-label="انتخاب پروفایل کسب‌وکار">
-      <h3 class="eval-step-label">پروفایل کسب‌وکار</h3>
-      <div class="eval-profile-grid" role="group" aria-label="پروفایل‌های کسب‌وکار">${cards}</div></section>
+      <div class="eval-step-label">پروفایل کسب‌وکار</div>
+      <div class="eval-profile-grid">${cards}</div>
     `;
   }
 
@@ -143,10 +141,8 @@
       return `<button type="button" class="chip-opt${active ? ' selected' : ''}" data-biztype="${esc(t.key)}">${esc(t.label)}</button>`;
     }).join('');
     return `
-      <section class="eval-choice-step" aria-label="انتخاب نوع کسب‌وکار">
-      <h3 class="eval-step-label">نوع کسب‌وکار</h3>
-      <div class="chip-wrap eval-q-options field-eval-opts" role="group" aria-label="انواع کسب‌وکار">${chips}</div>
-      </section>
+      <div class="eval-step-label">نوع کسب‌وکار</div>
+      <div class="chip-wrap eval-q-options field-eval-opts">${chips}</div>
       <div class="eval-back-row"><button type="button" class="btn secondary small" id="eval-step-back">مرحله قبلی</button></div>
     `;
   }
@@ -164,13 +160,13 @@
       <div class="eval-progress-bar" aria-hidden="true">
         <div class="eval-progress-fill" style="width:${((qIdx + (formState.answers[q.id] ? 1 : 0)) / STEP_Q_COUNT) * 100}%"></div>
       </div>
-      <section class="eval-one-q card visit-card-enter field-eval-card" aria-label="سؤال ${enToFaDigits(String(qIdx + 1))} از ${enToFaDigits(String(STEP_Q_COUNT))}">
+      <div class="eval-one-q card visit-card-enter field-eval-card">
         <div class="eval-q-progress">سؤال ${enToFaDigits(String(qIdx + 1))} از ${enToFaDigits(String(STEP_Q_COUNT))}</div>
         <div class="q-title">${esc(q.label)}</div>
         ${q.hint ? `<div class="sub eval-q-hint">${esc(q.hint)}</div>` : ''}
-        <div class="chip-wrap eval-q-options field-eval-opts" role="group" aria-label="پاسخ‌های سؤال">${opts}</div>
+        <div class="chip-wrap eval-q-options field-eval-opts">${opts}</div>
         <div class="eval-back-row"><button type="button" class="btn secondary small" id="eval-step-back">${qIdx === 0 ? 'نوع کسب‌وکار' : 'سؤال قبلی'}</button></div>
-      </section>
+      </div>
     `;
   }
 
@@ -270,7 +266,7 @@
 
     return `
       <div class="eval-progress-bar" aria-hidden="true"><div class="eval-progress-fill" style="width:100%"></div></div>
-      <section class="card eval-summary-identity" aria-label="خلاصه مغازه" style="margin-bottom:12px;">
+      <div class="card eval-summary-identity" style="margin-bottom:12px;">
         <div class="eval-summary-identity-row">
           <div>
             <div class="tx-row-title">${esc(formState.name.trim() || 'بدون نام')}</div>
@@ -278,17 +274,17 @@
           </div>
           <button type="button" class="btn secondary small" id="eval-jump-profile">ویرایش نام</button>
         </div>
-      </section>
+      </div>
       ${isIncomplete ? '' : missingHtml}
       ${scoreBlockHtml}
       <details class="tx-details" open style="margin-top:12px;">
         <summary>پاسخ‌ها</summary>
         <div class="card evaluation-answers-card" style="margin-top:8px;">${answerRows}</div>
       </details>
-      <section class="card eval-summary-tags" aria-label="نتیجه این ویزیت" style="margin-top:12px;">
+      <div class="card" style="margin-top:12px;">
         <div class="label" style="margin-bottom:8px;">نتیجه این ویزیت (اختیاری)</div>
-        <div class="chip-wrap" role="group" aria-label="برچسب‌های نتیجه">${tagHtml}</div>
-      </section>
+        <div class="chip-wrap">${tagHtml}</div>
+      </div>
       <div class="btn-row tx-actions-primary" style="margin-top:14px;">
         <button type="button" class="btn secondary small" id="eval-step-back">بازگشت به سؤالات</button>
         <button type="button" class="btn" id="save-eval">ثبت مغازه</button>
@@ -309,13 +305,11 @@
 
   function drawEvaluation(root) {
     root.innerHTML = `
-      <div class="evaluation-page">
-      <div class="btn-row evaluation-back-row" style="margin-bottom:10px;">
+      <div class="btn-row" style="margin-bottom:10px;">
         <a class="btn secondary small" href="#/prospects">← لیست</a>
       </div>
-      <div class="evaluation-page-heading"><h2 class="section-title">ارزیابی مغازه</h2><span class="sub">ثبت یک ارزیابی تازه</span></div>
-      <div class="evaluation-step-content">${stepBodyHtml()}</div>
-      </div>
+      <h2 class="section-title">ارزیابی مغازه</h2>
+      ${stepBodyHtml()}
     `;
 
     clearHandlers();
