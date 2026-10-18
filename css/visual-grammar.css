@@ -6,25 +6,44 @@
 
 :root{
   /* ---------- Color roles ---------- */
-  --vg-color-bg:               #F5F7FA;
+  --vg-color-bg:               #FFF9F4;
   --vg-color-surface:          #FFFFFF;
-  --vg-color-surface-soft:     #F7F8FA;
+  --vg-color-surface-soft:     #FDEFE3;
   --vg-color-text:             #1F2937;
   --vg-color-text-secondary:   #4B5563;
   --vg-color-text-muted:       #667085;
   --vg-color-border:           rgba(31,41,55,.075);
   --vg-color-divider:          rgba(31,41,55,.055);
-  --vg-color-primary:          #0070D2;
-  --vg-color-primary-soft:     #E8F2FC;
-  --vg-color-success:          #00A068;
-  --vg-color-success-soft:     #E8F7F2;
-  --vg-color-warning:          #9A6700;
-  --vg-color-warning-soft:     #FFF3DF;
-  --vg-color-danger:           #FA3946;
-  --vg-color-danger-soft:      #FFF0EC;
+  --vg-color-brand:            #EC7728;
+  --vg-color-brand-soft:       #FDEFE3;
+  --vg-color-primary:          #B65415;
+  --vg-color-primary-soft:     #FDEFE3;
+  --vg-color-success:          #3F8E69;
+  --vg-color-success-text:     #2F6B50;
+  --vg-color-success-soft:     #E8F3ED;
+  --vg-color-earth:            #915933;
+  --vg-color-gold:             #C89B3C;
+  --vg-color-warning:          #915933;
+  --vg-color-warning-soft:     #FFF4DF;
+  --vg-color-danger:           #C0392B;
+  --vg-color-danger-soft:      #FCEBE8;
   --vg-color-neutral:          #6B7280;
   --vg-color-neutral-soft:     #F3F4F6;
-  --vg-color-icon:             #1C1C1E;
+  --vg-color-icon:             #2F6B50;
+  --vg-color-on-primary:       #FFFFFF;
+  --vg-color-primary-rgb:      182 84 21;
+  --vg-color-gold-rgb:         200 155 60;
+
+  /* Legacy aliases are intentionally token-backed so older view CSS follows
+     the new brand without changing view or data logic. */
+  --olive-dark:                var(--vg-color-primary);
+  --gold:                      var(--vg-color-brand);
+  --ink:                       var(--vg-color-text);
+  --ink-soft:                  var(--vg-color-text-muted);
+  --card:                      var(--vg-color-surface);
+  --line:                      var(--vg-color-border);
+  --accent-dark:               var(--vg-color-primary);
+  --accent-soft:               var(--vg-color-brand-soft);
 
   /* ---------- Spacing scale ---------- */
   --vg-space-tight:            6px;
@@ -192,26 +211,34 @@ html[data-theme="light"]{
 html[data-theme="dark"]{
   color-scheme:dark;
 
-  --vg-color-bg:               #0A0B0E;
-  --vg-color-bg-system:        #050608;
-  --vg-color-surface:          #181A1F;
-  --vg-color-surface-soft:     #202329;
+  --vg-color-bg:               #17100B;
+  --vg-color-bg-system:        #050403;
+  --vg-color-surface:          #241A13;
+  --vg-color-surface-soft:     #302219;
   --vg-color-text:             #F2F2F7;
   --vg-color-text-secondary:   #C7C9D1;
   --vg-color-text-muted:       #9699A3;
   --vg-color-border:           rgba(255,255,255,.105);
   --vg-color-divider:          rgba(255,255,255,.075);
-  --vg-color-primary:          #4AA3FF;
-  --vg-color-primary-soft:     rgba(0,112,210,.18);
-  --vg-color-success:          #45C99A;
-  --vg-color-success-soft:     rgba(0,160,104,.16);
-  --vg-color-warning:          #F3B85B;
-  --vg-color-warning-soft:     rgba(245,161,49,.15);
-  --vg-color-danger:           #FF6973;
-  --vg-color-danger-soft:      rgba(250,57,70,.15);
+  --vg-color-brand:            #F18A43;
+  --vg-color-brand-soft:       rgba(236,119,40,.18);
+  --vg-color-primary:          #E17A36;
+  --vg-color-primary-soft:     rgba(236,119,40,.18);
+  --vg-color-success:          #69B88F;
+  --vg-color-success-text:     #9AD5B2;
+  --vg-color-success-soft:     rgba(63,142,105,.18);
+  --vg-color-earth:            #C4875B;
+  --vg-color-gold:             #E0B85D;
+  --vg-color-warning:          #E0B85D;
+  --vg-color-warning-soft:     rgba(200,155,60,.18);
+  --vg-color-danger:           #E46B5D;
+  --vg-color-danger-soft:      rgba(192,57,43,.20);
   --vg-color-neutral:          #A7ABB5;
   --vg-color-neutral-soft:     #292C32;
-  --vg-color-icon:             #E5E7EC;
+  --vg-color-icon:             #F4C39A;
+  --vg-color-on-primary:       #1B1009;
+  --vg-color-primary-rgb:      225 122 54;
+  --vg-color-gold-rgb:         224 184 93;
 
   --vg-shadow-group:           0 2px 10px rgba(0,0,0,.20);
   --vg-shadow-raised:          0 6px 20px rgba(0,0,0,.28);
@@ -223,13 +250,13 @@ html[data-theme="dark"]{
 
   /* Existing legacy aliases used by protected application CSS. */
   --olive-dark:                var(--vg-color-primary);
-  --gold:                      #FF5C35;
+  --gold:                      var(--vg-color-brand);
   --ink:                       var(--vg-color-text);
   --ink-soft:                  var(--vg-color-text-muted);
   --card:                      var(--vg-color-surface);
   --line:                      var(--vg-color-border);
-  --accent-dark:               #FF7658;
-  --accent-soft:               var(--vg-color-danger-soft);
+  --accent-dark:               var(--vg-color-primary);
+  --accent-soft:               var(--vg-color-brand-soft);
 }
 
 /* Canvas + native iOS/PWA surfaces */
@@ -251,7 +278,7 @@ html[data-theme="dark"] button{
 
 /* Global glass/navigation surfaces */
 html[data-theme="dark"] header{
-  background:rgba(24,26,31,.82);
+  background:var(--vg-color-surface);
   border-bottom-color:var(--vg-color-border);
   color:var(--vg-color-text);
 }
@@ -310,11 +337,11 @@ html[data-theme="dark"] .more-sheet-item.active{
   color:var(--vg-color-primary);
 }
 html[data-theme="dark"] .more-sheet-item-ico{
-  background:rgba(90,169,240,.14);
+  background:rgb(var(--vg-color-primary-rgb) / .14);
   color:var(--vg-color-icon);
 }
 html[data-theme="dark"] .more-sheet-item.active .more-sheet-item-ico{
-  background:rgba(90,169,240,.20);
+  background:rgb(var(--vg-color-primary-rgb) / .20);
 }
 html[data-theme="dark"] .more-sheet-item-chevron{
   color:var(--vg-color-text-muted);
@@ -534,7 +561,7 @@ html[data-theme="dark"] .inv-header-btn{
   background:rgba(255,255,255,.07);
   color:var(--vg-color-text-muted);
 }
-/* Destructive row action stays a danger color in Dark Mode (Light Mode: #D52B36). */
+/* Destructive row action stays a danger color in Dark Mode (Light Mode: var(--vg-color-danger)). */
 html[data-theme="dark"] .inv-line-del{
   background:rgba(255,255,255,.07);
   color:var(--vg-color-danger);
@@ -599,7 +626,7 @@ html[data-theme="dark"] .action-urgency-low{
 }
 
 html[data-theme="dark"] .watch-severity-high{
-  color:#FF6973!important;
+  color:var(--vg-color-danger)!important;
   background:rgba(250,57,70,.15);
 }
 html[data-theme="dark"] .watch-detail-reason .watch-detail-value{
@@ -673,7 +700,7 @@ html[data-theme="dark"] .rank-pill-incomplete{
 }
 html[data-theme="dark"] .snapshot-edit-option.selected{
   background:var(--vg-color-primary-soft);
-  border-color:rgba(90,169,240,.24);
+  border-color:rgb(var(--vg-color-primary-rgb) / .24);
   color:var(--vg-color-text);
 }
 html[data-theme="dark"] .inv-payment-panel > input:focus,

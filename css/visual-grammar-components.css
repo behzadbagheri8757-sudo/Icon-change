@@ -150,7 +150,7 @@ input[placeholder*="جستجو"]{
 
 /* AppIcons are monochrome by default across all views. Only the active Bottom Nav item is brand-blue. */
 .app-icon{
-  color:var(--vg-color-icon,#1C1C1E);
+  color:var(--vg-color-icon);
 }
 
 .bottom-nav-item .bn-ico{
@@ -159,7 +159,7 @@ input[placeholder*="جستجو"]{
   display:flex;
   align-items:center;
   justify-content:center;
-  color:var(--vg-color-icon,#1C1C1E);
+  color:var(--vg-color-icon);
 }
 
 .bottom-nav-item .bn-ico svg{
@@ -263,7 +263,7 @@ input[placeholder*="جستجو"]{
   border:1px solid var(--vg-color-primary);
   font-size:var(--vg-type-action);
   font-weight:var(--vg-weight-title);
-  box-shadow:0 3px 10px rgba(0,112,210,.14);
+  box-shadow:0 3px 10px rgb(var(--vg-color-primary-rgb) / .14);
   cursor:pointer;
   transition:transform .1s,box-shadow .1s;
 }
@@ -401,8 +401,8 @@ input[placeholder*="جستجو"]{
 .field select:focus,
 .field textarea:focus{
   outline:none;
-  border-color:rgba(0,112,210,.45);
-  box-shadow:0 0 0 3px rgba(0,112,210,.10);
+  border-color:rgb(var(--vg-color-primary-rgb) / .45);
+  box-shadow:0 0 0 3px rgb(var(--vg-color-primary-rgb) / .10);
 }
 
 .field textarea{
@@ -412,8 +412,8 @@ input[placeholder*="جستجو"]{
 html[data-theme="dark"] .field input:focus,
 html[data-theme="dark"] .field select:focus,
 html[data-theme="dark"] .field textarea:focus{
-  border-color:rgba(74,163,255,.45);
-  box-shadow:0 0 0 3px rgba(74,163,255,.14);
+  border-color:rgb(var(--vg-color-primary-rgb) / .45);
+  box-shadow:0 0 0 3px rgb(var(--vg-color-primary-rgb) / .14);
 }
 
 
@@ -451,8 +451,8 @@ input[placeholder*="جستجو"]{
 input[type="search"]:focus,
 input[placeholder*="جستجو"]:focus{
   outline:none;
-  border-color:rgba(0,112,210,.45);
-  box-shadow:0 0 0 3px rgba(0,112,210,.10);
+  border-color:rgb(var(--vg-color-primary-rgb) / .45);
+  box-shadow:0 0 0 3px rgb(var(--vg-color-primary-rgb) / .10);
 }
 
 
@@ -586,7 +586,7 @@ input[placeholder*="جستجو"]:focus{
 }
 
 .empty[role="alert"]{
-  color:#B45309;
+  color:var(--vg-color-earth);
 }
 
 .empty[role="alert"]::before{

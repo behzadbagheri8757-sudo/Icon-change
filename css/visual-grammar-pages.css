@@ -1213,7 +1213,7 @@ html[data-theme="dark"] .watch-detail-reason .watch-detail-value{color:var(--vg-
 .bp-customer-health{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;margin-top:10px;border:1px solid var(--vg-color-divider);border-radius:12px;background:var(--vg-color-surface);}
 .bp-customer-health-label{font-size:.7rem;color:var(--vg-color-text-muted);}
 .bp-customer-health-value{font-size:.78rem;font-weight:700;color:var(--vg-color-text);}
-.bp-customer-health-value.radar-risk-critical{color:var(--vg-color-danger,#D52B36);}
+.bp-customer-health-value.radar-risk-critical{color:var(--vg-color-danger,var(--vg-color-danger));}
 .bp-customer-health-value.radar-risk-high{color:var(--vg-color-warning,#C47B00);}
 .bp-customer-health-value.radar-risk-medium{color:var(--vg-color-warning,#C47B00);}
 #main.customer-detail-view .cust-summary-label{font-size:.68rem;font-weight:650;color:var(--vg-color-text-muted);margin-bottom:4px;}
