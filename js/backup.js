@@ -1037,7 +1037,7 @@ async function _restoreParsedBackup(parsed){
       ? {gameMeta:_deepClone(parsed.gameMeta), gameLedger:_deepClone(parsed.gameLedger)}
       : previous.game;
     if(parsed.watchLifecycle){ if(!await restoreWatchLifecycleBundleForBackup(parsed.watchLifecycle)) throw new Error('Watch Lifecycle restore failed'); }
-    const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? _deepClone(parsed.intelligence) : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue},game:expectedGame,watchLifecycle:parsed.watchLifecycle ? _deepClone(parsed.watchLifecycle) : previous.watchLifecycle};
+    const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? {dbVersion:INTELLIGENCE_DB_VERSION,occurrences:parsed.intelligence.occurrences||[],seller_feedback:parsed.intelligence.seller_feedback||[],baseline_cache:parsed.intelligence.baseline_cache||[],seller_acks:Array.isArray(parsed.intelligence.seller_acks) ? parsed.intelligence.seller_acks : previous.intelligence.seller_acks} : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue},game:expectedGame,watchLifecycle:parsed.watchLifecycle ? _deepClone(parsed.watchLifecycle) : previous.watchLifecycle};
     const actual=await _readCurrentSemanticState();
     if(!_semanticStateEqual(actual,expected)) throw new Error('post-commit verification failed');
     await dbDelete(RESTORE_JOURNAL_KEY);
@@ -1238,4 +1238,3 @@ async function exportExcel(){
     showToast('فایل اکسل آماده شد');
   });
 }
-
