@@ -286,7 +286,7 @@ html .inv-sheet-v2 .inv-row-date input.shamsi-date-field:focus-visible{outline:0
 }
 .prod-drop{position:fixed;z-index:90;box-sizing:border-box;}
 .prod-drop[hidden]{display:none !important;}
-.prod-drop-panel{display:flex;flex-direction:column;max-height:inherit;background:var(--vg-glass-tint);overflow:hidden;backdrop-filter:var(--vg-glass-blur);-webkit-backdrop-filter:var(--vg-glass-blur);}
+.prod-drop-panel{display:flex;flex-direction:column;max-height:inherit;background:var(--vg-glass-sheen),var(--vg-glass-tint);overflow:hidden;backdrop-filter:var(--vg-glass-blur);-webkit-backdrop-filter:var(--vg-glass-blur);}
 .prod-drop-search-wrap{flex:0 0 auto;padding:10px 12px;background:rgba(248,250,252,.9);border-bottom:.5px solid var(--vg-color-divider);}
 .prod-drop-search{width:100%;box-sizing:border-box;min-height:42px;padding:8px 12px;border:1px solid rgba(15,23,42,.09);border-radius:12px;background:var(--vg-color-surface);font-family:inherit;font-size:15px;color:var(--vg-color-text);outline:none;}
 .prod-drop-search:focus{border-color:rgba(0,112,210,.32);box-shadow:0 0 0 3px rgba(0,112,210,.08);}
@@ -643,8 +643,7 @@ a.ledger-row:active,
              background-color var(--ios-touch) ease;}
 .more-overlay{transition:opacity 220ms var(--ios-ease-out);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);}
 .more-sheet{transition:transform 270ms var(--ios-ease-spring),
-             box-shadow 220ms var(--ios-ease-out);background:var(--vg-glass-tint);backdrop-filter:var(--vg-glass-blur);-webkit-backdrop-filter:var(--vg-glass-blur);box-shadow:0 -12px 34px rgba(31,41,55,.12),
-             inset 0 1px 0 rgba(255,255,255,.7);}
+             box-shadow 220ms var(--ios-ease-out);background:var(--vg-glass-sheen),var(--vg-glass-tint);backdrop-filter:var(--vg-glass-blur);-webkit-backdrop-filter:var(--vg-glass-blur);box-shadow:0 -12px 34px rgba(31,41,55,.12),var(--vg-glass-rim);}
 .more-sheet-item{transition:transform var(--ios-touch) var(--ios-ease-out),
              background-color var(--ios-control) ease,
              border-color var(--ios-control) ease,
@@ -653,8 +652,7 @@ a.ledger-row:active,
 .overlay:not(.more-overlay){opacity:0;transition:opacity 270ms var(--ios-ease-out);}
 .overlay.show{opacity:1;}
 .sheet:not(.inv-sheet-host){transform:translateY(110%);transition:transform 270ms var(--ios-ease-spring),
-             box-shadow 220ms var(--ios-ease-out);background:var(--vg-glass-tint);backdrop-filter:var(--vg-glass-blur);-webkit-backdrop-filter:var(--vg-glass-blur);box-shadow:0 -12px 34px rgba(31,41,55,.12),
-             inset 0 1px 0 rgba(255,255,255,.7);}
+             box-shadow 220ms var(--ios-ease-out);background:var(--vg-glass-sheen),var(--vg-glass-tint);backdrop-filter:var(--vg-glass-blur);-webkit-backdrop-filter:var(--vg-glass-blur);box-shadow:0 -12px 34px rgba(31,41,55,.12),var(--vg-glass-rim);}
 .sheet.show{transform:translateY(0);}
 .sheet-handle{width:40px;height:4px;border-radius:999px;background:rgba(31,41,55,.12);margin:4px auto 8px;flex:none;}
 .sheet .close-x{position:absolute;top:10px;inset-inline-end:10px;}
