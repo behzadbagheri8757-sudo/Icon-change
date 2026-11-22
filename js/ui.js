@@ -29,6 +29,14 @@ function enToFaDigits(str){
 function normalizeVisibleDigits(root){
   const target = root || document.getElementById('main') || document.body;
   if(!target || typeof document === 'undefined') return;
+  const stateNodes = [];
+  if(target.nodeType === 1 && target.classList && target.classList.contains('empty')) stateNodes.push(target);
+  if(target.querySelectorAll) stateNodes.push.apply(stateNodes, Array.from(target.querySelectorAll('.empty')));
+  stateNodes.forEach(function(el){
+    if(el.getAttribute('role') === 'alert') el.setAttribute('aria-live', 'assertive');
+    else if(!el.hasAttribute('aria-live')) el.setAttribute('aria-live', 'polite');
+    if(!el.hasAttribute('aria-atomic')) el.setAttribute('aria-atomic', 'true');
+  });
   const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
   const skip = new Set(['SCRIPT','STYLE','INPUT','TEXTAREA']);
   const nodes = [];
@@ -363,6 +371,31 @@ function balanceStatusWord(balance){
 function balanceStatusText(balance, amountText){
   return balance===0 ? balanceStatusWord(balance) : (balanceStatusWord(balance)+': '+amountText);
 }
+/**
+ * Single source of the customer risk wording (Customer Detail, Quick View, Customers list).
+ * Pure: no data access. Unknown / missing level => empty label (caller supplies its own fallback).
+ * @param {string} level 'critical' | 'high' | 'medium' | 'low'
+ * @returns {{label:string, tone:string}}
+ */
+function getRiskBadge(level){
+  if(level==='critical') return { label:'اقدام فوری', tone:'danger' };
+  if(level==='high')     return { label:'ریسک فروش', tone:'warning' };
+  if(level==='medium')   return { label:'نیاز به بررسی', tone:'warning' };
+  if(level==='low')      return { label:'وضعیت عادی', tone:'neutral' };
+  return { label:'', tone:'' };
+}
+/**
+ * Single source of the «نیازمند پیگیری» description used by Dashboard, Customer Detail and Quick View.
+ * Pure: formats one row of computationContext.receivableAttention().
+ */
+function receivableAttentionDesc(row){
+  if(!row) return '';
+  var n = enToFaDigits(String(Math.max(0, Math.round(Number(row.daysSince) || 0))));
+  if(row.refKind==='invoice_due') return (Number(row.daysSince) > 0) ? (n+' روز از سررسید') : 'سررسید امروز';
+  if(row.refKind==='invoice_date') return n+' روز از فاکتور آخر';
+  if(row.refKind==='no_payment_history') return n+' روز از فاکتور آخر · پرداختی ثبت نشده';
+  return n+' روز از آخرین پرداخت';
+}
 /** Local calendar date as YYYY-MM-DD (not UTC — avoids Iran midnight offset). */
 function todayISO(){
   const d = new Date();
@@ -486,7 +519,16 @@ function isSameJalaliMonth(iso, ref){
  * Backward compatible: existing 2-arg callers are unchanged.
  */
 function shamsiDateInputHTML(id, valueISO, opts){
-  const iso = (valueISO && parseISODateParts(valueISO)) ? String(valueISO).slice(0,10) : todayISO();
+  const hasValue = !!(valueISO && parseISODateParts(valueISO));
+  const calendarEmpty = !!(opts && opts.mode === 'calendar' && !hasValue);
+  if (calendarEmpty) {
+    /* Calendar mode, no date yet: nothing is selected, and today is never stored automatically. */
+    return `<div class="shamsi-date" data-shamsi-root="1" data-shamsi-mode="calendar">
+    <input type="hidden" id="${esc(id)}" value="" data-shamsi-hidden="1">
+    <input type="text" class="shamsi-date-field" data-shamsi-field="1" readonly inputmode="none" value="" placeholder="انتخاب تاریخ" aria-label="تاریخ شمسی">
+  </div>`;
+  }
+  const iso = hasValue ? String(valueISO).slice(0,10) : todayISO();
   const j = isoToJalali(iso) || gregorianToJalali(
     new Date().getFullYear(), new Date().getMonth()+1, new Date().getDate()
   );
@@ -922,11 +964,14 @@ function bindSheetDragToDismiss(sheetEl, handleEl, dismissFn){
 }
 
 let _modalHideTimer = null;
+let _modalReturnFocus = null;
 
 /* In-app confirmation layer. It sits above an existing sheet when needed, so
    destructive actions can be confirmed without replacing/dismissing an
    in-flight form or changing its state. */
-function appConfirm(message, confirmLabel, cancelLabel){
+function appConfirm(message, confirmLabel, cancelLabel, opts){
+  var _msg = String(message || '');
+  var _danger = (opts && typeof opts.danger === 'boolean') ? opts.danger : /حذف|برگشت|بازیابی|جایگزین|غیرفعال/.test(_msg);
   confirmLabel = confirmLabel || 'تأیید';
   cancelLabel = cancelLabel || 'انصراف';
   return new Promise(function(resolve){
@@ -936,21 +981,34 @@ function appConfirm(message, confirmLabel, cancelLabel){
     layer.className = 'confirm-overlay';
     layer.setAttribute('role','alertdialog');
     layer.setAttribute('aria-modal','true');
-    layer.innerHTML = '<div class="confirm-card"><div class="confirm-message"></div><div class="btn-row"><button type="button" class="btn secondary" data-confirm-cancel></button><button type="button" class="btn danger" data-confirm-ok></button></div></div>';
+    const messageId = 'confirm-message-' + uid();
+    layer.setAttribute('aria-labelledby', messageId);
+    layer.innerHTML = '<div class="confirm-card"><div class="confirm-message" id="' + messageId + '"></div><div class="btn-row"><button type="button" class="btn secondary" data-confirm-cancel></button><button type="button" class="btn ' + (_danger ? 'danger' : '') + '" data-confirm-ok></button></div></div>';
     layer.querySelector('.confirm-message').textContent = String(message || 'ادامه می‌دهید؟');
     layer.querySelector('[data-confirm-cancel]').textContent = String(cancelLabel);
     layer.querySelector('[data-confirm-ok]').textContent = String(confirmLabel);
     root.appendChild(layer);
     let settled = false;
+    const previousActive = document.activeElement;
     function finish(value){
       if(settled) return;
       settled = true;
       layer.remove();
       resolve(value);
+      if(previousActive && previousActive.isConnected){ try{ previousActive.focus({preventScroll:true}); }catch(_e){} }
     }
     layer.querySelector('[data-confirm-cancel]').addEventListener('click', function(){ finish(false); });
     layer.querySelector('[data-confirm-ok]').addEventListener('click', function(){ finish(true); });
     layer.addEventListener('click', function(e){ if(e.target === layer) finish(false); });
+    layer.addEventListener('keydown', function(e){
+      if(e.key === 'Escape'){ e.preventDefault(); finish(false); return; }
+      if(e.key !== 'Tab') return;
+      const controls = Array.from(layer.querySelectorAll('button:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])')).filter(function(el){ return el.getClientRects().length; });
+      if(!controls.length){ e.preventDefault(); return; }
+      const first = controls[0], last = controls[controls.length-1];
+      if(e.shiftKey && (document.activeElement === first || !layer.contains(document.activeElement))){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && (document.activeElement === last || !layer.contains(document.activeElement))){ e.preventDefault(); first.focus(); }
+    });
     requestAnimationFrame(function(){
       const ok = layer.querySelector('[data-confirm-cancel]');
       if(ok) ok.focus();
@@ -1014,7 +1072,7 @@ window.__requestAppExit = function(reason){
 function closeModal(){
   const overlay = document.getElementById('overlay');
   const root = document.getElementById('modalRoot');
-  if(!overlay){ if(root) root.innerHTML=''; return; }
+  if(!overlay){ if(root) root.innerHTML=''; if(_modalReturnFocus && _modalReturnFocus.isConnected){ try{ _modalReturnFocus.focus({preventScroll:true}); }catch(_e){} } _modalReturnFocus = null; return; }
   const invoiceBottomNav = document.getElementById('bottom-nav');
   if (invoiceBottomNav && invoiceBottomNav.dataset.invoiceHiddenPrev != null) {
     invoiceBottomNav.hidden = invoiceBottomNav.dataset.invoiceHiddenPrev === '1';
@@ -1036,6 +1094,8 @@ function closeModal(){
     _modalHideTimer = null;
     root.innerHTML = '';
     if(window.scrollX) window.scrollTo(0, window.scrollY);
+    if(_modalReturnFocus && _modalReturnFocus.isConnected){ try{ _modalReturnFocus.focus({preventScroll:true}); }catch(_e){} }
+    _modalReturnFocus = null;
   }, 300);
 }
 
@@ -1059,6 +1119,15 @@ function openSheet(html, opts){
     const frag = document.createDocumentFragment();
     Array.from(tmp.childNodes).forEach(function(n){ frag.appendChild(n); });
     existingGenericSheet.appendChild(frag);
+    const nextHeading = existingGenericSheet.querySelector('h1,h2,h3,[data-sheet-title]');
+    if(nextHeading){
+      if(!nextHeading.id) nextHeading.id = 'sheet-title-' + uid();
+      existingGenericSheet.setAttribute('aria-labelledby', nextHeading.id);
+      existingGenericSheet.removeAttribute('aria-label');
+    }else{
+      existingGenericSheet.removeAttribute('aria-labelledby');
+      existingGenericSheet.setAttribute('aria-label', 'پنجرهٔ محاوره‌ای');
+    }
     return;
   }
 
@@ -1084,6 +1153,9 @@ function openSheet(html, opts){
     }
   }
   if(_modalHideTimer){ clearTimeout(_modalHideTimer); _modalHideTimer = null; }
+  const activeBeforeOpen = document.activeElement;
+  if(activeBeforeOpen && !root.contains(activeBeforeOpen)) _modalReturnFocus = activeBeforeOpen;
+  else if(!_modalReturnFocus || !_modalReturnFocus.isConnected) _modalReturnFocus = activeBeforeOpen;
   // مطمئن شو هر Modal قبلی کاملاً پاک شده (نه فقط مخفی) قبل از ساختن Modal جدید،
   // و یک reflow اجباری بین پاک‌شدن و رندر جدید انجام بده تا ظاهر (گوشه‌های گرد و غیره) بعد از باز/بسته‌شدن‌های مکرر خراب نشه
   root.innerHTML = '';
@@ -1099,11 +1171,32 @@ function openSheet(html, opts){
   try{ document.body.classList.add('modal-open'); }catch(_e){}
   const overlay = document.getElementById('overlay');
   const sheet = overlay.querySelector('.sheet');
+  const heading = sheet.querySelector('h1,h2,h3,[data-sheet-title]');
+  sheet.setAttribute('role','dialog');
+  sheet.setAttribute('aria-modal','true');
+  sheet.setAttribute('tabindex','-1');
+  if(heading){
+    if(!heading.id) heading.id = 'sheet-title-' + uid();
+    sheet.setAttribute('aria-labelledby', heading.id);
+    sheet.removeAttribute('aria-label');
+  }else{
+    sheet.setAttribute('aria-label', 'پنجرهٔ محاوره‌ای');
+  }
   const escapeHandler = function(e){
-    if(e.key !== 'Escape' || !overlay.classList.contains('show')) return;
+    if(!overlay.classList.contains('show')) return;
     if(document.querySelector('#modalRoot .confirm-overlay')) return;
-    e.preventDefault();
-    Promise.resolve(window.__requestAppExit('escape')).then(function(ok){ if(ok) closeModal(); });
+    if(e.key === 'Escape'){
+      e.preventDefault();
+      Promise.resolve(window.__requestAppExit('escape')).then(function(ok){ if(ok) closeModal(); });
+      return;
+    }
+    if(e.key === 'Tab'){
+      const focusable = Array.from(sheet.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter(function(el){ return !el.hidden && el.getAttribute('aria-hidden') !== 'true' && el.getClientRects().length; });
+      if(!focusable.length){ e.preventDefault(); sheet.focus(); return; }
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if(e.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && (document.activeElement === last || !sheet.contains(document.activeElement))){ e.preventDefault(); first.focus(); }
+    }
   };
   sheet.__escapeHandler = escapeHandler;
   document.addEventListener('keydown', escapeHandler);
@@ -1120,6 +1213,8 @@ function openSheet(html, opts){
   requestAnimationFrame(() => {
     overlay.classList.add('show');
     sheet.classList.add('show');
+    const firstFocus = sheet.querySelector('#closeX,button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href]');
+    try{ (firstFocus || sheet).focus({preventScroll:true}); }catch(_e){ try{ (firstFocus || sheet).focus(); }catch(__e){} }
   });
   overlay.addEventListener('click', async (e)=>{ if(e.target.id==='overlay'){ if(await window.__requestAppExit('backdrop')) closeModal(); } });
   overlay.addEventListener('touchmove', function(e){
@@ -1127,4 +1222,30 @@ function openSheet(html, opts){
   }, {passive:false});
   document.getElementById('closeX').addEventListener('click', async function(){ if(await window.__requestAppExit('close')) closeModal(); });
   bindSheetDragToDismiss(sheet, sheet.querySelector('.sheet-handle'), async function(){ if(await window.__requestAppExit('drag')) closeModal(); });
+}
+
+
+/* Presentation helper: smooth monotone-cubic SVG path through [[x,y],…] points
+   (never overshoots, so a line can't dip below its baseline). Used by the small
+   charts so they match the Reports chart. Data and scales are the caller's. */
+function chartSmoothPath(coords){
+  var m = coords.length;
+  if (!m) return '';
+  var d = 'M ' + coords[0][0].toFixed(2) + ' ' + coords[0][1].toFixed(2);
+  if (m === 1) return d;
+  var dx = [], sl = [], k;
+  for (k = 0; k < m - 1; k++) { dx.push(coords[k+1][0] - coords[k][0]); sl.push((coords[k+1][1] - coords[k][1]) / dx[k]); }
+  var t = [sl[0]];
+  for (k = 1; k < m - 1; k++) t.push(sl[k-1] * sl[k] <= 0 ? 0 : (sl[k-1] + sl[k]) / 2);
+  t.push(sl[m-2]);
+  for (k = 0; k < m - 1; k++) {
+    if (sl[k] === 0) { t[k] = 0; t[k+1] = 0; continue; }
+    var a = t[k] / sl[k], b = t[k+1] / sl[k], h = Math.hypot(a, b);
+    if (h > 3) { var tau = 3 / h; t[k] = tau * a * sl[k]; t[k+1] = tau * b * sl[k]; }
+  }
+  for (k = 0; k < m - 1; k++) {
+    var h3 = dx[k] / 3, x0 = coords[k][0], y0 = coords[k][1], x1 = coords[k+1][0], y1 = coords[k+1][1];
+    d += ' C ' + (x0 + h3).toFixed(2) + ' ' + (y0 + t[k] * h3).toFixed(2) + ' ' + (x1 - h3).toFixed(2) + ' ' + (y1 - t[k+1] * h3).toFixed(2) + ' ' + x1.toFixed(2) + ' ' + y1.toFixed(2);
+  }
+  return d;
 }

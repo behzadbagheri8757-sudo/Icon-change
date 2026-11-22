@@ -56,6 +56,13 @@ let dbInstance = null;
 let custFilter = 'all';
 let custSortByDebt = false;
 
+/* مشتری یک‌بار‌مصرف («متفرقه»): فروش‌های پراکندهٔ آدم‌های مختلف زیر یک حساب.
+   - موتورهای رفتاری (پیشنهاد روزانه، اولویت، Watch) آن را نمی‌بینند → isTrackedCustomer
+   - حسابداری، بدهی و هشدار وصول مثل بقیه می‌ماند
+   - روی فاکتور «نام خریدار» (buyerName) دارد تا بدهی‌ها قاطی نشوند */
+function isOneOffCustomer(c){ return !!(c && c.oneOff); }
+function isTrackedCustomer(c){ return !!(c && c.active !== false && !c.oneOff); }
+
 function emptyData(){
   // suppliers[].payments: legacy {date, amount} or extended
   //   {id, date, amount, method:'cash'|'check', note?,
@@ -66,9 +73,15 @@ function emptyData(){
   // { id, purchaseId, productId, itemId?, qtyOriginal, qtyRemaining, unitCost,
   //   status:'open'|'depleted'|'voided', source:'purchase'|'manual-in'|'manual-adjust'|'sale-return'|'sale-revert',
   //   date?, note? }
+  // paymentPromises: oral payment promises {id, customerId, date, promiseDate, amount(0=unspecified), note,
+  //   status:'pending'|'kept'|'broken'|'superseded', keptAmount, keptAt, createdAt}. Promise is NOT money:
+  //   it never touches payments/balance (see js/payment-promises.js).
+  // deliveryPromises: oral delivery promises («فردا نخود و عدس بیار») {id, customerId, date, deliveryDate,
+  //   items:[{productId, name, qty(0=unspecified)}], note, status:'pending'|'done'|'cancelled', doneAt, invoiceId|null, createdAt}.
+  //   A promise is NOT a sale: it never touches stock, invoices or balances (see js/delivery-promises.js).
   // regions/routes/neighborhoods: shared Location System (see js/location.js).
   // Kept as plain arrays on the same data blob — new, additive, empty by
   // default, and automatically covered by the existing backup/restore.
-  return { products: [], customers: [], invoices: [], payments: [], checks: [], suppliers: [], inventoryLayers: [], invoiceSeq: 1000, schemaVersion: CURRENT_SCHEMA_VERSION, regions: [], routes: [], neighborhoods: [], analysisGroups: [] };
+  return { products: [], customers: [], invoices: [], payments: [], checks: [], paymentPromises: [], deliveryPromises: [], suppliers: [], inventoryLayers: [], invoiceSeq: 1000, schemaVersion: CURRENT_SCHEMA_VERSION, regions: [], routes: [], neighborhoods: [], analysisGroups: [] };
 }
 

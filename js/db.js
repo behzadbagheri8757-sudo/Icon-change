@@ -485,12 +485,17 @@ function normalizeData(parsed){
     openingBalance: num(c.openingBalance),
     visits: c.visits||[],
     active: c.active!==false,
+    // مشتری یک‌بار‌مصرف. اگر هرگز تعیین نشده و نام دقیقاً «متفرقه» است، پیش‌فرض true (کاربر می‌تواند خاموشش کند؛ false صریح حفظ می‌شود).
+    oneOff: typeof c.oneOff==='boolean' ? c.oneOff : /^\s*متفرقه\s*$/.test(String(c.name||'')),
     prospectShopId: c.prospectShopId != null ? c.prospectShopId : null,
   }));
   d.invoices = (parsed.invoices||[]).map(i=>({
     id:i.id||uid(), number:optNum(i.number), customerId:i.customerId, date:i.date,
-    dueDate: i.dueDate || null,
     visitId: i.visitId || null,
+    // نام خریدار (فقط برای مشتری یک‌بار‌مصرف؛ اختیاری)
+    ...((typeof i.buyerName==='string' && i.buyerName.trim()) ? {buyerName:i.buyerName.trim()} : {}),
+    // Optional payment due date (YYYY-MM-DD). Absent => follow-up counts from the invoice date.
+    ...((typeof i.dueDate==='string' && /^\d{4}-\d{2}-\d{2}$/.test(i.dueDate)) ? {dueDate:i.dueDate} : {}),
     items:(i.items||[]).map(it=>({
       productId:it.productId, name:it.name, qty:num(it.qty), price:num(it.price),
       buyPrice:num(it.buyPrice), discount:num(it.discount), weight:num(it.weight),
@@ -503,7 +508,6 @@ function normalizeData(parsed){
   d.payments = (parsed.payments||[]).map(p=>({
     id:p.id||uid(), customerId:p.customerId, date:p.date, amount:num(p.amount),
     method:p.method||'cash', invoiceId:p.invoiceId, note:p.note||'',
-    followUpDate: p.followUpDate || null,
     returnItems: Array.isArray(p.returnItems) ? p.returnItems.map(ri=>({
       productId: ri.productId, name: ri.name||'', qty:num(ri.qty), price:num(ri.price),
     })) : [],
@@ -521,6 +525,36 @@ function normalizeData(parsed){
       type: a.type, invoiceId: a.invoiceId, amount: num(a.amount),
     })) : undefined,
   }));
+  d.paymentPromises = (Array.isArray(parsed.paymentPromises) ? parsed.paymentPromises : [])
+    .filter(p=>p && p.customerId && /^\d{4}-\d{2}-\d{2}$/.test(String(p.promiseDate||'')))
+    .map(p=>({
+      id: p.id||uid(),
+      customerId: p.customerId,
+      date: (typeof p.date==='string' && /^\d{4}-\d{2}-\d{2}$/.test(p.date)) ? p.date : String(p.promiseDate),
+      promiseDate: String(p.promiseDate),
+      amount: Math.max(0, num(p.amount)),
+      note: p.note||'',
+      status: ['pending','kept','broken','superseded'].includes(p.status) ? p.status : 'pending',
+      keptAmount: p.keptAmount != null ? num(p.keptAmount) : null,
+      keptAt: p.keptAt || null,
+      createdAt: p.createdAt || new Date().toISOString(),
+    }));
+  d.deliveryPromises = (Array.isArray(parsed.deliveryPromises) ? parsed.deliveryPromises : [])
+    .filter(p=>p && p.customerId && /^\d{4}-\d{2}-\d{2}$/.test(String(p.deliveryDate||'')))
+    .map(p=>({
+      id: p.id||uid(),
+      customerId: p.customerId,
+      date: (typeof p.date==='string' && /^\d{4}-\d{2}-\d{2}$/.test(p.date)) ? p.date : String(p.deliveryDate),
+      deliveryDate: String(p.deliveryDate),
+      items: (Array.isArray(p.items) ? p.items : []).filter(it=>it && it.productId).map(it=>({
+        productId: it.productId, name: String(it.name||''), qty: Math.max(0, num(it.qty)),
+      })),
+      note: p.note||'',
+      status: ['pending','done','cancelled'].includes(p.status) ? p.status : 'pending',
+      doneAt: p.doneAt || null,
+      invoiceId: p.invoiceId || null,
+      createdAt: p.createdAt || new Date().toISOString(),
+    }));
   d.suppliers = (parsed.suppliers||[]).map(s=>({
     id:s.id||uid(), name:s.name||'', phone:s.phone||'',
     openingBalance: num(s.openingBalance),

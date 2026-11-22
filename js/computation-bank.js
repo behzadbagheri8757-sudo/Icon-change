@@ -12,58 +12,141 @@ var RECEIVABLE_ATTENTION_DEFAULTS = {
   daysFloor: 10
 };
 
+
+/* ---- v117: shared analysis reference date (asOfDate) ---------------------------------------
+ * ctx.asOfDate is the reference DAY for time-based analysis (not a historical replay of the CRM).
+ * Calendar-day arithmetic only: Date.UTC on Y/M/D components, never a division of two local
+ * midnights (a DST change would make that 23h/25h). Invalid / missing dates => null. */
+function _analysisDayNumber(value) {
+  if (value == null || value === '') return null;
+  var y, m, d;
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    if (isNaN(value.getTime())) return null;
+    y = value.getFullYear(); m = value.getMonth() + 1; d = value.getDate();
+  } else {
+    var mt = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
+    if (!mt) return null;
+    y = +mt[1]; m = +mt[2]; d = +mt[3];
+  }
+  if (!(y >= 1000 && y <= 9999) || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) return null;
+  var t = Date.UTC(y, m - 1, d);
+  var chk = new Date(t);
+  // real calendar validity (rejects 2026-02-30, 2026-13-01 ...): regex alone is not enough
+  if (chk.getUTCFullYear() !== y || chk.getUTCMonth() !== m - 1 || chk.getUTCDate() !== d) return null;
+  return Math.round(t / 86400000);
+}
+function _analysisNormalizeDay(value) {
+  var n = _analysisDayNumber(value);
+  if (n == null) return null;
+  var dt = new Date(n * 86400000);
+  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
+}
+/* Reference day of a context; without a (valid) context date it is the system's today. */
+function analysisToday(ctx) {
+  var v = ctx && _analysisNormalizeDay(ctx.asOfDate);
+  if (v) return v;
+  var t = (typeof todayISO === 'function') ? _analysisNormalizeDay(todayISO()) : null;
+  if (t) return t;
+  var n = new Date();
+  return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
+}
+/* asOfDate - isoDate in whole calendar days. Future date => negative (caller clamps). Invalid => null. */
+function analysisDaysAgo(isoDate, ctx) {
+  var a = _analysisDayNumber(analysisToday(ctx));
+  var b = _analysisDayNumber(isoDate);
+  if (a == null || b == null) return null;
+  return a - b;
+}
+/* ISO day = reference day minus n calendar days. */
+function analysisISODaysAgo(n, ctx) {
+  var a = _analysisDayNumber(analysisToday(ctx));
+  if (a == null) return null;
+  var dt = new Date((a - Number(n)) * 86400000);
+  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
+}
+
 (function (global) {
   function createComputationContext(options) {
     options = options || {};
     var source = options.data || global.data || {};
     var values = Object.create(null);
 
-    function memo(bucket, key, producer) {
+    /* v117: reference date. options.asOfDate > options.referenceDate (legacy callers) > today. */
+    var initialAsOf = _analysisNormalizeDay(options.asOfDate) ||
+      _analysisNormalizeDay(options.referenceDate) ||
+      (typeof todayISO === 'function' ? _analysisNormalizeDay(todayISO()) : null) ||
+      _analysisNormalizeDay(new Date());
+
+    function memoCore(bucket, key, producer, dateKey) {
       var group = values[bucket];
       if (!group) group = values[bucket] = Object.create(null);
-      var normalized = String(key == null ? '__default__' : key);
+      var normalized = (dateKey ? dateKey + '|' : '') + String(key == null ? '__default__' : key);
       if (Object.prototype.hasOwnProperty.call(group, normalized)) return group[normalized];
       var value = producer();
       group[normalized] = value;
       return value;
     }
+    /* Public memo: the CURRENT ctx.asOfDate is part of the key (read at call time, so changing
+       ctx.asOfDate on the same context, A -> B -> A, never serves another date's result). */
+    function memo(bucket, key, producer) {
+      return memoCore(bucket, key, producer, analysisToday(ctx));
+    }
+    /* Date-independent raw indexes (invoices of a customer, product by id ...) are not rebuilt
+       when only the reference date changes. */
+    function memoStable(bucket, key, producer) {
+      return memoCore(bucket, key, producer, '');
+    }
 
     var ctx = {
       data: source,
       values: values,
+      asOfDate: initialAsOf,
       memo: memo,
+      memoStable: memoStable,
       aggregatePairMapCache: Object.create(null),
 
       customerInvoices: function (cid) {
-        return memo('customerInvoices', cid, function () {
+        return memoStable('customerInvoices', cid, function () {
           return (source.invoices || []).filter(function (row) {
             return row && row.customerId === cid;
           });
         });
       },
       customerPayments: function (cid) {
-        return memo('customerPayments', cid, function () {
+        return memoStable('customerPayments', cid, function () {
           return (source.payments || []).filter(function (row) {
             return row && row.customerId === cid;
           });
         });
       },
       customerChecks: function (cid) {
-        return memo('customerChecks', cid, function () {
+        return memoStable('customerChecks', cid, function () {
           return (source.checks || []).filter(function (row) {
             return row && row.customerId === cid;
           });
         });
       },
+      /* Pending payment promise of a customer (js/payment-promises.js). A customer with an active
+         promise is handled by the promise flow, not by the generic receivable follow-up. */
+      activePromise: function (cid) {
+        return memoStable('activePromise', cid, function () {
+          var best = null;
+          (source.paymentPromises || []).forEach(function (p) {
+            if (!p || p.customerId !== cid || p.status !== 'pending') return;
+            if (!best || String(p.promiseDate) < String(best.promiseDate)) best = p;
+          });
+          return best;
+        });
+      },
       customerById: function (cid) {
-        return memo('customerById', cid, function () {
+        return memoStable('customerById', cid, function () {
           return (source.customers || []).find(function (row) {
             return row && row.id === cid;
           }) || null;
         });
       },
       productById: function (pid) {
-        return memo('productById', pid, function () {
+        return memoStable('productById', pid, function () {
           return (source.products || []).find(function (row) {
             return row && row.id === pid;
           }) || null;
@@ -80,7 +163,7 @@ var RECEIVABLE_ATTENTION_DEFAULTS = {
         var memoKey = amountFloor + '|' + daysFloor;
 
         return memo('receivableAttention', memoKey, function () {
-          var out = { count: 0, totalBalance: 0, rows: [], byCustomerId: {} };
+          var out = { count: 0, totalBalance: 0, rows: [], byCustomerId: {}, legacyByCustomerId: {}, promisedByCustomerId: {} };
           var customers = Array.isArray(source.customers) ? source.customers : [];
 
           for (var i = 0; i < customers.length; i++) {
@@ -93,70 +176,84 @@ var RECEIVABLE_ATTENTION_DEFAULTS = {
                 ? customerTotals(c.id, ctx)
                 : null;
             } catch (e) { t = null; }
-            if (!t || !(t.balance >= amountFloor)) continue;
+            if (!t || !(t.balance > 0)) continue;
 
-            var today = (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0, 10);
-            var invoices = (ctx.customerInvoices(c.id) || []).filter(function (inv) { return inv && inv.date; })
-              .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
-            var latestInv = invoices[0] || null;
-            var pays = (ctx.customerPayments(c.id) || []).filter(function (pay) {
-              return pay && pay.date && ['cash', 'card', 'transfer'].indexOf(pay.method) !== -1;
-            }).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
-            var checks = (ctx.customerChecks(c.id) || []).filter(function (ch) { return ch && ch.status === 'cleared' && (ch.dueDate || ch.date); })
-              .sort(function (a, b) { return String(b.dueDate || b.date).localeCompare(String(a.dueDate || a.date)); });
-            var latestPayment = pays[0] || null;
-            var latestClearedCheck = checks[0] || null;
-            var paidDate = latestPayment ? String(latestPayment.date) : null;
-            if (latestClearedCheck) {
-              var clearedDate = String(latestClearedCheck.dueDate || latestClearedCheck.date);
-              if (!paidDate || clearedDate > paidDate) paidDate = clearedDate;
+            // ---- Payment follow-up (single logic for dashboard + customer page) ----
+            // The follow-up period belongs to the LATEST invoice:
+            //   start  = invoice.dueDate (if the seller set one) else invoice.date
+            //   grace  = 0 days when dueDate is set (appears ON the chosen date),
+            //            daysFloor (10) days when only the invoice date is known
+            //   amount = what is still unpaid on THAT invoice only (FIFO remainder, capped by the balance)
+            // Debt left on earlier invoices / opening balance is kept, shown separately as
+            // legacyBalance, and never changes the count or amount of the new period.
+            var cycle = null;
+            try { cycle = _paymentCycle(c.id, ctx, t); } catch (eCy) { cycle = null; }
+            if (cycle) {
+              if (cycle.legacyBalance > 0) out.legacyByCustomerId[c.id] = { amount: cycle.legacyBalance, oldestDate: cycle.legacyOldestDate };
+              if (!cycle.invoice || !(cycle.remaining >= amountFloor)) continue;
+              var startDate = cycle.dueDate || cycle.invoice.date;
+              var graceDays = cycle.dueDate ? 0 : daysFloor;
+              var dsc = analysisDaysAgo(startDate, ctx);
+              if (dsc == null || !isFinite(dsc) || dsc < graceDays) continue;   // not due yet => no follow-up
+              var rowC = {
+                customerId: c.id, name: c.name || '', balance: cycle.remaining,
+                refDate: startDate, refKind: cycle.dueDate ? 'invoice_due' : 'invoice_date',
+                daysSince: Math.round(dsc), invoiceId: cycle.invoice.id,
+                legacyBalance: cycle.legacyBalance || 0, totalBalance: t.balance
+              };
+              // Active payment promise => follow-up belongs to the promise (snoozed until it is resolved).
+              var promisedC = ctx.activePromise(c.id);
+              if (promisedC && !c.oneOff) { out.promisedByCustomerId[c.id] = promisedC; continue; }
+              out.rows.push(rowC);
+              out.byCustomerId[c.id] = rowC;
+              continue;
             }
 
-            var refDate = null, refKind = 'payment', days = null, age = null;
-            var paymentAfterInvoice = !!(latestPayment && (!latestInv || String(latestPayment.date) >= String(latestInv.date)));
-            var explicitFollowUp = paymentAfterInvoice && latestPayment && latestPayment.followUpDate
-              ? String(latestPayment.followUpDate).slice(0, 10) : null;
+            // ---- fallback (allocation unavailable): previous behaviour ----
+            if (!(t.balance >= amountFloor)) continue;
+            var lastDate = null;
+            var refKind = 'payment';
 
-            // A seller-selected follow-up date supersedes the old payment cycle.
-            // It becomes actionable only on/after that date; no duplicate earlier reminder.
-            if (explicitFollowUp && /^\d{4}-\d{2}-\d{2}$/.test(explicitFollowUp)) {
-              age = (typeof daysAgo === 'function') ? daysAgo(explicitFollowUp) : null;
-              if (age == null || !isFinite(age) || age < 0) continue;
-              refDate = explicitFollowUp; refKind = 'scheduled_followup'; days = Math.round(age);
-            } else if (latestInv && (!paidDate || String(latestInv.date) >= paidDate)) {
-              // New invoice resets the follow-up cycle. Respect an explicit dueDate;
-              // otherwise apply a 10-day grace from invoice date.
-              if (latestInv.dueDate && /^\d{4}-\d{2}-\d{2}$/.test(String(latestInv.dueDate).slice(0, 10))) {
-                refDate = String(latestInv.dueDate).slice(0, 10); refKind = 'invoice_due';
-                age = (typeof daysAgo === 'function') ? daysAgo(refDate) : null;
-                if (age == null || !isFinite(age) || age < 0) continue;
-                days = Math.round(age);
-              } else {
-                refDate = String(latestInv.date).slice(0, 10); refKind = 'no_payment_history';
-                age = (typeof daysAgo === 'function') ? daysAgo(refDate) : null;
-                if (age == null || !isFinite(age) || age < daysFloor) continue;
-                days = Math.round(age);
+            var pays = ctx.customerPayments(c.id) || [];
+            for (var p = 0; p < pays.length; p++) {
+              var pay = pays[p];
+              if (!pay || !pay.date) continue;
+              if (['cash', 'card', 'transfer'].indexOf(pay.method) === -1) continue;
+              if (!lastDate || String(pay.date) > String(lastDate)) lastDate = String(pay.date);
+            }
+
+            var chks = ctx.customerChecks(c.id) || [];
+            for (var k = 0; k < chks.length; k++) {
+              var ch = chks[k];
+              if (!ch || ch.status !== 'cleared') continue;
+              var d = ch.dueDate || ch.date;
+              if (!d) continue;
+              if (!lastDate || String(d) > String(lastDate)) lastDate = String(d);
+            }
+
+            if (!lastDate) {
+              refKind = 'no_payment_history';
+              var invs = ctx.customerInvoices(c.id) || [];
+              for (var v = 0; v < invs.length; v++) {
+                var inv = invs[v];
+                if (!inv || !inv.date) continue;
+                if (!lastDate || String(inv.date) > String(lastDate)) lastDate = String(inv.date);
               }
-            } else {
-              // After a payment (or with no newer invoice), allow 10 days unless
-              // the seller chose an explicit follow-up date above.
-              var anchor = paidDate || (latestInv && String(latestInv.date));
-              if (!anchor) continue;
-              age = (typeof daysAgo === 'function') ? daysAgo(anchor) : null;
-              if (age == null || !isFinite(age) || age < daysFloor) continue;
-              refDate = anchor; refKind = latestPayment ? 'payment' : 'no_payment_history'; days = Math.round(age);
             }
-            if (days == null || !isFinite(days)) continue;
+            if (!lastDate) continue;
 
+            var days = analysisDaysAgo(lastDate, ctx);
+            if (days == null || !isFinite(days) || days < daysFloor) continue;
+
+            var promised = ctx.activePromise(c.id);
+            if (promised && !c.oneOff) { out.promisedByCustomerId[c.id] = promised; continue; }
             var row = {
               customerId: c.id,
               name: c.name || '—',
               balance: t.balance,
-              refDate: refDate,
+              refDate: lastDate,
               refKind: refKind,
-              daysSince: Math.round(days),
-              dueDate: refDate,
-              followUpDate: refKind === 'scheduled_followup' ? refDate : null
+              daysSince: Math.round(days)
             };
             out.rows.push(row);
             out.byCustomerId[c.id] = row;
@@ -175,6 +272,34 @@ var RECEIVABLE_ATTENTION_DEFAULTS = {
     };
 
     return ctx;
+  }
+
+  // Payment cycle of a customer = latest invoice + its own unpaid remainder; everything older is "legacy".
+  function _paymentCycle(cid, ctx, totals) {
+    if (typeof customerFifoAllocation !== 'function') return null;
+    var invs = (ctx.customerInvoices(cid) || []).filter(function (i) { return i && i.date; });
+    var alloc = customerFifoAllocation(cid);
+    if (!alloc || !alloc.invRemain) return null;
+    var latest = null;
+    for (var i = 0; i < invs.length; i++) {
+      var inv = invs[i];
+      if (!latest || String(inv.date) > String(latest.date) ||
+          (String(inv.date) === String(latest.date) && (Number(inv.number) || 0) > (Number(latest.number) || 0))) latest = inv;
+    }
+    var balance = totals && totals.balance > 0 ? totals.balance : 0;
+    var rem = latest ? Math.max(0, Number(alloc.invRemain[latest.id]) || 0) : 0;
+    rem = Math.min(rem, balance);                       // returns / credits can settle more than the FIFO sees
+    var legacy = 0, oldest = null;
+    for (var j = 0; j < invs.length; j++) {
+      if (latest && invs[j].id === latest.id) continue;
+      var r = Math.max(0, Number(alloc.invRemain[invs[j].id]) || 0);
+      if (r > 0.5) { legacy += r; if (!oldest || String(invs[j].date) < String(oldest)) oldest = String(invs[j].date); }
+    }
+    var opening = Math.max(0, Number(alloc.openingRemaining) || 0);
+    if (opening > 0.5) legacy += opening;
+    legacy = Math.min(legacy, Math.max(0, balance - rem));   // never show more legacy than the real balance
+    var due = (latest && typeof latest.dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(latest.dueDate)) ? latest.dueDate : null;
+    return { invoice: latest, remaining: rem, dueDate: due, legacyBalance: legacy, legacyOldestDate: oldest };
   }
 
   global.createComputationContext = createComputationContext;

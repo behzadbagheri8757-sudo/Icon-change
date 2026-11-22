@@ -96,7 +96,7 @@ function ensureBottomNavDOM(){
     const bar = document.createElement('nav');
     bar.id = 'bottom-nav';
     bar.className = 'bottom-nav';
-    bar.setAttribute('aria-label', 'منوی پایین');
+    bar.setAttribute('aria-label', 'ناوبری اصلی');
     document.body.appendChild(bar);
   }
   if(!document.getElementById('more-sheet-root')){
@@ -104,7 +104,7 @@ function ensureBottomNavDOM(){
     root.id = 'more-sheet-root';
     root.innerHTML = `
       <div class="more-overlay" id="more-overlay" hidden></div>
-      <div class="more-sheet" id="more-sheet" hidden role="dialog" aria-modal="true" aria-label="منوی بیشتر">
+      <div class="more-sheet" id="more-sheet" hidden role="dialog" aria-modal="true" aria-label="منوی بیشتر" tabindex="-1">
         <div class="more-sheet-handle"></div>
         <div class="more-sheet-title">بیشتر</div>
         <div class="more-sheet-list" id="more-sheet-list"></div>
@@ -907,7 +907,7 @@ function renderBottomNav(activeId){
     if (spa && t.spaPath) href = '#' + t.spaPath;
     const ariaCurrent = active ? ' aria-current="page"' : '';
     return `<a class="${cls}" href="${href}" data-spa-path="${t.spaPath || ''}"${ariaCurrent}>
-      <span class="bn-ico">${ico}</span>
+      <span class="bn-ico" aria-hidden="true">${ico}</span>
       <span class="bn-label">${t.label}</span>
     </a>`;
   }).join('');
@@ -963,7 +963,7 @@ function fillMoreSheetList(activeId){
     if (spa && t.spaPath) href = '#' + t.spaPath;
     const ico = navIcon(t.iconKey, isActive);
     return `<a class="more-sheet-item${isActive ? ' active' : ''}" href="${href}" data-spa-path="${t.spaPath || ''}">
-      <span class="more-sheet-item-ico">${ico}</span>
+      <span class="more-sheet-item-ico" aria-hidden="true">${ico}</span>
       <span class="more-sheet-item-label">${t.label}</span>
       <svg class="more-sheet-item-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
     </a>`;
@@ -989,6 +989,19 @@ function openMoreSheet(activeId){
   const overlay = document.getElementById('more-overlay');
   const sheet = document.getElementById('more-sheet');
   if(!overlay || !sheet) return;
+  if(!sheet.classList.contains('show')) sheet.__returnFocus = document.activeElement;
+  if(sheet.__keyHandler) document.removeEventListener('keydown', sheet.__keyHandler);
+  sheet.__keyHandler = function(e){
+    if(sheet.hidden || !sheet.classList.contains('show')) return;
+    if(e.key === 'Escape'){ e.preventDefault(); closeMoreSheet(); return; }
+    if(e.key !== 'Tab') return;
+    const items = Array.from(sheet.querySelectorAll('a[href],button:not([disabled])')).filter(function(el){ return el.getClientRects().length; });
+    if(!items.length){ e.preventDefault(); sheet.focus(); return; }
+    const first = items[0], last = items[items.length-1];
+    if(e.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))){ e.preventDefault(); last.focus(); }
+    else if(!e.shiftKey && (document.activeElement === last || !sheet.contains(document.activeElement))){ e.preventDefault(); first.focus(); }
+  };
+  document.addEventListener('keydown', sheet.__keyHandler);
   overlay.__closeFn = closeMoreSheet;
   // Cancel any pending hide-after-transition timer from a just-closed sheet —
   // otherwise a rapid close→reopen (tap close, immediately tap "بیشتر" again)
@@ -1001,6 +1014,8 @@ function openMoreSheet(activeId){
   requestAnimationFrame(() => {
     overlay.classList.add('show');
     sheet.classList.add('show');
+    const first = sheet.querySelector('.more-sheet-item, .more-sheet-close');
+    if(first) first.focus();
   });
   document.body.classList.add('more-open');
   try{ window.__scrollLock && window.__scrollLock.lock(); }catch(_e){}
@@ -1010,7 +1025,10 @@ function closeMoreSheet(){
   const overlay = document.getElementById('more-overlay');
   const sheet = document.getElementById('more-sheet');
   if(overlay){ overlay.classList.remove('show'); }
-  if(sheet){ sheet.classList.remove('show'); }
+  if(sheet){
+    sheet.classList.remove('show');
+    if(sheet.__keyHandler){ document.removeEventListener('keydown', sheet.__keyHandler); sheet.__keyHandler = null; }
+  }
   document.body.classList.remove('more-open');
   try{ window.__scrollLock && window.__scrollLock.unlock(); }catch(_e){}
   if(_moreSheetHideTimer){ clearTimeout(_moreSheetHideTimer); }
@@ -1018,7 +1036,15 @@ function closeMoreSheet(){
     _moreSheetHideTimer = null;
     if(overlay) overlay.hidden = true;
     if(sheet) sheet.hidden = true;
+    if(sheet && sheet.__returnFocus && sheet.__returnFocus.isConnected){ try{ sheet.__returnFocus.focus({preventScroll:true}); }catch(_e){} }
+    if(sheet) sheet.__returnFocus = null;
   }, 280);
+}
+
+/* True when the hash is a dashboard sub-page, e.g. #/dashboard?section=finance. */
+function isDashboardSectionHash(){
+  const h = String(location.hash || '');
+  return h.indexOf('#/dashboard') === 0 && /[?&]section=/.test(h);
 }
 
 function isBackRoute(path){
@@ -1028,9 +1054,25 @@ function isBackRoute(path){
 function routeBackTarget(path, params){
   params = params || {};
   switch(path){
-    case '/customer':
+    case '/customer': {
+      /* Push sub-page (section=…): back returns to the customer detail. */
+      if(params.section) return {path:'/customer', params:{id:String(params.id)}};
+      /* Opened from an invoice (fromInv): Back returns to that invoice, or to the
+         invoice list if it no longer exists. Otherwise the existing behaviour. */
+      if(params.fromInv != null && params.fromInv !== ''){
+        try{
+          const invs = (typeof data !== 'undefined' && Array.isArray(data.invoices)) ? data.invoices : [];
+          const exists = invs.some(function(x){ return String(x.id) === String(params.fromInv); });
+          return exists ? {path:'/invoice', params:{id:String(params.fromInv)}} : {path:'/invoices'};
+        }catch(_e){ return {path:'/invoices'}; }
+      }
       return {path:'/customers'};
+    }
     case '/invoice': {
+      /* Opened from a customer's invoices push list: return to that list. */
+      if(params.fromCustomer && ['invoices','payments','checks'].indexOf(params.fromSection) !== -1){
+        return {path:'/customer', params:{id:String(params.fromCustomer), section:params.fromSection}};
+      }
       /* If the invoice belongs to a customer, return to that customer rather
          than blindly returning to the invoice list. Otherwise use the list. */
       try{
@@ -1052,6 +1094,12 @@ function routeBackTarget(path, params){
     case '/locations':
       return {path:'/settings'};
     case '/watch':
+      /* Opened from a customer's watch list: return to that list, not the global one. */
+      if(params.fromCustomer){
+        return {path:'/customer', params: params.fromSection === 'watches'
+          ? {id:String(params.fromCustomer), section:'watches'}
+          : {id:String(params.fromCustomer)}};
+      }
       return {path:'/watches'};
     default:
       return {path:'/dashboard'};
@@ -1063,7 +1111,8 @@ function goAppBack(e){
   try{
     const cur = (typeof AppRouter !== 'undefined' && AppRouter.getCurrent) ? AppRouter.getCurrent() : null;
     const path = cur && cur.path ? cur.path : '/dashboard';
-    if(!isBackRoute(path)) return;
+    const dashSub = path === '/dashboard' && isDashboardSectionHash();
+    if(!isBackRoute(path) && !dashSub) return;
     const target = routeBackTarget(path, cur.params || {});
     if(typeof AppRouter !== 'undefined' && AppRouter.navigateBack){
       AppRouter.navigateBack(target.path, target.params || null);
@@ -1092,6 +1141,7 @@ function setHeaderTitle(text, opts){
   // back-navigation) instead of waiting for the next scroll event, so a
   // page opened already-scrolled doesn't flash a large title first.
   updateHeaderCondensedState();
+  ensureHeaderAddButton();
 }
 
 /* Continuous scroll-linked collapse (fixes the earlier snap/lag): progress
@@ -1156,6 +1206,39 @@ function ensureHeaderDate(){
   }
 }
 
+/* Header «+» (trailing edge). Mirrors the legacy #fab: visibility follows
+   fab.style.display, and a click calls the view's fab.onclick, so the
+   existing view handlers keep working unchanged. */
+function ensureHeaderAddButton(){
+  const header = document.querySelector('header');
+  const fab = document.getElementById('fab');
+  if(!header || !fab) return;
+  let btn = header.querySelector('.hdr-add');
+  if(!btn){
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'hdr-btn hdr-add';
+    btn.setAttribute('aria-label', 'افزودن');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+    btn.addEventListener('click', function(){
+      const f = document.getElementById('fab');
+      if(f && typeof f.onclick === 'function') f.onclick.call(f);
+    });
+    header.appendChild(btn);
+  }
+  const d0 = fab.style.display;
+  btn.hidden = !(d0 && d0 !== 'none');
+  if(!ensureHeaderAddButton._observed){
+    ensureHeaderAddButton._observed = true;
+    new MutationObserver(function(){
+      const b = document.querySelector('header .hdr-add');
+      if(!b) return;
+      const d = fab.style.display;
+      b.hidden = !(d && d !== 'none');
+    }).observe(fab, { attributes: true, attributeFilter: ['style'] });
+  }
+}
+
 function ensureAppBackButton(activeId, routePath){
   const header = document.querySelector('header');
   if(!header) return;
@@ -1184,7 +1267,9 @@ function ensureAppBackButton(activeId, routePath){
   // rendered on any route. activeId is the one signal the router actually
   // updates per navigation, so it's the only correct check here.
   const isDash = !activeId || activeId === 'dashboard';
-  const showBack = !isDash && isBackRoute(routePath || '');
+  // Dashboard sub-pages (#/dashboard?section=…) are pushed from the home screen and show a back button.
+  const dashSection = isDashboardSectionHash();
+  const showBack = (!isDash && isBackRoute(routePath || '')) || (dashSection && routePath === '/dashboard');
 
   if(!showBack){
     if(existing) existing.remove();
@@ -1198,9 +1283,9 @@ function ensureAppBackButton(activeId, routePath){
 
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'app-back';
+  btn.className = 'app-back hdr-btn';
   btn.setAttribute('aria-label', 'بازگشت');
-  btn.innerHTML = '<span class="app-back-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"><path d="m14.5 5-7 7 7 7"/></svg></span><span class="app-back-txt">بازگشت</span>';
+  btn.innerHTML = '<span class="app-back-ico" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"><path d="' + (document.documentElement.dir === 'rtl' ? 'm9.5 5 7 7-7 7' : 'm14.5 5-7 7 7 7') + '"/></svg></span><span class="app-back-txt">بازگشت</span>';
   btn.addEventListener('click', goAppBack);
   header.insertBefore(btn, header.firstChild);
   header.classList.add('has-back');
@@ -1341,6 +1426,8 @@ function waitForCrmDataLoad() {
         if (retrying) return;
         retrying = true;
         btn.disabled = true;
+        btn.classList.add('is-loading');
+        btn.setAttribute('aria-busy', 'true');
         btn.textContent = 'در حال تلاش…';
         Promise.resolve()
           .then(function () {
@@ -1371,7 +1458,7 @@ async function bootSpaShell() {
       if (pinConfigured) {
         if (!window.pinLock || typeof window.pinLock.ensureUnlocked !== 'function') {
           document.body.innerHTML =
-            '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">قفل PIN فعال است اما ماژول قفل بارگذاری نشد. صفحه را دوباره باز کنید.</div>';
+            '<div style="padding:24px;text-align:center;font-family:inherit;direction:rtl;">قفل PIN فعال است اما ماژول قفل بارگذاری نشد. صفحه را دوباره باز کنید.</div>';
           return;
         }
         await window.pinLock.ensureUnlocked();
@@ -1381,7 +1468,7 @@ async function bootSpaShell() {
     } catch (pinErr) {
       console.error('pin lock gate failed', pinErr);
       document.body.innerHTML =
-        '<div style="padding:24px;text-align:center;font-family:sans-serif;direction:rtl;">خطا در قفل PIN. صفحه را دوباره باز کنید.</div>';
+        '<div style="padding:24px;text-align:center;font-family:inherit;direction:rtl;">خطا در قفل PIN. صفحه را دوباره باز کنید.</div>';
       return;
     }
 
@@ -1396,6 +1483,12 @@ async function bootSpaShell() {
       await waitForCrmDataLoad();
     }
 
+    // ACK: one-time, idempotent, additive migration of legacy feedback / watch / visit decisions.
+    // Never blocks boot; fails open (dormant ACK layer == pre-ACK behaviour).
+    try {
+      if (typeof migrateLegacyAcknowledgments === 'function') migrateLegacyAcknowledgments();
+    } catch (ackBootErr) { console.warn('ACK migration skipped', ackBootErr); }
+
     if (typeof loadProspectData === 'function') {
       try {
         await loadProspectData();
@@ -1403,9 +1496,6 @@ async function bootSpaShell() {
         console.warn('loadProspectData failed (CRM continues)', pe);
       }
     }
-
-    var appSplash = document.getElementById('app-splash');
-    if (appSplash) appSplash.classList.add('is-hidden');
 
     renderSharedNav('dashboard');
     renderBottomNav('dashboard');

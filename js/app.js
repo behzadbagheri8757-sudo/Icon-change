@@ -51,9 +51,6 @@ async function withSubmitGuard(btn, fn){
 // ---------- render (SPA refresh trigger; legacy MPA fallback removed —
 // isSpaShell() is always true in this single-shell app) ----------
 function render(){
-  if (!window.__sellerAckMigrationDone && typeof migrateSellerAcksFromLegacy === 'function' && typeof data !== 'undefined' && data && Array.isArray(data.customers)) {
-    try { migrateSellerAcksFromLegacy(); window.__sellerAckMigrationDone = true; } catch (eAckMigration) { console.warn('Seller ACK migration failed:', eAckMigration); }
-  }
   if (typeof isSpaShell === 'function' && isSpaShell() && typeof ViewHost !== 'undefined' && ViewHost.refreshCurrent) {
     ViewHost.refreshCurrent();
   }
@@ -97,8 +94,8 @@ function invoiceDocHtml(inv, cust, forPrint){
         ${cust&&cust.phone?`<div>تماس: ${esc(cust.phone)}</div>`:''}
         ${cust&&cust.address?`<div>آدرس: ${esc(cust.address)}</div>`:''}
       </div>
-      <table class="inv-table">
-        <thead><tr><th>ردیف</th><th>شرح کالا</th><th>تعداد</th><th>قیمت واحد</th><th>مبلغ</th></tr></thead>
+      <table class="inv-table" aria-label="اقلام فاکتور">
+        <thead><tr><th scope="col">ردیف</th><th scope="col">شرح کالا</th><th scope="col">تعداد</th><th scope="col">قیمت واحد</th><th scope="col">مبلغ</th></tr></thead>
         <tbody>${itemRows}</tbody>
       </table>
       <table class="inv-totals">
@@ -312,8 +309,8 @@ function statementDocHtml(c, forPrint){
         ${c.phone?`<div>تماس: ${esc(c.phone)}</div>`:''}
         ${c.address?`<div>آدرس: ${esc(c.address)}</div>`:''}
       </div>
-      <table class="inv-table">
-        <thead><tr><th>تاریخ</th><th>شرح</th><th>بدهکار</th><th>بستانکار</th><th>مانده</th></tr></thead>
+      <table class="inv-table" aria-label="گردش حساب مشتری">
+        <thead><tr><th scope="col">تاریخ</th><th scope="col">شرح</th><th scope="col">بدهکار</th><th scope="col">بستانکار</th><th scope="col">مانده</th></tr></thead>
         <tbody>${rowsHtml || `<tr><td colspan="5" style="text-align:center;">تراکنشی ثبت نشده</td></tr>`}</tbody>
       </table>
       <table class="inv-totals">
@@ -673,6 +670,7 @@ function openAddCustomer(editId){
     </div>
     <div class="field"><label>آدرس (اختیاری)</label><input id="f-address" value="${c?esc(c.address||''):''}"></div>
     <div class="field"><label>یادداشت (اختیاری)</label><textarea id="f-note">${c?esc(c.note||''):''}</textarea></div>
+    <label class="pp-tx-toggle" for="f-oneoff"><input type="checkbox" id="f-oneoff" ${c&&c.oneOff?'checked':''}><span>مشتری یک‌بار‌مصرف (متفرقه)<small>فروش‌های پراکندهٔ آدم‌های مختلف زیر یک حساب؛ پیشنهاد و هشدار رفتاری ندارد و روی فاکتور «نام خریدار» می‌گیرد</small></span></label>
     <div class="field">
       <label>مانده حساب اولیه (تومان)${c?' — برای اصلاح مانده بعد از شروع کار با برنامه':''}</label>
       <input id="f-opening" type="text" inputmode="decimal" value="${c&&c.openingBalance?c.openingBalance:''}">
@@ -691,9 +689,10 @@ function openAddCustomer(editId){
       const address = document.getElementById('f-address').value.trim();
       const note = document.getElementById('f-note').value.trim();
       const openingBalance = numVal(document.getElementById('f-opening'));
+      const oneOff = !!document.getElementById('f-oneoff').checked;
       const liveCustomer = customerId ? data.customers.find(x=>x.id===customerId) : null;
-      if(liveCustomer){ liveCustomer.ownerName=ownerName; liveCustomer.name=name; liveCustomer.phone=phone; liveCustomer.region=region; liveCustomer.route=route; liveCustomer.address=address; liveCustomer.note=note; liveCustomer.openingBalance=openingBalance; }
-      else{ data.customers.push({id:uid(), name, ownerName, phone, region, route, address, note, openingBalance, visits:[], active:true}); }
+      if(liveCustomer){ liveCustomer.ownerName=ownerName; liveCustomer.name=name; liveCustomer.phone=phone; liveCustomer.region=region; liveCustomer.route=route; liveCustomer.address=address; liveCustomer.oneOff=oneOff; liveCustomer.note=note; liveCustomer.openingBalance=openingBalance; }
+      else{ data.customers.push({id:uid(), name, ownerName, phone, region, route, address, note, openingBalance, visits:[], active:true, oneOff}); }
       await saveData(); closeModal();
       if(liveCustomer) openCustomerDetail(liveCustomer.id);
       else render();
@@ -745,13 +744,23 @@ const TX_METHOD_CHIPS = [
   { value:'discount', label:'تخفیف' },
   { value:'return', label:'برگشت از فروش' },
 ];
-function openAddTransaction(cid){
+function openAddTransaction(cid, opts){
+  opts = opts || {};
+  // وعدهٔ پرداخت: اگر از «دریافت شد» آمده باشیم promiseId داریم؛ وگرنه اگر مشتری وعدهٔ فعال دارد،
+  // یک سوییچ (پیش‌فرض روشن) می‌پرسد این پرداخت همان وعده را انجام می‌دهد یا نه.
+  // بدون وعده، رفتار این تابع دقیقاً مثل قبل است.
+  const PP = (typeof PaymentPromises !== 'undefined') ? PaymentPromises : null;
+  const fromPromise = (PP && opts.promiseId) ? PP.byId(opts.promiseId) : null;
+  const promiseTarget = (fromPromise && fromPromise.status==='pending' && fromPromise.customerId===cid)
+    ? fromPromise : (PP && !opts.promiseId && !isOneOffCustomer(data.customers.find(x=>x.id===cid)) ? PP.active(cid) : null);
+  const promiseForced = !!(fromPromise && promiseTarget===fromPromise);
+  let linkPromise = true;
+  const PROMISE_METHODS = ['cash','card','transfer'];
   // وضعیت فرم بین رندرهای مجدد شیت نگه داشته می‌شود.
   let method = '';
-  let amountStr = '';
+  let amountStr = (promiseForced && promiseTarget.amount>0) ? String(promiseTarget.amount) : '';
   let dateStr = todayISO();
   let noteStr = '';
-  let followUpDateStr = '';
   let selectedInvoiceId = '';
   let returnRows = [];
 
@@ -843,18 +852,25 @@ function openAddTransaction(cid){
     `;
   }
 
+  function promiseRowHtml(){
+    if(!promiseTarget || !PROMISE_METHODS.includes(method)) return '';
+    const label = (PP.amountLabel(promiseTarget)) + ' · ' + faDate(promiseTarget.promiseDate);
+    if(promiseForced) return `<div class="pp-tx-note">پرداخت وعدهٔ ثبت‌شده: ${esc(label)}</div>`;
+    return `<label class="pp-tx-toggle"><input type="checkbox" id="f-link-promise" ${linkPromise?'checked':''}><span>این پرداخت، وعدهٔ ثبت‌شده را انجام می‌دهد<small>${esc(label)}</small></span></label>`;
+  }
+
   function renderSheet(){
     openSheet(`
       <h3>ثبت تراکنش</h3>
       <div class="q-block">
         <div class="q-title">روش پرداخت</div>
-        <div class="chip-wrap">${TX_METHOD_CHIPS.map(o=>`<button type="button" class="chip-opt${method===o.value?' selected':''}" data-tx-method="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div>
+        <div class="chip-wrap">${TX_METHOD_CHIPS.filter(o=>!promiseForced || PROMISE_METHODS.includes(o.value)).map(o=>`<button type="button" class="chip-opt${method===o.value?' selected':''}" data-tx-method="${esc(o.value)}">${esc(o.label)}</button>`).join('')}</div>
       </div>
       ${method ? `
         <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('f-date', dateStr)}</div>
-        <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal" value="${amountStr}"></div>
+        <div class="field"><label>مبلغ (تومان)</label><input id="f-amount" type="text" inputmode="decimal" value="${amountStr}" ${(method==='return' && returnRows.length)?'readonly':''}></div>
         <div class="field"><label>توضیح (اختیاری)</label><input id="f-note" value="${esc(noteStr)}"></div>
-        ${['cash','card','transfer'].includes(method) ? `<div class="field"><label>تاریخ پیگیری بعدی (اختیاری)</label>${shamsiDateInputHTML('f-followup-date', followUpDateStr || '')}<div class="sub">اگر تاریخ تعیین کنی، پیگیری قبلی با این تاریخ جایگزین می‌شود.</div></div>` : ''}
+        ${promiseRowHtml()}
         ${returnItemsSectionHtml()}
         <div class="btn-row"><button class="btn" id="save-tx">ثبت</button></div>
       ` : ''}
@@ -874,10 +890,17 @@ function openAddTransaction(cid){
     });
     if(!method) return;
     document.getElementById('f-date').addEventListener('input', e=>{ dateStr = e.target.value; });
-    document.getElementById('f-amount').addEventListener('input', e=>{ amountStr = e.target.value; });
+    if(method==='return'){
+      // Derived from the lines whenever they exist; cleared (and editable) when the last line is removed.
+      const derived = returnRows.reduce((sum, r)=> sum + (Number(r.qty)||0)*(Number(r.price)||0), 0);
+      amountStr = returnRows.length ? String(derived) : '';
+      const amountEl = document.getElementById('f-amount');
+      if(amountEl){ amountEl.value = amountStr; amountEl.readOnly = returnRows.length > 0; }
+    }
+    document.getElementById('f-amount').addEventListener('input', e=>{ if(method==='return' && returnRows.length) return; amountStr = e.target.value; });
     document.getElementById('f-note').addEventListener('input', e=>{ noteStr = e.target.value; });
-    const followUpEl = document.getElementById('f-followup-date');
-    if (followUpEl) followUpEl.addEventListener('input', e=>{ followUpDateStr = e.target.value || ''; });
+    const linkBox = document.getElementById('f-link-promise');
+    if(linkBox) linkBox.addEventListener('change', e=>{ linkPromise = !!e.target.checked; });
 
     const invoiceSelect = document.getElementById('f-return-invoice');
     if(invoiceSelect){
@@ -912,15 +935,25 @@ function openAddTransaction(cid){
       row.price = defaultReturnPrice(row.productId);
       renderSheet();
     }));
+    // Live amount: whenever a return line changes, the amount is recomputed from the lines right away.
+    const syncReturnAmount = ()=>{
+      if(method!=='return') return;
+      amountStr = returnRows.length ? String(returnRows.reduce((sum, r)=> sum + (Number(r.qty)||0)*(Number(r.price)||0), 0)) : '';
+      const amountEl = document.getElementById('f-amount');
+      if(amountEl){ amountEl.value = amountStr; amountEl.readOnly = returnRows.length > 0; }
+    };
     document.querySelectorAll('.ret-qty').forEach(el=>el.addEventListener('input', e=>{
       returnRows[e.target.dataset.ridx].qty = parseFloat(faToEnDigits(e.target.value))||0;
+      syncReturnAmount();
     }));
     document.querySelectorAll('.ret-price').forEach(el=>el.addEventListener('input', e=>{
       returnRows[e.target.dataset.ridx].price = parseFloat(faToEnDigits(e.target.value))||0;
+      syncReturnAmount();
     }));
     document.querySelectorAll('[id^="ret-del-"]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         returnRows.splice(parseInt(btn.dataset.ridx,10), 1);
+        if(method==='return' && !returnRows.length) amountStr = '';
         renderSheet();
       });
     });
@@ -931,6 +964,7 @@ function openAddTransaction(cid){
         const date = dateStr || todayISO();
         const note = (noteStr||'').trim();
         if(amount<=0){ showToast('مبلغ رو وارد کن'); throw new Error('validation'); }
+        if(date > todayISO()){ showToast('تاریخ تراکنش نمی‌تواند بعد از امروز باشد'); throw new Error('validation'); }
 
         let returnItems = [];
         let returnInvoiceId;
@@ -972,14 +1006,13 @@ function openAddTransaction(cid){
           }
 
           const expectedReturnAmount = returnItems.reduce((s,ri)=>s+(ri.qty*(ri.price||0)),0);
-          if(expectedReturnAmount>0 && Math.abs(expectedReturnAmount-amount)>1){
-            const proceedAmount = await appConfirm('⚠️ مبلغ واردشده با «مقدار × قیمت واحد» کالاهای برگشتی هم‌خوانی ندارد.\n\nمبلغ واردشده: '+toman(amount)+' تومان\nمبلغ منطقی طبق کالاها: '+toman(expectedReturnAmount)+' تومان\n\nمطمئنی می‌خوای همینطور ثبت کنی؟');
-            if(!proceedAmount) throw new Error('validation');
+          if(returnItems.length && Math.abs(expectedReturnAmount-amount)>0.5){
+            showToast('مبلغ برگشت باید برابر مجموع «مقدار × قیمت» کالاهای برگشتی باشد');
+            throw new Error('validation');
           }
         }
 
         const payment = {id:uid(), customerId:cid, date, amount, method, note, returnItems};
-        if (followUpDateStr && ['cash','card','transfer'].includes(method)) payment.followUpDate = followUpDateStr;
         if(returnInvoiceId) payment.invoiceId = returnInvoiceId;
         // بدون مقصد مشخص (بدون invoiceId) و از انواع قابل‌تخصیص به بدهی؟ همین الان،
         // در لحظهٔ ثبت، جایگاهش در بدهی مشتری مشخص و ذخیره می‌شود (نگاه کنید به
@@ -996,6 +1029,10 @@ function openAddTransaction(cid){
         const previousData = JSON.parse(JSON.stringify(data));
         try{
           data.payments.push(payment);
+          // وعده فقط همراه با پرداخت واقعی و در همین save به kept می‌رود (اتمیک با rollback بالا).
+          if(promiseTarget && PROMISE_METHODS.includes(method) && (promiseForced || linkPromise)){
+            PP.keep(data, promiseTarget.id, payment);
+          }
           if(method==='return' && returnItems.length){
             applyReturnStockEffects(returnItems, date, payment);
           }
@@ -1013,7 +1050,9 @@ function openAddTransaction(cid){
           }
         }
         closeModal();
-        openCustomerDetail(cid); showToast('ثبت شد');
+        // opts.stay: payment started from a list (dashboard «دریافت شد») → stay there for the next one.
+        if (opts.stay) render(); else openCustomerDetail(cid);
+        showToast('ثبت شد');
       });
     });
   }
@@ -1021,6 +1060,7 @@ function openAddTransaction(cid){
   renderSheet();
 }
 
+const EDITABLE_STANDALONE_METHODS = ['cash','card','transfer','discount'];
 function openEditStandalonePayment(cid, paymentId){
   const p = (data.payments||[]).find(x=>x.id===paymentId && x.customerId===cid);
   if(!p || p.invoiceId || p.method==='return' || !['cash','card','transfer','discount'].includes(p.method)) return;
@@ -1028,7 +1068,6 @@ function openEditStandalonePayment(cid, paymentId){
   let dateStr = p.date || todayISO();
   let amountStr = String(p.amount || '');
   let noteStr = p.note || '';
-  let followUpDateStr = p.followUpDate || '';
   openSheet(`
     <h3>ویرایش دریافت</h3>
     <div class="field"><label>نوع</label><select id="ep-method">
@@ -1040,37 +1079,53 @@ function openEditStandalonePayment(cid, paymentId){
     <div class="field"><label>تاریخ</label>${shamsiDateInputHTML('ep-date', dateStr)}</div>
     <div class="field"><label>مبلغ (تومان)</label><input id="ep-amount" type="text" inputmode="decimal" value="${esc(amountStr)}"></div>
     <div class="field"><label>توضیح (اختیاری)</label><input id="ep-note" value="${esc(noteStr)}"></div>
-    <div class="field"><label>تاریخ پیگیری بعدی (اختیاری)</label>${shamsiDateInputHTML('ep-followup-date', followUpDateStr || '')}</div>
+    <div id="ep-method-warn" class="ep-method-warn" role="alert" style="display:none;">تغییر بین «دریافت» و «تخفیف» روی سود گزارش‌شدهٔ مشتری اثر مستقیم می‌گذارد: تخفیف از سود کم می‌شود، دریافت نه.</div>
     <div class="btn-row"><button class="btn" id="ep-save">ذخیره</button><button class="btn danger secondary" id="ep-delete">حذف دریافت</button></div>
   `, {dirtyCheck:true});
-  document.getElementById('ep-method').addEventListener('change', e=>{ method=e.target.value; });
+  const originalWasDiscount = p.method === 'discount';
+  document.getElementById('ep-method').addEventListener('change', e=>{
+    method=e.target.value;
+    const warn=document.getElementById('ep-method-warn');
+    if(warn) warn.style.display = ((method==='discount') !== originalWasDiscount) ? '' : 'none';
+  });
   document.getElementById('ep-date').addEventListener('input', e=>{ dateStr=e.target.value; });
   document.getElementById('ep-amount').addEventListener('input', e=>{ amountStr=e.target.value; });
   document.getElementById('ep-note').addEventListener('input', e=>{ noteStr=e.target.value; });
-  const editFollowUpEl = document.getElementById('ep-followup-date');
-  if (editFollowUpEl) editFollowUpEl.addEventListener('input', e=>{ followUpDateStr=e.target.value || ''; });
   document.getElementById('ep-save').addEventListener('click', async e=>{
+    // Navigation happens only after withSubmitGuard has finished (window.__sheetSaveInFlight back to 0);
+    // doing it inside the guard is what made the route change get deferred.
+    let saved=false;
     await withSubmitGuard(e.currentTarget, async()=>{
       const amount=numVal(document.getElementById('ep-amount'));
       if(amount<=0){ showToast('مبلغ باید بیشتر از صفر باشد'); throw new Error('validation'); }
+      // Second check at save time: only the four independent methods may enter data.payments.
+      if(!EDITABLE_STANDALONE_METHODS.includes(method)){ showToast('نوع دریافت نامعتبر است'); throw new Error('validation'); }
       const previousData=JSON.parse(JSON.stringify(data));
       try{
         const livePayment = (data.payments||[]).find(x=>x.id===paymentId && x.customerId===cid);
         if(!livePayment) throw new Error('validation');
         livePayment.method=method; livePayment.date=dateStr||todayISO(); livePayment.amount=amount; livePayment.note=(noteStr||'').trim();
-        if (followUpDateStr) livePayment.followUpDate = followUpDateStr; else delete livePayment.followUpDate;
         // مبلغ/نوع این دریافت عوض شده — فقط تخصیص خودِ همین رکورد دوباره محاسبه می‌شود
         // (بدون دست‌زدن به debtAllocations بقیهٔ دریافت‌ها؛ excludeId یعنی تخصیص قبلیِ
         // خودش در محاسبهٔ «مصرف‌شده» حساب نشود).
         if(typeof computeDebtAllocationForAmount === 'function'
-          && ['cash','card','transfer','discount'].includes(livePayment.method)){
+          && EDITABLE_STANDALONE_METHODS.includes(livePayment.method)){
           livePayment.debtAllocations = computeDebtAllocationForAmount(cid, livePayment.amount, livePayment.id);
         }
         await saveData();
       }catch(err){ restoreDataInPlace(previousData); throw err; }
-      closeModal();
-      openCustomerDetail(cid); render(); showToast('دریافت ویرایش شد');
+      saved=true;
     });
+    if(!saved) return; // failed save: stay on this page, keep the sheet open
+    closeModal();
+    if(location.hash.indexOf('#/payments') === 0){
+      // Edited from the payments list → open this customer's detail.
+      openCustomerDetail(cid);
+    } else {
+      // Edited from the customer detail → one refresh of the current page.
+      render();
+    }
+    showToast('دریافت ویرایش شد');
   });
   document.getElementById('ep-delete').addEventListener('click', async e=>{
     await withSubmitGuard(e.currentTarget, async()=>{
@@ -1480,9 +1535,10 @@ window.BagheriPresent = (function () {
     if (d === 1) return 'دیروز';
     return n0(d) + ' روز پیش';
   }
-  function lastOfferMap(cid) {
+  function lastOfferMap(cid, customer) {
     var map = Object.create(null);
-    var c = (data.customers || []).find(function (x) { return x && x.id === cid; });
+    // optional `customer` lets callers that already hold the record skip a second lookup
+    var c = customer || (data.customers || []).find(function (x) { return x && x.id === cid; });
     if (!c || !Array.isArray(c.visits)) return map;
     c.visits.forEach(function (v) {
       if (!v || !Array.isArray(v.offeredProducts)) return;
@@ -1571,22 +1627,70 @@ window.BagheriPresent = (function () {
       return '<span class="bp-hint-line is-' + esc(l.tone || 'muted') + '">' + esc(l.t) + '</span>';
     }).join('');
   }
+  function productPurchaseCycle(cid, pid, precomputed) {
+    var buys = {};
+    var raw = [];
+    if (precomputed) {
+      buys = precomputed.buys || {};
+      raw = precomputed.metrics || [];
+    } else {
+      try { buys = lastPurchaseMap(cid) || {}; } catch (e) { buys = {}; }
+      try { if (typeof _extractSkuRawMetrics === 'function') raw = _extractSkuRawMetrics(cid) || []; } catch (e2) { raw = []; }
+    }
+    var skuLastDate = buys[pid] || null;   // this SKU's own history only — never the basis of a Family cycle
+    var metric = raw.find(function (m) { return m && (m.productId === pid || (Array.isArray(m.memberProductIds) && m.memberProductIds.indexOf(pid) >= 0)); }) || null;
+    // typicalCycle / purchaseCount / lastPurchaseDate all come from the SAME Family metric. If the metric has no
+    // valid date, daysSince stays null → state is unknown/insufficient (no mixing of Family cycle with SKU date).
+    var lastDate = metric ? (metric.lastPurchaseDate || null) : skuLastDate;
+    var count = metric ? Number(metric.purchaseCount) || 0 : 0;
+    var cycle = metric && Number.isFinite(Number(metric.typicalCycle)) && Number(metric.typicalCycle) > 0 ? Number(metric.typicalCycle) : null;
+    var daysSince = null;
+    if (lastDate && typeof _behaviorDaysDiff === 'function') {
+      var dd = _behaviorDaysDiff(lastDate, todayISO());
+      if (Number.isFinite(dd) && dd >= 0) daysSince = dd;
+    }
+    var stockOut = !!(metric && metric.stockOut);
+    var state = 'no_history';
+    var daysRemaining = null;
+    var daysOverdue = null;
+    if (count === 1) state = 'first_purchase';
+    else if (count === 2) state = 'insufficient';
+    else if (count >= 3 && cycle != null && daysSince != null) {
+      daysRemaining = cycle - daysSince;
+      daysOverdue = Math.max(0, daysSince - cycle);
+      if (daysSince === 0) state = 'today_purchase';
+      else if (stockOut) state = 'stock_out';
+      else if (daysRemaining > 0) state = 'due_soon';
+      else if (daysRemaining === 0) state = 'due_today';
+      else state = 'overdue';
+    } else if (stockOut && count >= 3) state = 'stock_out';
+    return { state: state, daysRemaining: daysRemaining, daysSinceLast: daysSince, typicalCycle: cycle, purchaseCount: count, lastPurchaseDate: lastDate, daysOverdue: daysOverdue, stockOut: stockOut,
+      // lastPurchaseDate above = basis of the cycle (Family when grouped). SKU date kept separately for SKU history display.
+      skuLastPurchaseDate: skuLastDate, familyId: metric ? metric.familyId : null,
+      familyLevel: !!(metric && Array.isArray(metric.memberProductIds) && metric.memberProductIds.length > 1),
+      representativeProductId: metric ? metric.productId : null };
+  }
 
   return {
     fa: fa, n0: n0, n1: n1, lvRank: lvRank, pname: pname, qtyText: qtyText,
     watchLabel: watchLabel, watchSentence: watchSentence, watchDetailLines: watchDetailLines,
     detailsHtml: detailsHtml, evidenceLines: evidenceLines, namesText: namesText,
     stockSentence: stockSentence, stockShort: stockShort, reasonLabel: reasonLabel,
-    relDays: relDays, productHints: productHints, hintHtml: hintHtml
+    relDays: relDays, productHints: productHints, hintHtml: hintHtml,
+    lastPurchaseMap: lastPurchaseMap, lastOfferMap: lastOfferMap, productPurchaseCycle: productPurchaseCycle
   };
 })();
 
 function openAddVisit(cid){
+  const KIND_CHIPS = [
+    { value: 'normal', label: 'ویزیت عادی' },
+    { value: 'checkin', label: 'سرکشی' },
+    { value: 'closed', label: 'فروشگاه بسته بود' },
+  ];
   const RESULT_CHIPS = [
     { value: VISIT_RESULTS[0], label: 'سفارش گرفته شد' },
     { value: VISIT_RESULTS[1], label: 'سفارش گرفته نشد' },
-    { value: VISIT_RESULTS[2], label: 'بسته بود' },
-    { value: VISIT_RESULTS[3], label: 'سرکشی' },
+    { value: VISIT_RESULTS[3], label: 'فقط سرکشی' },
   ];
   const REACTION_CHIPS = [
     { value: 'accepted', label: 'قبول کرد' },
@@ -1613,11 +1717,23 @@ function openAddVisit(cid){
   });
 
   const visitCustomer = (data.customers || []).find(function (x) { return x && x.id === cid; }) || null;
+  const visitCtx = typeof createComputationContext === 'function'
+    ? createComputationContext({ data: data })
+    : null;
+  const BP = window.BagheriPresent || null;
   let visitBehavior = {};
   try {
-    if (typeof customerBehavior === 'function') visitBehavior = customerBehavior(cid) || {};
+    if (typeof customerBehavior === 'function') visitBehavior = customerBehavior(cid, visitCtx) || {};
   } catch (eVisitContext) { visitBehavior = {}; }
-  const BP = window.BagheriPresent || null;
+  let visitSkuMetrics = [];
+  let visitLastPurchases = {};
+  try {
+    if (typeof _extractSkuRawMetrics === 'function') visitSkuMetrics = _extractSkuRawMetrics(cid, visitCtx) || [];
+  } catch (eVisitMetrics) { visitSkuMetrics = []; }
+  try {
+    if (BP && typeof BP.lastPurchaseMap === 'function') visitLastPurchases = BP.lastPurchaseMap(cid) || {};
+  } catch (eVisitPurchases) { visitLastPurchases = {}; }
+  const visitPurchasePrecomputed = { metrics: visitSkuMetrics, buys: visitLastPurchases };
   let visitWatches = [];
   let visitFollowUps = [];
   try {
@@ -1627,7 +1743,7 @@ function openAddVisit(cid){
   let visitStory = '';
   try {
     if (typeof buildCustomerStory === 'function') {
-      const st = buildCustomerStory(cid);
+      const st = buildCustomerStory(cid, visitCtx);
       visitStory = (st && st.summary) ? st.summary : '';
     }
   } catch (eVisitStory) { visitStory = ''; }
@@ -1694,7 +1810,7 @@ function openAddVisit(cid){
       '</div>';
   }
   const followUpReminderHtml = visitFollowUps.length
-    ? '<div class="visit-watch-followups"><div class="bp-pre-label">پیگیری‌های منتظر</div>' +
+    ? '<div class="visit-watch-followups"><div class="bp-pre-label">پیگیری‌های باز</div>' +
       visitFollowUps.slice(0, 2).map(function (o) {
         const sentence = BP ? BP.watchSentence(o) : (o.generatedReason || '');
         return '<div class="visit-watch-followup-item">' +
@@ -1722,9 +1838,35 @@ function openAddVisit(cid){
       (lastInvoiceText ? '<div class="visit-precontext-grid"><span>آخرین خرید: ' + esc(lastInvoiceText) + '</span></div>' : '') +
     '</div>';
   const visitHints = BP ? BP.productHints(cid) : null;
+  const visitPurchaseCycleMap = new Map();
+  try {
+    activeProducts.forEach(function (p) {
+      if (BP && typeof BP.productPurchaseCycle === 'function') visitPurchaseCycleMap.set(p.id, BP.productPurchaseCycle(cid, p.id, visitPurchasePrecomputed));
+    });
+  } catch (eVisitCycle) { /* purchase-cycle badges are non-critical presentation */ }
 
-  function chipBtn(group, value, label){
-    return '<button type="button" class="chip-opt" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
+  function purchaseCycleBadge(pid){
+    const m = visitPurchaseCycleMap.get(pid);
+    if (!m) return '';
+    let text = '', tone = 'muted';
+    if (m.stockOut) { text = 'موجودی تمام'; tone = 'muted'; }
+    else if (m.purchaseCount === 0) text = 'سابقه ندارد';
+    else if (m.purchaseCount === 1) { text = 'خرید اول' + (m.daysSinceLast != null ? ' · ' + BP.n0(m.daysSinceLast) + ' روز پیش' : ''); tone = 'primary'; }
+    else if (m.purchaseCount === 2) text = 'سابقهٔ کم';
+    else if (m.purchaseCount >= 3 && m.typicalCycle != null && m.daysSinceLast != null) {
+      if (m.daysSinceLast === 0) { text = 'امروز خرید'; tone = 'success'; }
+      else if (m.stockOut) { text = 'موجودی تمام'; tone = 'muted'; }
+      else if (m.daysRemaining >= 2) { text = BP.n0(m.daysRemaining) + ' روز مانده'; tone = 'primary'; }
+      else if (m.daysRemaining === 1) { text = 'فردا موعد'; tone = 'warning'; }
+      else if (m.daysRemaining === 0) { text = 'امروز موعد خرید'; tone = 'warning'; }
+      else { text = BP.n0(m.daysOverdue) + ' روز از موعد گذشته'; tone = m.daysOverdue > 3 ? 'danger' : 'warning'; }
+    }
+    if (!text) return '';
+    return '<span class="vp-purchase-cycle is-' + tone + '"><span class="vp-purchase-dot"></span><span>' + esc(text) + '</span></span>';
+  }
+
+  function chipBtn(group, value, label, selected){
+    return '<button type="button" class="chip-opt' + (selected ? ' selected' : '') + '" aria-pressed="' + (selected ? 'true' : 'false') + '" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
   }
 
   openSheet(
@@ -1735,26 +1877,33 @@ function openAddVisit(cid){
       '<div class="field" style="flex:1;"><label>ساعت</label><input id="f-time" type="time" value="' + nowHHMM() + '"></div>' +
     '</div>' +
     '<div id="visit-card-stage" class="visit-card-stage" aria-live="polite"></div>' +
-    '<div class="field bp-next-field" style="margin-top:12px;"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
+    '<div class="field bp-next-field" id="visit-next-action-wrap" style="display:none;margin-top:12px;"><label for="f-next-action">اقدام بعدی (اختیاری)</label>' +
       '<select id="f-next-action"><option value="">بدون اقدام</option>' +
       VISIT_NEXT_ACTIONS.map(function (a) { return '<option value="' + esc(a) + '">' + esc(a) + '</option>'; }).join('') +
       '</select></div>' +
-    '<div class="field" style="margin-top:12px;"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
-    '<div class="btn-row visit-save-actions" style="margin-top:8px;">' +
+    '<div class="field" id="visit-note-wrap" style="display:none;margin-top:12px;"><label>یادداشت کوتاه (اختیاری)</label><input id="f-visit-note" placeholder="اختیاری" autocomplete="off"></div>' +
+    '<div class="field" id="closed-next-date-wrap" style="display:none;margin-top:12px;"><label>ویزیت بعدی (اختیاری)</label><div id="closed-next-date-options" class="chip-wrap">' +
+      '<button type="button" class="chip-opt" data-next-days="1">فردا</button><button type="button" class="chip-opt" data-next-days="2">۲ روز دیگر</button><button type="button" class="chip-opt" data-next-days="3">۳ روز دیگر</button><button type="button" class="chip-opt" data-next-days="7">هفتهٔ بعد</button><button type="button" class="chip-opt" data-next-custom>تاریخ دلخواه</button></div>' +
+      '<div id="closed-next-custom" style="display:none;margin-top:8px;">' + shamsiDateInputHTML('f-next-visit-date', '', { mode: 'calendar' }) + '</div></div>' +
+    '<div class="btn-row visit-save-actions" id="visit-save-actions" style="display:none;margin-top:8px;">' +
       '<button type="button" class="btn" id="save-visit">ثبت و پایان</button>' +
-      '<button type="button" class="btn secondary" id="save-visit-invoice">ثبت و ایجاد فاکتور</button>' +
+      '<button type="button" class="btn secondary" id="save-visit-invoice" style="display:none;">ثبت و ایجاد فاکتور</button>' +
     '</div>'
   , {dirtyCheck:true});
 
   const state = {
+    kind: null,
     result: null,
-    offeredProducts: [], // complete only
+    offeredProducts: [],
     pendingProductId: null,
     pendingReaction: null,
     pendingRejectionReason: null,
-    nextAction: null, // optional; one of VISIT_NEXT_ACTIONS
-    pendingFrom: 'list', // where the pending product came from: list | add
-    step: 'result', // result | list | add | reaction | rejectReason | stockSource
+    nextAction: null,
+    nextVisitDate: null,
+    note: '',
+    userChangedResult: false,
+    pendingFrom: 'list',
+    step: 'kind'
   };
   const nextActionEl = document.getElementById('f-next-action');
   if (nextActionEl) {
@@ -1766,6 +1915,52 @@ function openAddVisit(cid){
     });
   }
   const stage = document.getElementById('visit-card-stage');
+  function updateVisitStageControls(){
+    const late = state.step === 'outcome' || state.step === 'closedFinish';
+    const nextWrap = document.getElementById('visit-next-action-wrap');
+    const noteWrap = document.getElementById('visit-note-wrap');
+    const saveActions = document.getElementById('visit-save-actions');
+    const saveInvoice = document.getElementById('save-visit-invoice');
+    if (nextWrap) nextWrap.style.display = late && state.step === 'outcome' ? '' : 'none';
+    if (noteWrap) noteWrap.style.display = late ? '' : 'none';
+    if (saveActions) saveActions.style.display = late ? '' : 'none';
+    if (saveInvoice) saveInvoice.style.display = state.step === 'outcome' && state.result === VISIT_RESULTS[0] && (state.offeredProducts || []).some(function (op) { return op && op.reaction === 'accepted'; }) ? '' : 'none';
+    const closedNext = document.getElementById('closed-next-date-wrap');
+    // «ویزیت بعدی» (تاریخ): برای هر ویزیت اختیاری است، نه فقط «فروشگاه بسته بود» — داشبورد/صفحهٔ مشتری از روی آن یادآوری می‌دهند (js/visit-plan.js).
+    if (closedNext) closedNext.style.display = late ? '' : 'none';
+  }
+  const nextDateOptions = document.getElementById('closed-next-date-options');
+  if (nextDateOptions) nextDateOptions.addEventListener('click', function (e) {
+    const btn = e.target.closest('button'); if (!btn) return;
+    // Optional field: tapping the selected chip again clears the choice.
+    if (btn.classList.contains('selected')) {
+      btn.classList.remove('selected');
+      state.nextVisitDate = null;
+      const customOff = document.getElementById('closed-next-custom'); if (customOff) customOff.style.display = 'none';
+      return;
+    }
+    const days = Number(btn.getAttribute('data-next-days'));
+    if (days > 0) {
+      const d = new Date(); d.setDate(d.getDate() + days);
+      state.nextVisitDate = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      const custom = document.getElementById('closed-next-custom'); if (custom) custom.style.display = 'none';
+    } else if (btn.hasAttribute('data-next-custom')) {
+      // A previous relative choice must not survive a switch to a custom date.
+      state.nextVisitDate = null;
+      const custom = document.getElementById('closed-next-custom'); if (custom) custom.style.display = '';
+      const customInput = document.getElementById('f-next-visit-date');
+      if (customInput) customInput.value = '';
+      const customField = customInput && customInput.closest('[data-shamsi-root]') && customInput.closest('[data-shamsi-root]').querySelector('[data-shamsi-field]');
+      if (customField) customField.value = '';
+    }
+    nextDateOptions.querySelectorAll('button').forEach(function (b) { b.classList.toggle('selected', b === btn); });
+  });
+  const customNextDate = document.getElementById('f-next-visit-date');
+  if (customNextDate) {
+    const syncCustomNextDate = function () { state.nextVisitDate = customNextDate.value || null; };
+    customNextDate.addEventListener('input', syncCustomNextDate);
+    customNextDate.addEventListener('change', syncCustomNextDate);
+  }
 
   function validOffered(){
     return (state.offeredProducts || []).filter(function (op) {
@@ -1838,7 +2033,7 @@ function openAddVisit(cid){
   const customerProductCandidates = buildCustomerProductCandidates();
 
   function optBtn(group, value, label, selected){
-    return '<button type="button" class="chip-opt vp-opt' + (selected ? ' selected' : '') + '" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
+    return '<button type="button" class="chip-opt vp-opt' + (selected ? ' selected' : '') + '" aria-pressed="' + (selected ? 'true' : 'false') + '" data-vgroup="' + esc(group) + '" data-value="' + esc(value) + '">' + esc(label) + '</button>';
   }
   function currentOffer(pid){
     return (state.offeredProducts || []).find(function (op) { return op.productId === pid; }) || null;
@@ -1880,12 +2075,14 @@ function openAddVisit(cid){
   function productRowHtml(pid, meta){
     const op = currentOffer(pid);
     const sum = op ? offerSummary(op) : null;
+    const cycleBadge = !op ? purchaseCycleBadge(pid) : '';
+    const rowClass = 'vp-row-main' + (cycleBadge ? ' has-cycle' : '');
     return '<div class="vp-row' + (op ? ' is-done' : '') + '">' +
-      '<button type="button" class="vp-row-main" data-vp-open="' + esc(pid) + '">' +
+      '<button type="button" class="' + rowClass + '" data-vp-open="' + esc(pid) + '">' +
         '<span class="vp-row-name">' + esc(productLabel(pid)) + '</span>' +
         (sum
           ? '<span class="vp-status is-' + sum.tone + '">' + esc(sum.text) + '</span>'
-          : (meta ? '<span class="vp-row-meta">' + esc(meta) + '</span>' : '')) +
+          : cycleBadge + (meta ? '<span class="vp-row-meta">' + esc(meta) + '</span>' : '')) +
       '</button>' +
       (op ? '<button type="button" class="vp-row-del" data-vp-del="' + esc(pid) + '" aria-label="حذف ' + esc(productLabel(pid)) + '">حذف</button>' : '') +
     '</div>';
@@ -1907,14 +2104,16 @@ function openAddVisit(cid){
     const pname = esc(productLabel(state.pendingProductId));
     const cur = state.pendingProductId ? currentOffer(state.pendingProductId) : null;
 
-    if (step === 'result') {
-      html =
-        '<div class="visit-card visit-card-enter" data-visit-step="result">' +
-          '<div class="q-title">نتیجه ویزیت؟</div>' +
-          '<div class="chip-wrap">' + RESULT_CHIPS.map(function (o) {
-            return chipBtn('result', o.value, o.label);
-          }).join('') + '</div>' +
-        '</div>';
+    if (step === 'kind') {
+      html = '<div class="visit-card visit-card-enter" data-visit-step="kind"><div class="q-title">نوع ویزیت</div><div class="chip-wrap">' + KIND_CHIPS.map(function (o) { return chipBtn('kind', o.value, o.label); }).join('') + '</div></div>';
+    } else if (step === 'outcome') {
+      const accepted = (state.offeredProducts || []).some(function (op) { return op && op.reaction === 'accepted'; });
+      const noProducts = !(state.offeredProducts || []).length;
+      if (!state.userChangedResult) state.result = state.kind === 'checkin' && noProducts ? VISIT_RESULTS[3] : (accepted ? VISIT_RESULTS[0] : VISIT_RESULTS[1]);
+      const allowed = RESULT_CHIPS.filter(function (o) { return o.value !== VISIT_RESULTS[3] || (state.kind === 'checkin' && noProducts); });
+      html = '<div class="visit-card visit-card-enter" data-visit-step="outcome"><div class="q-title">نتیجهٔ ویزیت</div><div class="vp-opts vp-outcome-opts" role="group" aria-label="نتیجهٔ ویزیت">' + allowed.map(function (o) { return optBtn('result', o.value, o.label, state.result === o.value); }).join('') + '</div>' + footerBack('list') + '</div>';
+    } else if (step === 'closedFinish') {
+      html = '<div class="visit-card visit-card-enter" data-visit-step="closedFinish"><div class="q-title">فروشگاه بسته بود</div><div class="vp-sub">زمان ویزیت بعدی را مشخص کنید؛ محصول یا فاکتوری ثبت نمی‌شود.</div>' + footerBack('kind') + '</div>';
     } else if (step === 'list') {
       const candIds = {};
       customerProductCandidates.forEach(function (c) { candIds[c.id] = true; });
@@ -1933,8 +2132,9 @@ function openAddVisit(cid){
               '</div>'
             : '<div class="vp-empty">برای این مشتری هنوز سابقهٔ خرید یا پیشنهاد ثبت نشده است.</div>') +
           (n ? '<div class="vp-count">' + n + ' محصول در این ویزیت ثبت شده</div>' : '') +
-          '<button type="button" class="vp-add" data-vp-add><span class="vp-add-plus" aria-hidden="true">＋</span><span>افزودن محصول</span></button>' +
-          footerBack('result') +
+          '<button type="button" class="vp-add" data-vp-add><span class="vp-add-plus" aria-hidden="true">＋</span><span>افزودن محصول دیگر</span></button>' +
+          '<button type="button" class="vp-add" data-vp-outcome style="margin-top:8px;">ادامه و ثبت نتیجه</button>' +
+          footerBack('kind') +
         '</div>';
     } else if (step === 'add') {
       const shown = shownProductIds();
@@ -1988,6 +2188,7 @@ function openAddVisit(cid){
 
     stage.innerHTML = html;
     bindStageChips();
+    updateVisitStageControls();
   }
 
   function markDirty(el){
@@ -2033,6 +2234,15 @@ function openAddVisit(cid){
         renderStage();
       });
     });
+    const outcomeBtn = stage.querySelector('[data-vp-outcome]');
+    if (outcomeBtn) outcomeBtn.addEventListener('click', function () {
+      if (!state.userChangedResult) {
+        const accepted = (state.offeredProducts || []).some(function (op) { return op && op.reaction === 'accepted'; });
+        const noProducts = !(state.offeredProducts || []).length;
+        state.result = state.kind === 'checkin' && noProducts ? VISIT_RESULTS[3] : (accepted ? VISIT_RESULTS[0] : VISIT_RESULTS[1]);
+      }
+      state.step = 'outcome'; renderStage();
+    });
     const addBtn = stage.querySelector('[data-vp-add]');
     if (addBtn) {
       addBtn.addEventListener('click', function () {
@@ -2047,11 +2257,29 @@ function openAddVisit(cid){
         const value = btn.getAttribute('data-value');
         if (!group || value == null) return;
 
-        if (group === 'result') {
-          state.result = value;
+        if (group === 'kind') {
+          state.kind = value;
+          state.userChangedResult = false;
           state.pendingProductId = null;
           state.pendingReaction = null;
-          state.step = 'list';
+          if (value === 'closed') {
+            state.result = VISIT_RESULTS[2];
+            state.offeredProducts = [];
+            state.nextAction = null;
+            state.nextVisitDate = null;
+            document.querySelectorAll('#closed-next-date-options .selected').forEach(function (b) { b.classList.remove('selected'); });
+            const customReset = document.getElementById('closed-next-custom'); if (customReset) customReset.style.display = 'none';
+            state.step = 'closedFinish';
+          } else {
+            state.result = null;
+            state.step = 'list';
+          }
+          renderStage();
+          return;
+        }
+        if (group === 'result') {
+          state.result = value;
+          state.userChangedResult = true;
           renderStage();
           return;
         }
@@ -2112,21 +2340,32 @@ function openAddVisit(cid){
   }
 
   async function persistVisit(auto){
+    {
+      const customWrap = document.getElementById('closed-next-custom');
+      const customSelected = !!(customWrap && customWrap.style.display !== 'none');
+      if (customSelected && !(state.nextVisitDate && parseISODateParts(state.nextVisitDate))) {
+        showToast('تاریخ ویزیت بعدی را انتخاب کنید');
+        return false;
+      }
+    }
     const c = data.customers.find(function (x) { return x.id === cid; });
     if (!c) {
       showToast('مشتری پیدا نشد');
       return false;
     }
-    if (!state.result) {
-      showToast('نتیجه ویزیت را انتخاب کنید');
-      return false;
-    }
+    if (!state.kind) { showToast('نوع ویزیت را انتخاب کنید'); return false; }
+    if (state.kind !== 'closed' && !state.result) { showToast('نتیجه ویزیت را انتخاب کنید'); return false; }
+    if (state.kind === 'closed') state.result = VISIT_RESULTS[2];
     const dateEl = document.getElementById('f-date');
     const timeEl = document.getElementById('f-time');
     const noteEl = document.getElementById('f-visit-note');
     const date = (dateEl && dateEl.value) || todayISO();
     const time = (timeEl && timeEl.value) || nowHHMM();
     const note = noteEl ? String(noteEl.value || '').trim() : '';
+    if (state.nextVisitDate && state.nextVisitDate < date) {
+      showToast('تاریخ ویزیت بعدی نمی‌تواند قبل از تاریخ این ویزیت باشد');
+      return false;
+    }
 
     const offered = validOffered();
 
@@ -2134,11 +2373,13 @@ function openAddVisit(cid){
       id: uid(),
       date: date,
       time: time,
+      kind: state.kind || 'normal',
       result: state.result,
       ordered: state.result === VISIT_RESULTS[0],
     };
+    if (state.nextVisitDate) visit.nextVisitDate = state.nextVisitDate;
     if (note) visit.note = note;
-    if (state.nextAction && VISIT_NEXT_ACTIONS.indexOf(state.nextAction) >= 0) visit.nextAction = state.nextAction;
+    if (state.kind !== 'closed' && state.nextAction && VISIT_NEXT_ACTIONS.indexOf(state.nextAction) >= 0) visit.nextAction = state.nextAction;
     if (offered.length) visit.offeredProducts = offered;
 
     c.visits = c.visits || [];
@@ -2150,22 +2391,40 @@ function openAddVisit(cid){
       showToast('ذخیره نشد');
       return false;
     }
+    // ACK: every rejected offer becomes a product SellerAck, and every visit leaves one account-level
+    // "visit_reviewed" ACK (7 days). Only after a successful save; fail-open — never affects the visit.
+    if (typeof createAck === 'function') {
+      try {
+        (Array.isArray(visit.offeredProducts) ? visit.offeredProducts : []).forEach(function (op) {
+          if (!op || op.reaction !== 'rejected' || !op.rejectionReason) return;
+          createAck({
+            customerId: cid,
+            productId: op.productId,
+            decision: op.rejectionReason,
+            stockSource: op.stockSource || null,
+            source: 'visit',
+            sourceId: visit.id,
+            sourceContext: { visitDate: visit.date, visitTime: visit.time, stockSource: op.stockSource || null },
+            legacyKey: 'visit:' + visit.id + ':' + op.productId
+          });
+        });
+        if (state.kind !== 'closed') createAck({
+          customerId: cid,
+          scope: 'account',
+          decision: 'visit_reviewed',
+          source: 'visit',
+          sourceId: visit.id,
+          sourceContext: { visitDate: visit.date, visitTime: visit.time },
+          legacyKey: 'visitrev:' + visit.id
+        });
+      } catch (eAck) { console.warn('ACK from visit failed (visit kept)', eAck); }
+    }
     if (typeof gameOnCustomerVisit === 'function') {
       try {
         await gameOnCustomerVisit(cid, visit.id, visit.date);
       } catch (e) {
         console.warn('Game hook failed:', e);
       }
-    }
-    // Automatically create the account-level visit ACK and independent product ACKs.
-    // This is additive Intelligence metadata; visit/accounting data is untouched.
-    if (typeof createVisitSellerAcks === 'function') {
-      try {
-        const coreIds = Object.create(null);
-        (visitBehavior.topProducts || []).slice(0, 3).forEach(function (tp) { if (tp && tp.productId) coreIds[String(tp.productId)] = true; });
-        (data.products || []).forEach(function (p) { if (p && (p.isCore === true || p.coreProduct === true)) coreIds[String(p.id)] = true; });
-        createVisitSellerAcks(cid, visit, offered, coreIds);
-      } catch (eAck) { console.warn('Seller ACK creation failed:', eAck); }
     }
     closeModal();
     if (typeof openCustomerDetail === 'function') openCustomerDetail(cid);
@@ -2183,6 +2442,7 @@ function openAddVisit(cid){
 
   document.getElementById('save-visit-invoice').addEventListener('click', function (e) {
     withSubmitGuard(e.currentTarget, async function () {
+      if (state.kind === 'closed' || !(state.offeredProducts || []).some(function (op) { return op && op.reaction === 'accepted'; })) return false;
       const saved = await persistVisit(false);
       if (saved && typeof openAddInvoice === 'function') {
         openAddInvoice(cid, {visitId: saved.id});
@@ -2312,9 +2572,25 @@ function openInvoiceForm(cid, editInv, opts){
     return out;
   }
   const visitRows = (!editInv && opts && opts.visitId) ? visitAcceptedRows(opts.visitId) : [];
+  // قول تحویل → فاکتور («تحویل شد»): اقلام قول مثل انتخاب دستی هر ردیف می‌شوند (qty قول یا ۱، قیمت retail||sell).
+  // فقط‌خواندنی روی قول؛ اقلام حذف‌شده/غیرفعال رد می‌شوند. قول در همین saveData فاکتور «تحویل شد» می‌شود.
+  let deliverySkipped = 0;
+  function deliveryPrefillRows(deliveryId){
+    const dp = (typeof DeliveryPromises !== 'undefined') ? DeliveryPromises.byId(deliveryId) : null;
+    if(!dp || dp.status!=='pending' || dp.customerId!==cid) return [];
+    const out = [];
+    dp.items.forEach(it=>{
+      const prod = invoiceProduct(it.productId);
+      if(!prod || prod.active===false){ deliverySkipped++; return; }
+      out.push({productId:it.productId, qty:(it.qty>0 ? it.qty : 1), price:prod.retail||prod.sell||0, discount:0});
+    });
+    return out;
+  }
+  const deliveryRows = (!editInv && opts && opts.deliveryId) ? deliveryPrefillRows(opts.deliveryId) : [];
+  if(deliverySkipped) showToast('بعضی اقلام قول دیگر موجود/فعال نیستند و در فاکتور نیامدند');
   let rows = editInv
     ? editInv.items.map(it=>({productId:it.productId, qty:it.qty, price:it.price, discount:it.discount||0, buyPrice:it.buyPrice}))
-    : (visitRows.length ? visitRows : [{productId:'', qty:1, price:0, discount:0}]);
+    : (deliveryRows.length ? deliveryRows : (visitRows.length ? visitRows : [{productId:'', qty:1, price:0, discount:0}]));
   const cust = data.customers.find(c=>c.id===cid); // presentation only: Customer Context header
   // Presentation only: one-time per-sheet context map (last offer/reject, stock source,
   // relevant active watch, last purchase). Reads existing facts; never writes or recalculates.
@@ -2396,15 +2672,15 @@ function openInvoiceForm(cid, editInv, opts){
       body.className = 'inv-line-body';
       const name = document.createElement('span');
       name.className = 'inv-line-name';
-      const meta = document.createElement('div');
-      meta.className = 'inv-line-collapsed-meta';
-      const calc = document.createElement('span');
-      calc.className = 'inv-line-calc';
-      meta.appendChild(calc);
-      body.append(name, meta);
+      body.append(name);
+      const figures = document.createElement('div');
+      figures.className = 'inv-line-figures';
       const amount = document.createElement('span');
       amount.className = 'inv-line-amount';
-      view.append(body, amount);
+      const calc = document.createElement('span');
+      calc.className = 'inv-line-calc';
+      figures.append(amount, calc);
+      view.append(body, figures);
       line.insertBefore(view, line.querySelector('.inv-line-view-active'));
       // قبلاً اینجا setActiveRow صدا زده می‌شد که در scope این تابع نیست (ReferenceError)؛
       // برای آخرین ردیفِ پرشده تپ بی‌اثر می‌ماند تا re-render بعدی. حالا از hook استفاده می‌شود.
@@ -2466,8 +2742,13 @@ function openInvoiceForm(cid, editInv, opts){
   // this value, since it has no collapsed summary to fall back to.
   let activeRowIndex = rows.findIndex(r=>!r.productId);
   if(activeRowIndex < 0) activeRowIndex = null;
-  // تاریخ فاکتور در closure نگه داشته می‌شود تا با هر renderSheet() دوباره به «امروز» برنگردد.
+  // Invoice date and optional due date are kept in this form closure so renderSheet() cannot reset user selections.
   let invoiceDateStr = editInv ? editInv.date : todayISO();
+  let invoiceDueEnabled = !!(editInv && editInv.dueDate);
+  let invoiceDueStr = (editInv && editInv.dueDate) ? String(editInv.dueDate).slice(0,10) : invoiceDateStr;
+  // نام خریدار: فقط برای مشتری یک‌بار‌مصرف («متفرقه») تا بدهی/فروش آدم‌های مختلف زیر یک حساب قاطی نشود.
+  const invoiceOneOff = isOneOffCustomer(data.customers.find(x=>x.id===cid));
+  let invoiceBuyerName = (editInv && editInv.buyerName) ? String(editInv.buyerName) : '';
   // فعال‌سازی ردیف جمع‌شده؛ renderSheet آن را تنظیم می‌کند (setActiveRow داخل scope همان است).
   let activateCollapsedRow = null;
   const qtyFocusPrevious = new Map();
@@ -2512,7 +2793,7 @@ function openInvoiceForm(cid, editInv, opts){
           <span class="prod-drop-name">${esc(p.name)}</span>
           ${hl.length ? `<span class="prod-drop-hint">${window.BagheriPresent.hintHtml(hl)}</span>` : ''}
         </span>
-        <span class="prod-drop-stock">${enToFaDigits(String(p.stockQty||0))}</span>
+        <span class="prod-drop-stock">${enToFaDigits(fmtQtyDisplay(p.stockQty||0))}</span>
         <span class="prod-drop-chevron" aria-hidden="true">›</span>
       </div>
     `;
@@ -2588,9 +2869,11 @@ function openInvoiceForm(cid, editInv, opts){
         ${prod?`<div class="inv-line-collapsed" role="button" tabindex="0" aria-label="ویرایش ${label}">
           <div class="inv-line-body">
             <span class="inv-line-name">${label}</span>
-            <div class="inv-line-collapsed-meta"><span class="inv-line-calc">${enToFaDigits(fmtQtyDisplay(r.qty||0))} × ${toman(r.price||0)} ت</span></div>
           </div>
-          <span class="inv-line-amount">${toman(lineAmt)} ت</span>
+          <div class="inv-line-figures">
+            <span class="inv-line-amount">${toman(lineAmt)} ت</span>
+            <span class="inv-line-calc">${enToFaDigits(fmtQtyDisplay(r.qty||0))} × ${toman(r.price||0)} ت</span>
+          </div>
         </div>`:''}
         <div class="inv-line-view-active">${activeHtml}</div>
       </div>`;
@@ -2628,7 +2911,8 @@ function openInvoiceForm(cid, editInv, opts){
     const paid = cashPaid+cardPaid+transferPaid+checkAmount;
     const newBalance = prevBalance + total - paid;
     const profit = invoiceProfitEstimate();
-    const profitColor = profit<0 ? 'var(--vg-color-danger)' : 'var(--vg-color-success-text)';
+    const isDarkTheme = document.documentElement.getAttribute('data-theme') === 'dark';
+    const profitColor = profit<0 ? (isDarkTheme ? '#FF6973' : '#D52B36') : (isDarkTheme ? '#45C99A' : '#0F7A4A');
     const remainCls = newBalance>0 ? 'accent-rust' : 'accent-olive';
     const totalChipEl = document.getElementById('inv-total-chip-value');
     if(totalChipEl) totalChipEl.textContent = toman(total) + ' ت';
@@ -2688,15 +2972,15 @@ function openInvoiceForm(cid, editInv, opts){
           </div>
           ${editInv?`<div class="inv-edit-notice">با ذخیره‌ی این ویرایش، موجودی انبار و مانده حساب مشتری به‌طور خودکار اصلاح می‌شود.</div>`:''}
 
-          <div class="inv-customer-context">
-            <div class="inv-customer-info">
-              <div class="inv-customer-kicker">مشتری</div>
-              <div class="inv-customer-name">${custDisplay}</div>
-              ${cust&&cust.phone?`<div class="inv-customer-meta">${esc(cust.phone)}</div>`:''}
+          <div class="inv-section inv-customer-section">
+            <h2 class="inv-section-title">مشخصات مشتری</h2>
+            <div class="inv-customer-context">
+              <div class="inv-customer-info">
+                <div class="inv-customer-name">${custDisplay}</div>
+                ${cust&&cust.phone?`<div class="inv-customer-meta">${esc(cust.phone)}</div>`:''}
+              </div>
             </div>
           </div>
-
-          <div class="field inv-date-field"><label>تاریخ فاکتور</label>${shamsiDateInputHTML('f-date', invoiceDateStr)}</div>
 
           <div class="inv-section inv-items-section">
             <div class="inv-items-card-head">
@@ -2709,6 +2993,32 @@ function openInvoiceForm(cid, editInv, opts){
           </div>
 
           ${nprHtmlInv}
+
+          <div class="inv-section inv-details-section">
+            <h2 class="inv-section-title">مشخصات فاکتور</h2>
+            <div class="inv-rows">
+              <div class="inv-row inv-row-date">
+                <span class="inv-row-label">تاریخ فاکتور</span>
+                ${shamsiDateInputHTML('f-date', invoiceDateStr)}
+              </div>
+              ${invoiceOneOff ? `<div class="inv-row">
+                <label class="inv-row-label" for="f-buyer">نام خریدار <small>(اختیاری)</small></label>
+                <input type="text" id="f-buyer" class="inv-row-input" autocomplete="off" placeholder="مثلاً: آقای رضایی" value="${esc(invoiceBuyerName)}">
+              </div>` : ''}
+              <div class="inv-row">
+                <label class="inv-row-label" for="f-due-toggle">سررسید پرداخت <small>(اختیاری)</small></label>
+                <input type="checkbox" class="inv-switch" id="f-due-toggle" role="switch" ${invoiceDueEnabled?'checked':''}>
+              </div>
+              <div class="inv-row inv-row-date" id="f-due-wrap" style="${invoiceDueEnabled?'':'display:none;'}">
+                <span class="inv-row-label">تاریخ سررسید</span>
+                ${shamsiDateInputHTML('f-due-date', invoiceDueStr)}
+              </div>
+              <div class="inv-row">
+                <span class="inv-row-label">شماره فاکتور</span>
+                <span class="inv-row-value">${editInv ? ('#' + esc(String(editInv.number||'—'))) : 'خودکار'}</span>
+              </div>
+            </div>
+          </div>
 
           <div class="inv-section inv-payment-section">
             <div class="inv-payment-heading">
@@ -3259,6 +3569,20 @@ function openInvoiceForm(cid, editInv, opts){
     // تاریخ فاکتور و تاریخ سررسید چک: هر تغییرِ picker در closure ثبت می‌شود تا re-render آن را گم نکند.
     const invDateEl = document.getElementById('f-date');
     if(invDateEl) invDateEl.addEventListener('input', e=>{ invoiceDateStr = e.target.value || todayISO(); });
+    const dueToggleEl = document.getElementById('f-due-toggle');
+    if(dueToggleEl) dueToggleEl.addEventListener('change', ()=>{
+      invoiceDueEnabled = !!dueToggleEl.checked;
+      const w = document.getElementById('f-due-wrap');
+      if(w) w.style.display = invoiceDueEnabled ? '' : 'none';
+    });
+    const buyerEl = document.getElementById('f-buyer');
+    if(buyerEl) buyerEl.addEventListener('input', e=>{ invoiceBuyerName = e.target.value; });
+    const dueDateEl = document.getElementById('f-due-date');
+    if(dueDateEl) {
+      const syncDueDate = e => { invoiceDueStr = String(e.target.value || '').slice(0,10); };
+      dueDateEl.addEventListener('input', syncDueDate);
+      dueDateEl.addEventListener('change', syncDueDate);
+    }
     const checkDueEl = document.getElementById('f-check-due');
     if(checkDueEl) checkDueEl.addEventListener('input', e=>{
       pendingPayment.checkDue = e.target.value;
@@ -3287,6 +3611,14 @@ function openInvoiceForm(cid, editInv, opts){
       if(btn.disabled) return; // جلوگیری از ثبت دوباره با کلیک سریع/پی‌درپی
       btn.disabled = true;
       const date = document.getElementById('f-date').value || todayISO();
+      if(date > todayISO()){ btn.disabled = false; showToast('تاریخ فاکتور نمی‌تواند بعد از امروز باشد'); return; }
+      // Optional due date: use the closure state updated by the toggle and date picker listeners.
+      // A due date before the invoice date is rejected; a disabled toggle never persists dueDate.
+      let invDueDate = '';
+      if(invoiceDueEnabled && invoiceDueStr){
+        invDueDate = String(invoiceDueStr).slice(0,10);
+        if(invDueDate < date){ showToast('سررسید نمی‌تواند قبل از تاریخ فاکتور باشد'); btn.disabled = false; return; }
+      }
 
       // اعتبارسنجی: ردیف‌های خالیِ draft (بدون جنس انتخاب‌شده) اگر حداقل یک ردیف
       // معتبر دیگر وجود داشته باشد، نباید مانع ثبت فاکتور شوند؛ اما ردیفی که
@@ -3405,6 +3737,8 @@ function openInvoiceForm(cid, editInv, opts){
         revertInvoicePayments(editInv);
 
         // ۲) به‌روزرسانی خود فاکتور با مقادیر جدید (همون id و شماره فاکتور حفظ می‌مونه)
+        if(invDueDate) editInv.dueDate = invDueDate; else delete editInv.dueDate;
+        { const bn = invoiceOneOff ? String(invoiceBuyerName||'').trim() : ''; if(bn) editInv.buyerName = bn; else delete editInv.buyerName; }
         editInv.date = date; editInv.items = items; editInv.total = total; editInv.discount = discount; editInv.discountType = discountType;
         editInv.prevBalance = prevBalance; editInv.cashPaid = cashPaid; editInv.cardPaid = cardPaid;
         editInv.transferPaid = transferPaid; editInv.checkPaid = checkAmount; editInv.newBalance = newBalance;
@@ -3442,13 +3776,15 @@ function openInvoiceForm(cid, editInv, opts){
           btn.disabled = false;
           return;
         }
+        try{ if(typeof reconcileAcksAfterInvoice === 'function') reconcileAcksAfterInvoice(cid, items); }catch(eAck){ console.warn('reconcileAcksAfterInvoice failed', eAck); }
         closeModal(); openInvoiceDetail(editInv.id, cid); render();
         showToast('فاکتور ویرایش شد؛ موجودی و حساب مشتری اصلاح شد');
         return;
       }
 
       const newInv = {
-        id:uid(), number:null, customerId:cid, date, items, total, discount, discountType,
+        id:uid(), number:null, customerId:cid, date, ...(invDueDate ? {dueDate: invDueDate} : {}),
+        ...((invoiceOneOff && String(invoiceBuyerName||'').trim()) ? {buyerName: String(invoiceBuyerName).trim()} : {}), items, total, discount, discountType,
         prevBalance, cashPaid, cardPaid, transferPaid, checkPaid:checkAmount, newBalance,
         ...(opts.visitId ? {visitId: opts.visitId} : {}),
       };
@@ -3467,6 +3803,12 @@ function openInvoiceForm(cid, editInv, opts){
       }
       data.invoices.push(newInv);
       pushInvoicePayments(cid, newInv, cashPaid, cardPaid, transferPaid, checkAmount, checkDue, null);
+      // قول تحویل: فقط همراه فاکتور واقعی و در همین saveData «تحویل شد» می‌شود (rollback بالا شامل آن هم هست).
+      let deliveriesDone = 0;
+      if(typeof DeliveryPromises !== 'undefined'){
+        if(opts.deliveryId && DeliveryPromises.complete(data, opts.deliveryId, newInv).ok) deliveriesDone++;
+        deliveriesDone += DeliveryPromises.autoCompleteForInvoice(data, newInv).length;
+      }
       try{
         await saveData();
       }catch(e){
@@ -3476,20 +3818,8 @@ function openInvoiceForm(cid, editInv, opts){
         btn.disabled = false;
         return;
       }
-      // A new purchase of the same product/family supersedes its temporary product ACK.
-      if (typeof listSellerAcks === 'function' && typeof supersedeSellerAck === 'function') {
-        try {
-          const acks = listSellerAcks(cid, false) || [];
-          const familyOf = function(pid) {
-            try { if (typeof resolveFamilyId === 'function') return String(resolveFamilyId(pid)); } catch (e) {}
-            const p = (data.products || []).find(function(x){return x && String(x.id)===String(pid);});
-            return p && p.analysisGroupId != null && p.analysisGroupId !== '' ? String(p.analysisGroupId) : String(pid);
-          };
-          const boughtFamilies = Object.create(null);
-          (newInv.items || []).forEach(function(it){ if(it && it.productId) boughtFamilies[familyOf(it.productId)] = true; });
-          acks.forEach(function(a){ if(a && a.scope==='product' && a.productId && boughtFamilies[familyOf(a.productId)]) supersedeSellerAck(a.id, newInv.id); });
-        } catch (eAck) { console.warn('Related seller ACK supersession failed:', eAck); }
-      }
+      // ACK: a purchase ends the premise of suppress/defer decisions on the purchased families.
+      try{ if(typeof reconcileAcksAfterInvoice === 'function') reconcileAcksAfterInvoice(cid, items); }catch(eAck){ console.warn('reconcileAcksAfterInvoice failed', eAck); }
       // Game Center hooks — CREATE only (edit path returns earlier). Never rolls back CRM.
       if (typeof gameOnInvoice === 'function') {
         try {
@@ -3505,7 +3835,7 @@ function openInvoiceForm(cid, editInv, opts){
           console.warn('Game hook failed:', e);
         }
       }
-      render(); showToast('فاکتور ثبت شد');
+      render(); showToast('فاکتور ثبت شد' + (deliveriesDone ? ' · قول تحویل انجام شد' : ''));
       openSheet(`
         <h3>فاکتور ثبت و توی حساب مشتری ذخیره شد</h3>
         <div class="empty">حالا می‌خوای همین فاکتور رو چاپ کنی، تصویرش رو بگیری یا فقط ذخیره بمونه؟</div>
@@ -3558,15 +3888,17 @@ function openAddSupplier(){
 
 
   /** G4: one-tap purchase-return reason (metadata only; no stock/FIFO impact). */
+// Shared with the supplier page, which displays the stored returnReason with these same labels.
+const PURCHASE_RETURN_REASONS = [
+  { value: 'defective', label: 'خرابی' },
+  { value: 'deliveryError', label: 'اشتباه در ارسال' },
+  { value: 'overstock', label: 'مازاد کالا' },
+  { value: 'changeMind', label: 'تغییر نظر' },
+  { value: 'complaint', label: 'شکایت' },
+  { value: 'other', label: 'سایر' },
+];
 function openPurchaseReturnReasonPicker(onPick){
-  const REASONS = [
-    { value: 'defective', label: 'خرابی' },
-    { value: 'deliveryError', label: 'اشتباه در ارسال' },
-    { value: 'overstock', label: 'مازاد کالا' },
-    { value: 'changeMind', label: 'تغییر نظر' },
-    { value: 'complaint', label: 'شکایت' },
-    { value: 'other', label: 'سایر' },
-  ];
+  const REASONS = PURCHASE_RETURN_REASONS;
   openSheet(
     '<h3>برگشت خرید</h3>' +
     '<div class="visit-card visit-card-enter">' +
@@ -3686,11 +4018,11 @@ function openSupplierDetail(sid){
         border:1px dashed #bbb; background:transparent; color:#bbb;
         font-size:11px; cursor:pointer; opacity:0.25;
       }
-      #qa-dev-btn:hover{ opacity:0.85; border-color:var(--vg-color-brand); color:var(--vg-color-primary); }
+      #qa-dev-btn:hover{ opacity:0.85; border-color:var(--gold,#FF5C35); color:var(--olive-dark,#1F2937); }
       #qa-panel.overlay{ z-index:9999; }
       #qa-panel .sheet{ max-height:92vh; }
-      #qa-panel .qa-pass{ color:var(--vg-color-primary); font-weight:700; }
-      #qa-panel .qa-fail{ color:var(--vg-color-danger); font-weight:700; }
+      #qa-panel .qa-pass{ color:var(--olive-dark,#1F2937); font-weight:700; }
+      #qa-panel .qa-fail{ color:var(--red,#FA3946); font-weight:700; }
       #qa-panel .qa-log{
         max-height:280px; overflow:auto; font-size:.75rem;
         background:#fff; border:1px solid var(--line,#E0E4E8);
@@ -4580,10 +4912,16 @@ function openSupplierDetail(sid){
   }
 
   // boot UI after DOM ready
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', ensureQAUI);
-  }else{
-    // app init is async; delay slightly so body exists
-    setTimeout(ensureQAUI, 0);
+  // QA tool: localhost or ?qa=1 only. The five-tap shortcut is attached inside ensureQAUI, so it is gated too.
+  var _qaAllowed = location.hostname === 'localhost' || location.hostname === '127.0.0.1' ||
+                   location.search.indexOf('qa=1') !== -1;
+  if(_qaAllowed){
+    if(document.readyState === 'loading'){
+      document.addEventListener('DOMContentLoaded', ensureQAUI);
+    }else{
+      // app init is async; delay slightly so body exists
+      setTimeout(ensureQAUI, 0);
+    }
   }
 })();
+

@@ -202,7 +202,8 @@ function openIntelligenceDbForBackup(){
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
         }
         if(!db.objectStoreNames.contains('seller_acks')){
-          db.createObjectStore('seller_acks', { keyPath: 'id' });
+          const ackSt = db.createObjectStore('seller_acks', { keyPath: 'id' });
+          try{ ackSt.createIndex('by_customer_status', ['customerId','status'], { unique:false }); ackSt.createIndex('by_expiry','expiresAt',{ unique:false }); }catch(e){}
         }
       };
       req.onsuccess = (e)=> resolve(e.target.result);
@@ -241,10 +242,10 @@ async function exportIntelligenceBundle(){
       if(occRaw){ const map=JSON.parse(occRaw); if(map && typeof map==='object' && !Array.isArray(map)) occurrences=Object.keys(map).map(k=>({key:k,dates:Array.isArray(map[k])?map[k]:[]})); }
       const fbRaw=localStorage.getItem(INTELLIGENCE_LS_KEYS.seller_feedback);
       if(fbRaw){ const arr=JSON.parse(fbRaw); if(Array.isArray(arr)) seller_feedback=arr; }
-      const baseRaw=localStorage.getItem(INTELLIGENCE_LS_KEYS.baseline_cache);
-      if(baseRaw){ const map=JSON.parse(baseRaw); if(map && typeof map==='object' && !Array.isArray(map)) baseline_cache=Object.keys(map).map(k=>map[k]).filter(Boolean); }
       const ackRaw=localStorage.getItem(INTELLIGENCE_LS_KEYS.seller_acks);
       if(ackRaw){ const arr=JSON.parse(ackRaw); if(Array.isArray(arr)) seller_acks=arr; }
+      const baseRaw=localStorage.getItem(INTELLIGENCE_LS_KEYS.baseline_cache);
+      if(baseRaw){ const map=JSON.parse(baseRaw); if(map && typeof map==='object' && !Array.isArray(map)) baseline_cache=Object.keys(map).map(k=>map[k]).filter(Boolean); }
     }catch(lsErr){ console.warn('exportIntelligenceBundle localStorage mirror read failed',lsErr); }
     return { dbVersion: INTELLIGENCE_DB_VERSION, occurrences: occurrences || [], seller_feedback: seller_feedback || [], baseline_cache: baseline_cache || [], seller_acks: seller_acks || [] };
   }catch(e){
@@ -265,9 +266,6 @@ function runIntelligenceRestoreTx(db, bundle){
     };
     try{
       const storeNames = INTELLIGENCE_STORES.filter(function(name){
-        // A v3 backup has no seller_acks field. Preserve current ACKs rather than
-        // interpreting a missing field as an instruction to clear the store.
-        if (name === 'seller_acks' && !(bundle && Array.isArray(bundle.seller_acks))) return false;
         return db.objectStoreNames.contains(name);
       });
       if(!storeNames.length){
@@ -293,9 +291,19 @@ function runIntelligenceRestoreTx(db, bundle){
   });
 }
 
+/* v117: the Intelligence modules keep their own in-memory state; after a Restore it must become exactly the restored
+   snapshot (epoch-guarded inside each module, so a late hydration can never bring the old rows back). */
+function _replaceIntelligenceModuleState(bundle){
+  try{
+    if(typeof replaceAllOccurrences==='function') replaceAllOccurrences(Array.isArray(bundle.occurrences) ? bundle.occurrences : []);
+    if(typeof replaceAllFeedback==='function') replaceAllFeedback(Array.isArray(bundle.seller_feedback) ? bundle.seller_feedback : []);
+    if(typeof replaceAllBaselines==='function') replaceAllBaselines(Array.isArray(bundle.baseline_cache) ? bundle.baseline_cache : []);
+  }catch(e){ console.warn('intelligence module state refresh failed', e); }
+}
+
 async function restoreIntelligenceBundle(bundle){
   if(!bundle || typeof bundle !== 'object') return false;
-  if(!Array.isArray(bundle.occurrences) && !Array.isArray(bundle.seller_feedback) && !Array.isArray(bundle.baseline_cache) && !Array.isArray(bundle.seller_acks)){
+  if(!Array.isArray(bundle.occurrences) && !Array.isArray(bundle.seller_feedback) && !Array.isArray(bundle.baseline_cache)){
     return false;
   }
   let db = null;
@@ -305,7 +313,7 @@ async function restoreIntelligenceBundle(bundle){
       occurrences: Array.isArray(bundle.occurrences) ? bundle.occurrences : [],
       seller_feedback: Array.isArray(bundle.seller_feedback) ? bundle.seller_feedback : [],
       baseline_cache: Array.isArray(bundle.baseline_cache) ? bundle.baseline_cache : [],
-      ...(Array.isArray(bundle.seller_acks) ? { seller_acks: _markOrphanSellerAcks(bundle.seller_acks, new Set((data.products||[]).map(x=>String(x.id)))) } : {})
+      seller_acks: Array.isArray(bundle.seller_acks) ? bundle.seller_acks : []
     });
 
     try{
@@ -328,12 +336,13 @@ async function restoreIntelligenceBundle(bundle){
           if(row && row.key != null) baseMap[row.key] = row;
         });
         localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache, JSON.stringify(baseMap));
-        if (Array.isArray(bundle.seller_acks)) localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks, JSON.stringify(_markOrphanSellerAcks(bundle.seller_acks, new Set((data.products||[]).map(x=>String(x.id))))));
+        localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks, JSON.stringify(Array.isArray(bundle.seller_acks) ? bundle.seller_acks : []));
+        if(typeof replaceAllAcks==='function') replaceAllAcks(Array.isArray(bundle.seller_acks) ? bundle.seller_acks : []);
+        _replaceIntelligenceModuleState(bundle);
       }
     }catch(lsErr){
       console.warn('intelligence localStorage mirror refresh failed', lsErr);
     }
-    if (typeof window !== 'undefined') window.__sellerAckMigrationDone = false;
     return true;
   }catch(e){
     console.error('restoreIntelligenceBundle failed', e);
@@ -474,6 +483,15 @@ function _normalizeBackupEnvelope(parsed){
     if(Object.prototype.hasOwnProperty.call(intel, 'version')){
       delete intel.version;
     }
+    // Pre-ACK backups (dbVersion 3, no seller_acks): align to the v4 export shape WITHOUT erasing
+    // the ACKs that exist now (owner rule: a v3 restore never wipes seller_acks). The current ACK
+    // rows are carried into the restored state; legacy rows from the backup are then merged in by
+    // the idempotent migrateLegacyAcknowledgments() after the verified commit.
+    if(intel.seller_acks == null){
+      try{ intel.seller_acks = (typeof exportAcks==='function') ? JSON.parse(JSON.stringify(exportAcks())) : []; }
+      catch(_e){ intel.seller_acks = []; }
+    }
+    if(intel.dbVersion == null || Number(intel.dbVersion) === 3) intel.dbVersion = 4;
   }
   return parsed;
 }
@@ -579,7 +597,6 @@ function _validateIntelligenceBundle(bundle, customerIds, productIds, products, 
   (Array.isArray(products)?products:[]).forEach(p=>{ if(p&&p.id!=null) familyOf.set(String(p.id),(p.analysisGroupId!=null&&p.analysisGroupId!=='')?String(p.analysisGroupId):String(p.id)); });
   if(bundle.dbVersion != null && Number(bundle.dbVersion) !== 3 && Number(bundle.dbVersion) !== 4) return false;
   for(const k of ['occurrences','seller_feedback','baseline_cache']) if(!Array.isArray(bundle[k])) return false;
-  if(bundle.seller_acks != null && !Array.isArray(bundle.seller_acks)) return false;
   const occKeys=new Set();
   for(const row of bundle.occurrences){
     if(!_isPlainObject(row) || typeof row.key!=='string' || !row.key) return false;
@@ -605,16 +622,22 @@ function _validateIntelligenceBundle(bundle, customerIds, productIds, products, 
     if(!_isIsoTimestamp(f.createdAt)) return false;
     if(f.source != null && !_INTEL_FEEDBACK_SOURCES.has(String(f.source))) return false;
   }
-  const baseKeys=new Set();
-  const ackIds=new Set();
-  for(const a of (bundle.seller_acks||[])){
-    if(!_isPlainObject(a) || typeof a.id!=='string' || !a.id || ackIds.has(a.id)) return false; ackIds.add(a.id);
-    if(!customerIds.has(String(a.customerId))) return false;
-    if(a.scope!=='account' && a.scope!=='product') return false;
-    if(a.scope==='product' && (a.productId==null || String(a.productId)==='')) return false;
-    if(typeof a.decision!=='string' || !a.decision || !_isIsoTimestamp(a.createdAt) || !_isIsoDateOnly(a.expiresAt)) return false;
-    if(a.status!=null && !['active','reversed','superseded','orphan'].includes(String(a.status))) return false;
+  // seller_acks (v4): optional for older backups; structural validation only
+  // (orphan references are harmless — an ACK only ever matches live signals).
+  if(bundle.seller_acks != null){
+    if(!Array.isArray(bundle.seller_acks)) return false;
+    const ackIds=new Set();
+    const ackDecisions=new Set(['still_stock','no_need','not_wanted','follow_up_later','price','competitor','quality','other','dismiss','unavailable','visit_reviewed']);
+    const ackStatuses=new Set(['active','expired','reversed','superseded']);
+    for(const a of bundle.seller_acks){
+      if(!_isPlainObject(a) || typeof a.id!=='string' || !a.id) return false;
+      if(ackIds.has(a.id)) return false; ackIds.add(a.id);
+      if(typeof a.customerId!=='string' || !a.customerId) return false;
+      if(!ackDecisions.has(String(a.decision)) || !ackStatuses.has(String(a.status))) return false;
+      if(a.scope!=='product' && a.scope!=='account') return false;
+    }
   }
+  const baseKeys=new Set();
   for(const b of bundle.baseline_cache){
     if(!_isPlainObject(b) || typeof b.key!=='string' || !b.key) return false;
     if(baseKeys.has(b.key)) return false; baseKeys.add(b.key);
@@ -781,6 +804,35 @@ function validateBackupShape(parsed){
       if(!linked || String(linked.customerId)!==String(chk.customerId)){ validateBackupShape.lastError='چک به فاکتور مشتری دیگری متصل شده است.'; return false; }
     }
   }
+  // Payment promises — presence-triggered: absent on older backups (valid; normalizeData() defaults to []).
+  if(parsed.paymentPromises != null){
+    if(!Array.isArray(parsed.paymentPromises) || !_uniqueIds(parsed.paymentPromises)) return false;
+    for(const pp of parsed.paymentPromises){
+      if(!customerIds.has(String(pp.customerId))) return false;
+      if(!_isIsoDateOnly(pp.date) || !_isIsoDateOnly(pp.promiseDate)) return false;
+      if(typeof pp.amount !== 'number' || !Number.isFinite(pp.amount) || pp.amount < 0) return false;
+      if(!['pending','kept','broken','superseded'].includes(pp.status)) return false;
+      if(pp.keptAmount != null && (typeof pp.keptAmount !== 'number' || !Number.isFinite(pp.keptAmount) || pp.keptAmount < 0)) return false;
+      if(pp.keptAt != null && !_isIsoTimestamp(pp.keptAt)) return false;
+    }
+  }
+  // Delivery promises — presence-triggered like paymentPromises. productId/invoiceId are NOT FKs here on purpose:
+  // items carry a name snapshot, and a later-deleted product/invoice must not make a backup unrestorable.
+  if(parsed.deliveryPromises != null){
+    if(!Array.isArray(parsed.deliveryPromises) || !_uniqueIds(parsed.deliveryPromises)) return false;
+    for(const dp of parsed.deliveryPromises){
+      if(!customerIds.has(String(dp.customerId))) return false;
+      if(!_isIsoDateOnly(dp.date) || !_isIsoDateOnly(dp.deliveryDate)) return false;
+      if(!['pending','done','cancelled'].includes(dp.status)) return false;
+      if(!Array.isArray(dp.items)) return false;
+      for(const it of dp.items){
+        if(!it || typeof it !== 'object' || !it.productId) return false;
+        if(typeof it.qty !== 'number' || !Number.isFinite(it.qty) || it.qty < 0) return false;
+      }
+      if(dp.invoiceId != null && typeof dp.invoiceId !== 'string') return false; // metadata only (an invoice may be deleted later)
+      if(dp.doneAt != null && !_isIsoTimestamp(dp.doneAt)) return false;
+    }
+  }
   if(schema>=3){
     const layerIds=new Set();
     for(const l of parsed.inventoryLayers){
@@ -870,29 +922,21 @@ async function restoreProspectScoutBundleStrict(bundle){
   try{ await runProspectRestoreTx(db,bundle); } finally { try{db.close();}catch(e){} }
   return true;
 }
-function _markOrphanSellerAcks(rows, productIds){
-  return (Array.isArray(rows) ? rows : []).map(function(a){
-    if(!a || a.scope!=='product' || a.productId==null || productIds.has(String(a.productId))) return a;
-    return Object.assign({}, a, { status:'orphan', orphanedAt:a.orphanedAt||new Date().toISOString(), orphanReason:'product_missing_after_restore' });
-  });
-}
 async function restoreIntelligenceBundleStrict(bundle){
-  const products = new Set((data.products||[]).map(x=>String(x.id)));
-  const restoreBundle = Object.assign({}, bundle);
-  if (Array.isArray(bundle && bundle.seller_acks)) restoreBundle.seller_acks = _markOrphanSellerAcks(bundle.seller_acks, products);
-  if(!_validateIntelligenceBundle(restoreBundle,new Set((data.customers||[]).map(x=>String(x.id))),products,data.products,data.analysisGroups)) throw new Error('Intelligence bundle validation failed');
+  if(!_validateIntelligenceBundle(bundle,new Set((data.customers||[]).map(x=>String(x.id))),new Set((data.products||[]).map(x=>String(x.id))),data.products,data.analysisGroups)) throw new Error('Intelligence bundle validation failed');
   const db=await openIntelligenceDbForBackup();
   try{
-    await runIntelligenceRestoreTx(db,restoreBundle);
+    await runIntelligenceRestoreTx(db,bundle);
   }finally{ try{db.close();}catch(e){} }
-  // A missing ACK field in a legacy v3 backup means preserve current ACK state.
-  const occMap=Object.create(null); (restoreBundle.occurrences||[]).forEach(r=>{occMap[r.key]=r.dates.slice();});
-  const baseMap=Object.create(null); (restoreBundle.baseline_cache||[]).forEach(r=>{baseMap[r.key]=r;});
-  if (Array.isArray(restoreBundle.seller_acks)) localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks,JSON.stringify(restoreBundle.seller_acks));
+  // localStorage mirrors are part of Intelligence state; failures are fatal.
+  const occMap=Object.create(null); (bundle.occurrences||[]).forEach(r=>{occMap[r.key]=r.dates.slice();});
+  const baseMap=Object.create(null); (bundle.baseline_cache||[]).forEach(r=>{baseMap[r.key]=r;});
   localStorage.setItem(INTELLIGENCE_LS_KEYS.occurrences,JSON.stringify(occMap));
-  localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_feedback,JSON.stringify(restoreBundle.seller_feedback||[]));
+  localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_feedback,JSON.stringify(bundle.seller_feedback||[]));
   localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache,JSON.stringify(baseMap));
-  if (typeof window !== 'undefined') window.__sellerAckMigrationDone = false;
+  localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks,JSON.stringify(bundle.seller_acks||[]));
+  if(typeof replaceAllAcks==='function') replaceAllAcks(bundle.seller_acks||[]);
+  _replaceIntelligenceModuleState(bundle);
   return true;
 }
 
@@ -1037,10 +1081,17 @@ async function _restoreParsedBackup(parsed){
       ? {gameMeta:_deepClone(parsed.gameMeta), gameLedger:_deepClone(parsed.gameLedger)}
       : previous.game;
     if(parsed.watchLifecycle){ if(!await restoreWatchLifecycleBundleForBackup(parsed.watchLifecycle)) throw new Error('Watch Lifecycle restore failed'); }
-    const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? {dbVersion:INTELLIGENCE_DB_VERSION,occurrences:parsed.intelligence.occurrences||[],seller_feedback:parsed.intelligence.seller_feedback||[],baseline_cache:parsed.intelligence.baseline_cache||[],seller_acks:Array.isArray(parsed.intelligence.seller_acks) ? parsed.intelligence.seller_acks : previous.intelligence.seller_acks} : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue},game:expectedGame,watchLifecycle:parsed.watchLifecycle ? _deepClone(parsed.watchLifecycle) : previous.watchLifecycle};
+    const expected={data:_deepClone(nextData),prospect:parsed.prospectScout ? _deepClone(parsed.prospectScout) : previous.prospect,intelligence:parsed.intelligence ? _deepClone(parsed.intelligence) : previous.intelligence,target:{value:targetValue,localRaw:String(targetValue),dbRaw:targetValue},game:expectedGame,watchLifecycle:parsed.watchLifecycle ? _deepClone(parsed.watchLifecycle) : previous.watchLifecycle};
     const actual=await _readCurrentSemanticState();
     if(!_semanticStateEqual(actual,expected)) throw new Error('post-commit verification failed');
     await dbDelete(RESTORE_JOURNAL_KEY);
+    // ACK: a backup without ACKs (pre-ACK) is migrated from its legacy feedback/watch/visit
+    // records AFTER the verified commit. Idempotent (legacyKey), additive, never throws.
+    try{
+      if(typeof migrateLegacyAcknowledgments==='function'){
+        migrateLegacyAcknowledgments({force:true});   // idempotent (legacyKey); existing ACKs untouched
+      }
+    }catch(ackErr){ console.warn('post-restore ACK migration failed', ackErr); }
     return true;
   }catch(e){
     console.error('restore commit failed; attempting journaled rollback',e);
@@ -1055,7 +1106,7 @@ async function _restoreParsedBackup(parsed){
       try{ window.__bagheriRestoreRecoveryBlocked = true; }catch(_e){}
       try{
         if(typeof document !== 'undefined' && document.body){
-          document.body.innerHTML = '<div style="padding:28px 18px;text-align:center;direction:rtl;font-family:sans-serif;"><h2>بازیابی کامل نشد</h2><p style="line-height:1.8">برای جلوگیری از کار روی داده‌ی ناهماهنگ، برنامه متوقف شد. برنامه را دوباره باز کنید تا بازیابی ایمن خودکار انجام شود.</p></div>';
+          document.body.innerHTML = '<div style="padding:28px 18px;text-align:center;direction:rtl;font-family:inherit;"><h2>بازیابی کامل نشد</h2><p style="line-height:1.8">برای جلوگیری از کار روی داده‌ی ناهماهنگ، برنامه متوقف شد. برنامه را دوباره باز کنید تا بازیابی ایمن خودکار انجام شود.</p></div>';
         }
       }catch(_e){}
       throw new Error('بازیابی انجام نشد و بازگردانی کامل نشد؛ برنامه متوقف شد تا بازیابی ایمن انجام شود.');
@@ -1238,3 +1289,4 @@ async function exportExcel(){
     showToast('فایل اکسل آماده شد');
   });
 }
+

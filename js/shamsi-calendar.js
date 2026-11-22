@@ -67,6 +67,9 @@
     );
     var viewJy = j[0], viewJm = j[1];
     var selJy = j[0], selJm = j[1], selJd = j[2];
+    /* Empty field: show the current month but select nothing. */
+    var hasSel = !!(hid.value && parseISODateParts(hid.value));
+    if(!hasSel){ selJy = selJm = selJd = null; }
 
     var tIso = todayISO();
     var tJ = isoToJalali(tIso) || gregorianToJalali(
@@ -114,7 +117,7 @@
       var html = '';
       for(var i = 0; i < cells.length; i++){
         var c = cells[i];
-        var isSel = (c.jy === selJy && c.jm === selJm && c.jd === selJd);
+        var isSel = (selJy !== null && c.jy === selJy && c.jm === selJm && c.jd === selJd);
         var isToday = (c.jy === tJ[0] && c.jm === tJ[1] && c.jd === tJ[2]);
         var cls = 'shamsi-calendar-day';
         if(c.outside) cls += ' is-outside';
@@ -154,7 +157,8 @@
       var cjy = parseInt(btn.getAttribute('data-jy'), 10);
       var cjm = parseInt(btn.getAttribute('data-jm'), 10);
       var cjd = parseInt(btn.getAttribute('data-jd'), 10);
-      selJy = cjy; selJm = cjm; selJd = cjd;
+      selJy = cjy; selJm = cjm; selJd = cjd; hasSel = true;
+      var doneBtn = overlay.querySelector('[data-shamsi-done]'); if(doneBtn) doneBtn.disabled = false;
       if(cjy !== viewJy || cjm !== viewJm){
         viewJy = cjy; viewJm = cjm;
       }
@@ -207,7 +211,7 @@
       closed = true;
       document.removeEventListener('keydown', onKey, true);
 
-      if(applyValues){
+      if(applyValues && hasSel){
         var newIso = jalaliToISO(selJy, selJm, selJd);
         var old = hid.value;
         hid.value = newIso;
@@ -238,6 +242,7 @@
     overlay.querySelector('[data-shamsi-cancel]').addEventListener('click', function(e){
       e.preventDefault(); close(false);
     });
+    if(!hasSel){ overlay.querySelector('[data-shamsi-done]').disabled = true; }
     overlay.querySelector('[data-shamsi-done]').addEventListener('click', function(e){
       e.preventDefault(); close(true);
     });
