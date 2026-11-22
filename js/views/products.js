@@ -172,7 +172,7 @@
       '<div class="field"><input id="product-search" placeholder="جستجوی نام یا دسته‌بندی..." value="' +
       esc(prodQuery) +
       '" autocomplete="off"></div>' +
-      '<div class="chip-row" id="product-chips">' +
+      '<div class="chip-row segmented-control" id="product-chips">' +
       chip('all', 'همه') +
       chip('in', 'موجود') +
       chip('low', 'کم‌موجود') +

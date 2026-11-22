@@ -31,7 +31,28 @@
     AppRouter.navigate('/watch', { id: occId });
   }
 
+  /* Where the watch detail returns to: the customer's watch list when it was opened from there
+     (fromCustomer + fromSection=watches in the hash), otherwise the global watch list. */
   function navigateToWatches() {
+    var h = String(location.hash || '');
+    var qi = h.indexOf('?');
+    var q = qi >= 0 ? new URLSearchParams(h.slice(qi + 1)) : null;
+    if (q && q.get('fromCustomer')) {
+      var sec = q.get('fromSection') === 'watches' ? '&section=watches' : '';
+      /* Use the router's back navigation (replaces the entry) so the device back gesture
+         does not return to this detail page. */
+      var target = '/customer', params = { id: String(q.get('fromCustomer')) };
+      if (q.get('fromSection') === 'watches') params.section = 'watches';
+      if (typeof AppRouter !== 'undefined' && AppRouter.navigateBack) {
+        AppRouter.navigateBack(target, params);
+      } else {
+        location.hash = '#/customer?id=' + encodeURIComponent(params.id) + sec;
+      }
+      return;
+    }
+    navigateToWatchesGlobal();
+  }
+  function navigateToWatchesGlobal() {
     AppRouter.navigate('/watches');
   }
 
@@ -89,10 +110,9 @@
     }).join('');
     openSheet(
       '<div class="sheet-title">ثبت علت هشدار</div>' +
-      '<div class="report-note watch-sheet-note">سه پاسخ اول هشدار را می‌بندند و همان مورد را فوراً برنمی‌گردانند؛ سایر علت‌ها فقط ثبت می‌شوند.</div>' +
+      '<div class="report-note watch-sheet-note">پاسخ‌های «هنوز موجودی دارد»، «این محصول را نمی‌خواهد»، «بعداً پیگیری می‌کنم» و «فعلاً نیاز ندارد» هشدار را می‌بندند و همان مورد را فوراً برنمی‌گردانند؛ سایر علت‌ها فقط ثبت می‌شوند.</div>' +
       '<div class="watch-reason-options">' + optsHtml + '</div>' +
       '<div class="field watch-sheet-note-field"><label>یادداشت (اختیاری)</label><input type="text" id="watch-detail-reason-note" autocomplete="off" placeholder="توضیح کوتاه..."></div>' +
-      '<div class="field watch-sheet-note-field"><label>تاریخ پیگیری بعدی (اختیاری؛ برای «بعداً پیگیری می‌کنم»)</label>' + (typeof shamsiDateInputHTML === 'function' ? shamsiDateInputHTML('watch-detail-followup-date', '') : '<input type="date" id="watch-detail-followup-date">') + '</div>' +
       '<div class="btn-row watch-sheet-actions"><button type="button" class="btn secondary" id="watch-detail-dismiss">بستن هشدار</button><button type="button" class="btn secondary" id="watch-detail-cancel">انصراف</button></div>'
     );
     var cancel = document.getElementById('watch-detail-cancel');
@@ -116,9 +136,8 @@
       var btn = e.target.closest('[data-watch-reason]');
       if (!btn) return;
       var noteEl = document.getElementById('watch-detail-reason-note');
-      var followUpEl = document.getElementById('watch-detail-followup-date');
       try {
-        recordWatchReason(occurrenceId, btn.getAttribute('data-watch-reason'), noteEl ? noteEl.value : '', followUpEl ? followUpEl.value : '');
+        recordWatchReason(occurrenceId, btn.getAttribute('data-watch-reason'), noteEl ? noteEl.value : '');
         if (typeof showToast === 'function') showToast('علت ثبت شد');
       } catch (err) {
         console.error(err);
@@ -151,7 +170,7 @@
     { id: 'attention', label: 'نیازمند توجه' },
     { id: 'unvisited', label: 'ندیده‌شده' },
     { id: 'check_due', label: 'چک سررسید' },
-    { id: 'followup',  label: 'پیگیری باز' }
+    { id: 'followup',  label: 'پیگیری‌های باز' }
   ];
   var WATCH_FILTER_HINTS = {
     all: 'هر مورد یک نشانه است، نه لزوماً یک مشکل قطعی',
@@ -165,7 +184,7 @@
   function isActiveCustomer(cid) {
     if (typeof data === 'undefined' || !Array.isArray(data.customers)) return false;
     var c = data.customers.find(function (x) { return x && x.id === cid; });
-    return !!c && c.active !== false;
+    return isTrackedCustomer(c);
   }
 
   /* مشتری‌هایی که چک وصول‌نشده‌ی معوق/تا ۳ روز آینده دارند (نیمه‌شب محلی، مثل صفحه‌ی چک‌ها). */
@@ -210,7 +229,7 @@
   }
 
   function filtersHtml(sets) {
-    return '<div class="bp-watch-filters" id="watch-filters" role="group" aria-label="فیلتر هشدارها">' +
+    return '<div class="bp-watch-filters segmented-control" id="watch-filters" role="group" aria-label="فیلتر هشدارها">' +
       WATCH_FILTERS.map(function (f) {
         var n = sets[f.id].length;
         var on = watchFilter === f.id;
@@ -221,6 +240,24 @@
         '</button>';
       }).join('') +
     '</div>';
+  }
+
+  /* Open follow-up: where does it stand against ITS OWN date (suppression.followUpDate)?
+     No date => honest «بدون موعد» (the lifecycle stores none); otherwise overdue / today / in N days. */
+  function followUpStatusBadge(o) {
+    var dueDate = (o && o.suppression && o.suppression.followUpDate)
+      ? String(o.suppression.followUpDate).slice(0, 10) : null;
+    if (!dueDate || !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      return { label: 'بدون موعد', cls: 'followup-status-none' };
+    }
+    var today = (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0, 10);
+    var dueMs = new Date(dueDate + 'T00:00:00').getTime();
+    var todayMs = new Date(today + 'T00:00:00').getTime();
+    if (!isFinite(dueMs) || !isFinite(todayMs)) return { label: 'بدون موعد', cls: 'followup-status-none' };
+    var diff = Math.round((dueMs - todayMs) / 86400000);
+    if (diff < 0) return { label: 'عقب‌افتاده ' + faDigits(Math.abs(diff)) + ' روز', cls: 'followup-status-overdue' };
+    if (diff === 0) return { label: 'امروز', cls: 'followup-status-today' };
+    return { label: 'تا ' + faDigits(diff) + ' روز', cls: 'followup-status-future' };
   }
 
   function renderWatchList(root) {
@@ -261,15 +298,22 @@
         var target = isFollowUp
           ? ' data-watch-customer="' + esc(o.customerId) + '"'
           : ' data-watch-id="' + esc(o.id) + '"';
+        // An open follow-up is judged by its date; an active alert by its severity.
+        var metaSpan;
+        if (isFollowUp) {
+          var st = followUpStatusBadge(o);
+          metaSpan = '<span class="followup-status-badge ' + st.cls + '">' + esc(st.label) + '</span>';
+        } else {
+          metaSpan =
+            '<span class="watch-severity-badge watch-severity-' + esc(o.level || 'low') + '">' + esc(levelLabel(o.level)) + '</span>' +
+            (reviewed ? '<span class="watch-reviewed-badge is-reviewed">علت ثبت شده</span>' : '');
+        }
         return '<div class="watch-list-row tx-row"' + target + ' role="link" tabindex="0">' +
           '<div class="watch-list-main">' +
             '<div class="watch-list-title tx-row-title">' + esc(prodName || catLabel) + '</div>' +
             (sentence ? '<div class="watch-list-text">' + esc(sentence) + '</div>' : '') +
           '</div>' +
-          '<div class="watch-list-meta">' +
-            '<span class="watch-severity-badge watch-severity-' + esc(o.level || 'low') + '">' + esc(levelLabel(o.level)) + '</span>' +
-            (reviewed && !isFollowUp ? '<span class="watch-reviewed-badge is-reviewed">علت ثبت شده</span>' : '') +
-          '</div>' +
+          '<div class="watch-list-meta">' + metaSpan + '</div>' +
         '</div>';
       }).join('');
       return '<section class="watch-customer-group">' +
@@ -279,7 +323,14 @@
     }).join('');
 
     if (!shown.length) {
-      html = '<div class="empty watch-empty">' + (watchFilter === 'all' ? 'هشدار فعالی نیست' : 'موردی با این فیلتر پیدا نشد') + '</div>';
+      var emptyText;
+      if (watchFilter === 'all') emptyText = 'هشدار فعالی نیست';
+      else if (watchFilter === 'followup') emptyText = 'پیگیری‌های بازی وجود ندارد';
+      else if (watchFilter === 'attention') emptyText = 'هشدار با شدت زیاد وجود ندارد';
+      else if (watchFilter === 'unvisited') emptyText = 'همه مشتریان ویزیت شده‌اند';
+      else if (watchFilter === 'check_due') emptyText = 'چک سررسیدگذشته یا نزدیک سررسید وجود ندارد';
+      else emptyText = 'موردی با این فیلتر پیدا نشد';
+      html = '<div class="empty watch-empty">' + emptyText + '</div>';
     }
 
     var prevBar = root.querySelector('#watch-filters');
@@ -403,7 +454,6 @@
     var custName = customerNameById(occ.customerId), prodName = productNameForOccurrence(occ), catLabel = categoryLabel(occ.watchCategory), sentence = humanSentence(occ);
     var reasonHtml = occ.reason ? '<div class="watch-detail-block"><div class="label">علت ثبت‌شده</div><div class="watch-detail-value">' + esc((typeof watchReasonLabel === 'function') ? watchReasonLabel(occ.reason.code) : occ.reason.code) + (occ.reason.comment ? ' — ' + esc(occ.reason.comment) : '') + '</div></div>' : '';
     root.innerHTML =
-      '<div class="watch-detail-top"><button type="button" class="btn secondary small" data-watch-back>‹&nbsp; بازگشت به هشدارها</button></div>' +
       '<div class="card wide watch-detail-card" data-watch-open-customer="' + esc(occ.customerId) + '" role="link" tabindex="0">' +
         '<div class="watch-detail-head"><div class="watch-detail-customer"><div class="watch-detail-kicker">مشتری</div><div class="watch-detail-customer-name">' + esc(custName) + '</div></div><span class="watch-severity-badge watch-severity-' + esc(occ.level || 'low') + '">' + esc(levelLabel(occ.level)) + '</span></div>' +
         (prodName ? '<div class="watch-detail-block"><div class="label">محصول</div><div class="watch-detail-value">' + esc(prodName) + '</div></div>' : '') +
@@ -412,11 +462,30 @@
         reasonHtml +
         watchEvidenceText(occ) +
       '</div>' +
+      (typeof ackListHtml === 'function'
+        ? ackListHtml(occ.customerId, (occ.productId && typeof resolveFamilyId === 'function') ? resolveFamilyId(occ.productId) : null)
+        : '') +
       '<div class="watch-detail-actions tx-actions-primary">' +
         '<button type="button" class="btn primary" data-watch-reason-open="' + esc(occ.id) + '">' + (occ.reason ? 'ویرایش علت' : 'ثبت علت') + '</button>' +
         '<button type="button" class="btn secondary" data-watch-dismiss="' + esc(occ.id) + '">بستن هشدار</button>' +
       '</div>' +
       '<div class="watch-detail-footnote">علت‌های «قیمت»، «رقیب» و مانند آن فقط ثبت می‌شوند؛ «هنوز موجودی دارد»، «این محصول را نمی‌خواهد» و «بعداً پیگیری می‌کنم» هشدار را می‌بندند.</div>';
+    if (typeof bindAckReverse === 'function') bindAckReverse(root, function () {
+      // Cancelling an ACK releases the Watch suppression but the occurrence is still "dismissed"
+      // until the lifecycle is reconciled. Reconcile first, then re-render; never show a raw
+      // "not found" — fall back to the Watches list instead.
+      var backToList = function () { try { AppRouter.navigate('/watches'); } catch (eNav) { /* ignore */ } };
+      if (typeof reconcileWatchLifecycle !== 'function') { backToList(); return; }
+      var rctx = typeof createComputationContext === 'function' ? createComputationContext({ data: data }) : null;
+      reconcileWatchLifecycle(null, rctx).then(function () {
+        var again = null;
+        try { again = findActiveOccurrence(id); } catch (eF) { again = null; }
+        if (again) renderWatchDetail(root, id); else backToList();
+      }).catch(function (e) {
+        console.warn('watch lifecycle reconcile failed after ACK reversal', e);
+        backToList();
+      });
+    });
   }
 
   function watchDetailMount(root, params) {
@@ -451,8 +520,6 @@
     var refreshToken = (typeof ViewHost !== 'undefined' && ViewHost.setRefresh) ? ViewHost.setRefresh(refresh) : null;
 
     function onDetailClick(e) {
-      var back = e.target.closest('[data-watch-back]');
-      if (back) { e.preventDefault(); navigateToWatches(); return; }
       var reasonBtn = e.target.closest('[data-watch-reason-open]');
       if (reasonBtn) { e.preventDefault(); watchReasonSheet(reasonBtn.getAttribute('data-watch-reason-open'), function () {
         // A closing decision leaves nothing active to show here -> back to the list.

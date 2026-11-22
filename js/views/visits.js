@@ -172,7 +172,7 @@
     };
     root.innerHTML = `
       <div class="field"><input id="visit-search" placeholder="جستجوی نام مشتری، منطقه، نتیجه..." value="${esc(visitQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="visit-chips">
+      <div class="chip-row segmented-control" id="visit-chips">
         ${chip('all','همه')}
         ${chip('ordered','سفارش گرفته شد')}
         ${chip('noorder','سفارش گرفته نشد')}

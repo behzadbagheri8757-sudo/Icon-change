@@ -50,7 +50,9 @@
           date: p.date || '',
           amount: p.amount || 0,
           method: 'supplier',
-          methodLabel: 'پرداخت به تامین‌کننده',
+          methodLabel: p.method === 'check'
+            ? ('چک به تامین‌کننده · ' + (p.status === 'cleared' ? 'پرداخت‌شده' : (p.status === 'bounced' ? 'برگشتی' : 'در جریان')))
+            : 'پرداخت نقدی به تامین‌کننده',
           partyName: s.name || '—',
           partyId: s.id,
           invoiceId: null,
@@ -117,7 +119,7 @@
     sumEl.innerHTML = `
       <div class="card">
         <div class="label">تعداد پرداخت (فیلتر)</div>
-        <div class="value">${rows.length}</div>
+        <div class="value">${enToFaDigits(String(rows.length))}</div>
       </div>
       <div class="card">
         <div class="label">جمع مبالغ (فیلتر فعلی)</div>
@@ -138,6 +140,13 @@
       return;
     }
 
+    listEl.onclick = function (e) {
+      const b = e.target && e.target.closest ? e.target.closest('[data-edit-payment]') : null;
+      if (!b) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof openEditStandalonePayment === 'function') openEditStandalonePayment(b.getAttribute('data-edit-cid'), b.getAttribute('data-edit-payment'));
+    };
     listEl.innerHTML = rows
       .map(r => {
         const href =
@@ -157,6 +166,12 @@
           ? '<span class="sub tx-row-ctx">' + esc(r.note) + '</span>'
           : '';
 
+        /* Independent customer payments (not invoice-linked, not returns) get an edit affordance
+           that opens the existing edit sheet; the row itself keeps its navigation. */
+        const editable = r.kind === 'customer' && !r.invoiceId && ['cash','card','transfer','discount'].includes(r.method);
+        const editBtn = editable
+          ? `<button type="button" class="tx-row-edit" data-edit-payment="${esc(r.id)}" data-edit-cid="${esc(r.partyId)}">ویرایش</button>`
+          : '';
         return `
           <a
             class="ledger-row tx-row"
@@ -173,6 +188,7 @@
 
             <span class="amount tx-row-amount">
               <span class="tx-row-total">${toman(r.amount)} ت</span>
+              ${editBtn}
             </span>
           </a>
         `;
@@ -267,7 +283,7 @@
         >
       </div>
 
-      <div class="chip-row" id="payment-chips">
+      <div class="chip-row segmented-control" id="payment-chips">
         ${chip('all', 'همه')}
         ${chip('cash', 'نقد')}
         ${chip('card', 'کارت')}

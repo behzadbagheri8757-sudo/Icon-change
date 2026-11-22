@@ -44,7 +44,7 @@
       rows = rows.filter(inv => {
         const cust = data.customers.find(c => c.id === inv.customerId);
         const name = (cust && cust.name) || '';
-        return String(inv.number || '').includes(q) || name.toLowerCase().includes(q);
+        return String(inv.number || '').includes(q) || name.toLowerCase().includes(q) || String(inv.buyerName || '').toLowerCase().includes(q);
       });
     }
 
@@ -53,7 +53,7 @@
       const paid = invoicePaidAmount(inv);
       const remain = invoiceRemain(inv);
       const cust = data.customers.find(c => c.id === inv.customerId);
-      return { inv, st, paid, remain, custName: cust ? cust.name : '—' };
+      return { inv, st, paid, remain, custName: (cust ? cust.name : '—') + (inv.buyerName ? ' — ' + inv.buyerName : '') };
     });
 
     if (invFilter === 'paid') rows = rows.filter(x => x.st.key === 'paid');
@@ -118,7 +118,7 @@
     };
     root.innerHTML = `
       <div class="field"><input id="invoice-search" placeholder="جستجوی شماره فاکتور یا نام مشتری..." value="${esc(invQuery)}" autocomplete="off"></div>
-      <div class="chip-row" id="invoice-chips">
+      <div class="chip-row segmented-control" id="invoice-chips">
         ${chip('all','همه')}
         ${chip('paid','پرداخت‌شده')}
         ${chip('debt','بدهکار')}

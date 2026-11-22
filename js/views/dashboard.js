@@ -220,12 +220,13 @@
     var rows = [];
     try { rows = typeof getActiveWatchOccurrences === 'function' ? (getActiveWatchOccurrences() || []) : []; } catch (e) { rows = []; }
     if (!rows.length) return '';
+    var allActiveCount = rows.length;   /* full count, before the top-2 slice */
     rows = rows.slice().sort(function (a, b) {
       var rank = { critical: 4, high: 3, medium: 2, low: 1 };
       return (rank[b.level || b.severity] || 0) - (rank[a.level || a.severity] || 0) || String(b.lastEvaluatedAt || '').localeCompare(String(a.lastEvaluatedAt || ''));
     }).slice(0, 2);
     var total = 0;
-    try { var sum = typeof getWatchLifecycleSummary === 'function' ? getWatchLifecycleSummary() : null; total = sum && Number.isFinite(sum.active) ? sum.active : rows.length; } catch (e2) { total = rows.length; }
+    try { var sum = typeof getWatchLifecycleSummary === 'function' ? getWatchLifecycleSummary() : null; total = sum && Number.isFinite(sum.active) ? sum.active : allActiveCount; } catch (e2) { total = allActiveCount; }
     function label(o) {
       var product = o && o.productName;
       if (!product && o && o.productId && Array.isArray(data.products)) {
@@ -292,19 +293,36 @@
       });
     } catch (e2) {}
 
+    // چک‌های پرداختی به تامین‌کننده (جدا از data.checks): سررسیدگذشته / نزدیک سررسید / برگشتی.
+    // برگشتی فقط وقتی هشدار است که هنوز بدهی باز به همان تامین‌کننده مانده (چک برگشتی = بدهی برگشته).
+    var supOverdue = 0, supDueSoon = 0, supBounced = 0;
+    try {
+      if (typeof supplierCheckEntries === 'function') {
+        supplierCheckEntries().forEach(function (e) {
+          if (e.status === 'pending' && e.dueDiff !== null) {
+            if (e.dueDiff < 0) supOverdue++;
+            else if (e.dueDiff <= 3) supDueSoon++;
+          } else if (e.status === 'bounced') {
+            var st = typeof supplierTotals === 'function' ? supplierTotals(e.supplier.id) : null;
+            if (st && st.balance > 0) supBounced++;
+          }
+        });
+      }
+    } catch (e5) {}
+
     // موارد قبلی نوار (حفظ شده تا رگرسیون ایجاد نشود)
     try {
       followups = typeof getPendingWatchFollowUps === 'function'
         ? (getPendingWatchFollowUps() || []).filter(function (o) {
             // همان قاعده‌ی صفحه‌ی هشدارها: مشتری غیرفعال شمرده نمی‌شود
             var cu = (data.customers || []).find(function (x) { return x && x.id === o.customerId; });
-            return !!cu && cu.active !== false;
+            return isTrackedCustomer(cu);
           }).length
         : 0;
     } catch (e3) {}
     try { lowStock = typeof lowStockProducts === 'function' ? (lowStockProducts() || []).length : 0; } catch (e4) {}
 
-    if (!(att.count || overdueChecks.length || dueSoonChecks.length || followups || lowStock)) return '';
+    if (!(att.count || overdueChecks.length || dueSoonChecks.length || supOverdue || supDueSoon || supBounced || followups || lowStock)) return '';
 
     /* هر مورد یک ردیف کامل (iOS list row): متن راست، مقدار/توضیح کنار آن، فلش در انتها. */
     function row(href, count, label, meta, extraAttr) {
@@ -319,7 +337,10 @@
     if (att.count > 0) bits.push(row('#', att.count, 'مشتری نیازمند پیگیری', money(att.totalBalance), ' data-attention="1"'));
     if (overdueChecks.length > 0) bits.push(row('#/checks?filter=overdue', overdueChecks.length, 'چک سررسیدگذشته'));
     if (dueSoonChecks.length > 0) bits.push(row('#/checks?filter=dueSoon', dueSoonChecks.length, 'چک نزدیک سررسید'));
-    if (followups) bits.push(row('#/watches?filter=followup', followups, 'پیگیری باز'));
+    if (supBounced > 0) bits.push(row('#/checks?side=supplier&filter=bounced', supBounced, 'چک برگشتیِ پرداختی به تامین‌کننده'));
+    if (supOverdue > 0) bits.push(row('#/checks?side=supplier&filter=overdue', supOverdue, 'چک پرداختی سررسیدگذشته'));
+    if (supDueSoon > 0) bits.push(row('#/checks?side=supplier&filter=dueSoon', supDueSoon, 'چک پرداختی نزدیک سررسید'));
+    if (followups) bits.push(row('#/watches?filter=followup', followups, 'پیگیری‌های باز'));
     if (lowStock) bits.push(row('#/inventory', lowStock, 'کالای کم‌موجودی'));
 
     return '<div class="bp-dashboard-alert" role="status">' +
@@ -341,13 +362,8 @@
     if (!att.rows.length) return;
 
     var rowsHtml = att.rows.map(function (r) {
-      var line = r.refKind === 'scheduled_followup'
-        ? 'تاریخ پیگیری پرداخت رسیده'
-        : r.refKind === 'invoice_due'
-        ? faDigits(r.daysSince) + ' روز از سررسید فاکتور'
-        : r.refKind === 'no_payment_history'
-        ? faDigits(r.daysSince) + ' روز از آخرین فاکتور، بدون پرداخت'
-        : faDigits(r.daysSince) + ' روز از آخرین پرداخت';
+      var line = receivableAttentionDesc(r);   // one wording shared with Customer Detail / Quick View
+      if (r.legacyBalance > 0) line += ' · بدهی قدیمی جدا: ' + money(r.legacyBalance);
       return '<button type="button" class="bp-attention-row" data-attention-cid="' + esc(r.customerId) + '">' +
         '<span class="bp-attention-row-name">' + esc(r.name) + '</span>' +
         '<span class="bp-attention-row-meta">' + money(r.balance) + ' · ' + line + '</span>' +
@@ -492,18 +508,47 @@
 
     const progressClass = pct > 0 ? ' has-progress' : '';
 
+    /* Progress ring — pure SVG, 270° gauge opening at the bottom, thick rounded arc.
+       Fills from the right edge counter-clockwise so it reads like RTL text.
+       Presentation only: the value comes from the same `pct` as before. */
+    function ringSvg(p) {
+      const cx = 60, cy = 60, r = 46;
+      function pt(deg) {
+        const a = deg * Math.PI / 180;
+        return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+      }
+      function f(n) { return n.toFixed(2); }
+      const s0 = pt(45), e0 = pt(135);
+      const trackPath = 'M ' + f(s0[0]) + ' ' + f(s0[1]) + ' A ' + r + ' ' + r + ' 0 1 0 ' + f(e0[0]) + ' ' + f(e0[1]);
+      let fill = '';
+      if (p > 0) {
+        const sweep = 270 * Math.min(100, p) / 100;
+        const en = pt(45 - sweep);
+        fill = '<path class="bp-ring-fill" d="M ' + f(s0[0]) + ' ' + f(s0[1]) + ' A ' + r + ' ' + r + ' 0 ' + (sweep > 180 ? 1 : 0) + ' 0 ' + f(en[0]) + ' ' + f(en[1]) + '" fill="none" stroke="url(#bp-ring-grad)" stroke-width="13" stroke-linecap="round"/>';
+      }
+      return '<svg class="bp-ring-svg" viewBox="0 0 120 120" aria-hidden="true" focusable="false">' +
+        '<defs><linearGradient id="bp-ring-grad" gradientUnits="userSpaceOnUse" x1="108" y1="60" x2="12" y2="60"><stop class="bp-ring-g0" offset="0"/><stop class="bp-ring-g1" offset="1"/></linearGradient></defs>' +
+        '<path class="bp-ring-track" d="' + trackPath + '" fill="none" stroke-width="13" stroke-linecap="round"/>' +
+        fill +
+      '</svg>';
+    }
+
     return '<div class="bp-target-strip ' + (done ? 'is-done' : 'is-' + status.cls) + progressClass + '">' +
       '<div class="bp-target-strip-head">' +
         targetTitleHtml() +
         '<span class="bp-target-strip-status">' + (done ? '✓ رسید' : status.icon + ' ' + status.text) + '</span>' +
       '</div>' +
-      '<div class="bp-target-strip-figures">' +
-        '<span class="bp-target-strip-sales"><strong class="bp-target-strip-current">' + compactMoney(sales) + '</strong><span class="bp-target-strip-target"> / ' + compactMoney(target) + '</span> <small>تومان</small></span>' +
-        '<span class="bp-target-strip-percent"><strong>' + enToFaDigits(String(pct)) + '٪</strong></span>' +
-        (done ? '<span class="bp-target-strip-congrats">آفرین!</span>' : '<span>نیاز روزانه <strong>' + compactMoney(requiredDaily) + '</strong> ت</span>') +
+      '<div class="bp-target-strip-body">' +
+        '<div class="bp-target-ring" role="img" aria-label="پیشرفت هدف ' + enToFaDigits(String(pct)) + ' درصد">' +
+          ringSvg(pct) +
+          '<span class="bp-target-ring-pct"><strong>' + enToFaDigits(String(pct)) + '</strong><em>٪</em></span>' +
+        '</div>' +
+        '<div class="bp-target-strip-info">' +
+          '<span class="bp-target-strip-sales"><strong class="bp-target-strip-current">' + compactMoney(sales) + '</strong><span class="bp-target-strip-target"> / ' + compactMoney(target) + '</span> <small>تومان</small></span>' +
+          (done ? '<span class="bp-target-strip-congrats">آفرین!</span>' : '<span class="bp-target-strip-need">نیاز روزانه <strong>' + compactMoney(requiredDaily) + '</strong> ت</span>') +
+          (!done && daysLeft > 0 ? '<span class="bp-target-strip-days">' + enToFaDigits(String(daysLeft)) + ' روز مانده</span>' : '') +
+        '</div>' +
       '</div>' +
-      '<div class="bp-target-strip-bar"><span style="width:' + capped + '%"></span></div>' +
-      (!done && daysLeft > 0 ? '<div class="bp-target-strip-days">' + enToFaDigits(String(daysLeft)) + ' روز مانده</div>' : '') +
     '</div>';
   }
 
@@ -580,6 +625,7 @@
       '<div class="dashboard-shell">' +
       '<div class="dashboard-eyebrow">مرکز فرماندهی روزانه</div>' +
       alertBar +
+      commitmentsGroupHtml() +
       todaySnapshot +
       targetHtml(metrics) +
 
@@ -610,12 +656,59 @@
     bindActionQueueToggle(root);
     bindQuickActions(root);
     bindAttentionLink(root, ctx);
+    if (typeof PromiseUI !== 'undefined') PromiseUI.bindDashboard(root);
+    if (typeof DeliveryUI !== 'undefined') DeliveryUI.bindDashboard(root);
+    if (typeof VisitPlanUI !== 'undefined') VisitPlanUI.bindDashboard(root);
+  }
+
+  /* Dashboard sub-pages: #/dashboard?section=… Renderers are registered here as each
+     section is moved out of the home screen. Unknown sections fall back to home. */
+  var DASH_SECTION_TITLES = {};
+  function sectionTitle(section) { return DASH_SECTION_TITLES[section] || ''; }
+
+  /* Commitments (promises, deliveries, visit plans) share one grouped card on the home screen.
+     Each module keeps its own rows and bindings; this only groups them visually. */
+  function commitmentsGroupHtml() {
+    var parts = [];
+    if (typeof PromiseUI !== 'undefined') parts.push(PromiseUI.dashboardHtml() || '');
+    if (typeof DeliveryUI !== 'undefined') parts.push(DeliveryUI.dashboardHtml() || '');
+    if (typeof VisitPlanUI !== 'undefined') parts.push(VisitPlanUI.dashboardHtml() || '');
+    var body = parts.join('');
+    if (!body.trim()) return '';
+    return '<section class="dash-commitments">' +
+      '<div class="dash-commitments-head">تعهدات و پیگیری‌ها</div>' +
+      body +
+      '<a class="dash-commitments-foot" href="#/dashboard?section=commitments">مشاهدهٔ همهٔ تعهدات ›</a>' +
+      '</section>';
+  }
+
+  /* Push page: #/dashboard?section=commitments — the full lists of the three modules. */
+  function renderCommitmentsPage(root) {
+    var parts = [];
+    if (typeof PromiseUI !== 'undefined') parts.push(PromiseUI.dashboardHtml({ all: true }) || '');
+    if (typeof DeliveryUI !== 'undefined') parts.push(DeliveryUI.dashboardHtml({ all: true }) || '');
+    if (typeof VisitPlanUI !== 'undefined') parts.push(VisitPlanUI.dashboardHtml({ all: true }) || '');
+    var body = parts.join('');
+    root.innerHTML = '<div class="dashboard-shell dash-push">' +
+      '<div class="dash-push-context">همهٔ تعهدات باز: وعده‌های پرداخت، تحویل‌ها و ویزیت‌ها</div>' +
+      (body.trim() ? body : '<div class="empty" style="padding:12px 0;">تعهد بازی وجود ندارد.</div>') +
+      '</div>';
+    if (typeof PromiseUI !== 'undefined') PromiseUI.bindDashboard(root);
+    if (typeof DeliveryUI !== 'undefined') DeliveryUI.bindDashboard(root);
+    if (typeof VisitPlanUI !== 'undefined') VisitPlanUI.bindDashboard(root);
   }
 
   function mount(root, params) {
     if (!root) return function () {};
     const nav = document.getElementById('nav');
     if (nav) nav.style.display = 'none';
+    var section = params && params.section ? String(params.section) : null;
+    if (section === 'commitments') {
+      if (typeof setHeaderTitle === 'function') setHeaderTitle('تعهدات و پیگیری‌ها', {});
+      renderCommitmentsPage(root);
+      return function () {};
+    }
+    if (section && typeof setHeaderTitle === 'function' && sectionTitle(section)) setHeaderTitle(sectionTitle(section), {});
     let cancelled = false;
     let refreshToken = null;
     const isStale = function () { return cancelled; };

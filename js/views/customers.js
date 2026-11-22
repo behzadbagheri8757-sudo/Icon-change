@@ -14,6 +14,7 @@
   let sortHandler = null;
   let chipHandlers = [];
   let listClickHandler = null;
+  let listKeyHandler = null;
   let locFilterHandler = null;
   let locUnassignedHandler = null;
   function customerHref(cid) {
@@ -60,6 +61,10 @@
       });
       if (!vals.some(function (v) { return v > 0; })) return '';
       const max = Math.max.apply(null, vals) || 1;
+      // Presentation only: «declining» = the last 4 weeks bought less than the 4 weeks before them.
+      const prevSum = vals[0] + vals[1] + vals[2] + vals[3];
+      const lastSum = vals[4] + vals[5] + vals[6] + vals[7];
+      const trendCls = (prevSum > 0 && lastSum < prevSum) ? ' is-down' : '';
       const left = 5, right = 91;
       const pts = vals.map(function (v, i) {
         const x = left + i * ((right - left) / (vals.length - 1));
@@ -70,8 +75,45 @@
       const lastParts = last.split(',');
       const dotLeftPct = parseFloat(lastParts[0]);
       const dotTopPct = (parseFloat(lastParts[1]) / 20) * 100;
-      return '<span class="customer-row-spark" aria-label="روند خرید، ۸ هفته اخیر"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="' + pts + '" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></polyline></svg><i class="customer-row-spark-dot" style="left:' + dotLeftPct + '%;top:' + dotTopPct + '%;"></i></span>';
+      const sparkCoords = pts.split(' ').map(function (q) { return q.split(',').map(Number); });
+      const sparkLine = chartSmoothPath(sparkCoords);
+      const sparkArea = sparkLine + ' L ' + sparkCoords[sparkCoords.length - 1][0].toFixed(1) + ' 20 L ' + sparkCoords[0][0].toFixed(1) + ' 20 Z';
+      const sparkId = 'cls-' + String(cid).replace(/[^a-zA-Z0-9_-]/g, '');
+      return '<span class="customer-row-spark' + trendCls + '" aria-label="روند خرید، ۸ هفته اخیر"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><defs><linearGradient id="' + sparkId + '" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="100" y2="0"><stop class="ch-a" offset="0"/><stop class="ch-b" offset="1"/></linearGradient></defs><path class="ch-area" d="' + sparkArea + '"/><path class="ch-line" d="' + sparkLine + '" stroke="url(#' + sparkId + ')" vector-effect="non-scaling-stroke"/></svg><i class="customer-row-spark-dot" style="left:' + dotLeftPct + '%;top:' + dotTopPct + '%;"></i></span>';
     } catch (e) { return ''; }
+  }
+
+  /* Pure: customers that have a valid critical action in the shared queue. Prospect items
+     (prospectId set) and items without a customerId are ignored; no_action and missing or
+     non-string actionType never qualify. */
+  /* actionType values the action engine emits (action.js ACTION_RULES + overrides). Keep in sync. */
+  var ENGINE_ACTION_TYPES = ['check_followup', 'payment_followup', 'visit', 'manager_review', 'investigate', 'call', 'follow_up', 'prospect_followup', 'no_action'];
+  function buildUrgentActionIds(actions) {
+    const ids = new Map();
+    (Array.isArray(actions) ? actions : []).forEach(function (a) {
+      if (!a || a.prospectId || !a.customerId) return;
+      if (typeof a.actionType !== 'string' || ENGINE_ACTION_TYPES.indexOf(a.actionType) < 0) return;
+      if (a.actionType === 'no_action') return;
+      if (a.urgency !== 'critical') return;
+      ids.set(a.customerId, true);
+    });
+    return ids;
+  }
+
+  /* Row label policy (list only): AT MOST ONE label per customer, chosen by priority.
+     A normal customer (green relationship, no flag) gets NO label.
+     Relationship colour / status stays unchanged in the detail page and Quick View. */
+  function customerListBadge(inp) {
+    if (inp.relation === 'red') return { label: 'ریسک قطع رابطه', tone: 'danger' };
+    if (inp.relation === 'yellow') return { label: 'نیازمند توجه', tone: 'warning' };
+    if (inp.urgent) return { label: 'اقدام فوری', tone: 'danger' };
+    if (inp.status === 'lost') return { label: 'از دست رفته', tone: 'muted' };
+    if (inp.active === false) return { label: 'غیرفعال شده', tone: 'muted' };
+    if (inp.behindPattern) return { label: 'عقب‌افتاده', tone: 'warning' };
+    if (inp.status === 'inactive') return { label: 'سرد شده', tone: 'muted' };
+    if (inp.relation === 'insufficient' || inp.status === 'new') return { label: 'سابقه ناکافی', tone: 'muted' };
+    if (inp.relation === 'not_applicable') return { label: 'مشتری یک‌بار‌مصرف', tone: 'muted' };
+    return null;
   }
 
   function renderCustomerListOnly() {
@@ -80,6 +122,16 @@
 
     if (!custPriorityMap) custPriorityMap = buildPriorityLookup();
     const priorityMap = custPriorityMap;
+    // «اقدام فوری» comes from the action engine only (same queue as the dashboard), never from riskLevel.
+    let urgentActionIds = new Map();
+    try {
+      if (custCtx && typeof calculateAllActions === 'function') {
+        urgentActionIds = buildUrgentActionIds(calculateAllActions(custCtx));
+      }
+    } catch (e) {
+      urgentActionIds = new Map(); // calculation error: no urgent badge (never a false urgent)
+      if (typeof console !== 'undefined' && console.warn) console.warn('customer list: action queue unavailable', e);
+    }
     let rows = (data.customers || []).slice();
     const q = (custQuery || '').trim().toLowerCase();
     if (q) {
@@ -162,9 +214,11 @@
 
         // One compact status badge + one activity metric. These are read-only
         // presentations of existing frozen outputs; no new scoring/thresholds.
-        const pr = priorityMap[c.id] || null;
-        const riskLevel = pr ? pr.riskLevel : null;
-        const riskCls = riskLevel ? 'radar-risk-' + riskLevel : '';
+        // v117: one relationship status for list / detail / Quick View (see customerRelationshipHealth).
+        const relation = (typeof customerRelationshipHealth === 'function')
+          ? customerRelationshipHealth(c.id, custCtx) : null;
+        const relColor = relation && relation.color ? relation.color : null;
+        const riskCls = relColor ? 'radar-rel-' + relColor : '';
         const behavior = (typeof customerBehavior === 'function')
           ? (function(){ try { return customerBehavior(c.id, custCtx) || {}; } catch(e){ return {}; } })()
           : {};
@@ -173,15 +227,16 @@
           : 0;
         const status = (typeof customerStatus === 'function') ? customerStatus(c.id, custCtx) : null;
 
-        let badgeLabel = '';
-        let badgeTone = 'neutral';
-        if (c.active === false) { badgeLabel = 'غیرفعال شده'; badgeTone = 'muted'; }
-        else if (riskLevel === 'critical') { badgeLabel = 'فوری'; badgeTone = 'danger'; }
-        else if (riskLevel === 'high') { badgeLabel = 'پیگیری'; badgeTone = 'warning'; }
-        else if (behavior.behindPattern === true) { badgeLabel = 'عقب‌افتاده'; badgeTone = 'warning'; }
-        else if (status === 'lost') { badgeLabel = 'از دست رفته'; badgeTone = 'muted'; }
-        else if (status === 'inactive') { badgeLabel = 'سرد شده'; badgeTone = 'muted'; }
-        else if (status === 'new') { badgeLabel = 'جدید'; badgeTone = 'neutral'; }
+        const badge = customerListBadge({
+          active: c.active,
+          urgent: urgentActionIds.has(c.id),
+          relation: relation ? relation.status : null,
+          behindPattern: behavior.behindPattern === true,
+          status: status
+        });
+        const badgeHtml = badge
+          ? '<span class="customer-row-status badge tone-' + badge.tone + '">' + esc(badge.label) + '</span>'
+          : '';
 
         const days = (typeof customerStats === 'function')
         ? (function(){ try { return customerStats(c.id, custCtx).daysSinceLast; } catch(e){ return Infinity; } })()
@@ -204,9 +259,7 @@
           customerSparklineHtml(c.id, custCtx) +
           '</span>' +
           '<span class="customer-row-meta-line">' +
-          (badgeLabel
-            ? '<span class="customer-row-status badge tone-' + badgeTone + '">' + esc(badgeLabel) + '</span>'
-            : '') +
+          badgeHtml +
           '<span class="customer-row-meta">' + esc(daysText) + '</span>' +
           (watchCount > 0
             ? '<span class="customer-row-watch" aria-label="هشدار فعال" title="' + esc(watchTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>'
@@ -219,7 +272,7 @@
           (t.balance !== 0 ? toman(Math.abs(t.balance)) + ' ت' : '') +
           '</span>' +
           '</span>' +
-          '<button type="button" class="customer-row-detail-hitarea" data-customer-detail="' + esc(c.id) + '" aria-label="مشاهده جزئیات مشتری" title="مشاهده جزئیات مشتری"></button>' +
+          '<span role="button" tabindex="0" class="customer-row-detail-hitarea" data-customer-detail="' + esc(c.id) + '" aria-label="مشاهده جزئیات مشتری" title="مشاهده جزئیات مشتری"></span>' +
           '</a>'
         );
       })
@@ -310,7 +363,7 @@
     };
     root.innerHTML =
       '<div class="field"><input id="customer-search" placeholder="جستجوی نام، آدرس، تلفن، منطقه و…" value="' + esc(custQuery) + '" autocomplete="off"></div>' +
-      '<div class="chip-row" id="customer-chips">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
+      '<div class="chip-row segmented-control" id="customer-chips">' + chip('all','همه') + chip('debt','بدهکار') + chip('settled','تسویه') + chip('credit','بستانکار') + '</div>' +
       '<div class="bp-customer-secondary-filters">' +
       '<div class="btn-row cl-tools">' +
       '<button type="button" class="btn small secondary" id="customer-filter">فیلتر منطقه</button>' +
@@ -366,6 +419,16 @@
       }
     };
     list.addEventListener('click', listClickHandler);
+    /* keyboard / VoiceOver activation for the span[role=button] hit-area (a <button> may not live inside the row's <a>) */
+    listKeyHandler = function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const hit = e.target.closest && e.target.closest('[data-customer-detail]');
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      navigateToCustomer(hit.getAttribute('data-customer-detail'));
+    };
+    list.addEventListener('keydown', listKeyHandler);
     updateLocationFilterIndicator();
     renderCustomerListOnly();
   }
@@ -431,8 +494,10 @@
       if (listClickHandler) {
         const list = document.getElementById('customer-list');
         if (list) list.removeEventListener('click', listClickHandler);
+        if (list && listKeyHandler) list.removeEventListener('keydown', listKeyHandler);
       }
       listClickHandler = null;
+      listKeyHandler = null;
 
       if (fab) {
         fab.style.display = 'none';
