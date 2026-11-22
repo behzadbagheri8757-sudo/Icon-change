@@ -147,11 +147,15 @@
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
         }
         if (!db.objectStoreNames.contains('seller_acks')) {
-          db.createObjectStore('seller_acks', { keyPath: 'id' });
+          var _ackSt = db.createObjectStore('seller_acks', { keyPath: 'id' });
+          try {
+            _ackSt.createIndex('by_customer_status', ['customerId', 'status'], { unique: false });
+            _ackSt.createIndex('by_expiry', 'expiresAt', { unique: false });
+          } catch (_ackIdxErr) { /* ignore */ }
         }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
+        _idb = ev.target.result;
         if (cb) cb(_idb);
       };
       req.onerror = function () { if (cb) cb(null); };
@@ -160,7 +164,79 @@
     }
   }
 
+
+  /* ---------- v117: safe Restore / hydration ----------
+     replace = epoch++ -> memory EXACTLY the new snapshot (no merge) -> LS mirror aligned -> snapshot marked
+     pending -> written to IndexedDB in ONE transaction (clear + every put) when the DB is ready.
+     pending is cleared ONLY in transaction.oncomplete, and only if it still belongs to that snapshot's epoch;
+     error / abort / synchronous failures keep it, and the next hydration / write retries (no timers, no queues).
+     A hydration read remembers the epoch it started in: a late answer after a replace is ignored entirely. */
+  var _epoch = 0;
+  var _pending = null;            // { epoch, cbs, writing }
+  var _idbState = 'opening';      // 'opening' | 'ready' | 'unavailable'
+
+  function _currentRows() {
+    return Object.keys(_mem).map(function (k) { return _mem[k]; });
+  }
+
+  function _runCbs(snap, ok) {
+    var cbs = snap.cbs || [];
+    snap.cbs = [];
+    for (var i = 0; i < cbs.length; i++) {
+      try { cbs[i](ok); } catch (e) { /* caller errors never break storage */ }
+    }
+  }
+
+  function _flushPending() {
+    var snap = _pending;
+    if (!snap || snap.writing) return;
+    if (!_idb) {
+      // no IndexedDB at all (unsupported / failed to open): memory + LS mirror are the persistence layer
+      if (_idbState === 'unavailable') { _pending = null; _runCbs(snap, true); }
+      return;                      // still opening: the first hydration / write after it is ready flushes
+    }
+    var tx = null;
+    try {
+      tx = _idb.transaction(BASELINE_PARAMS.idbStore, 'readwrite');
+      snap.writing = true;
+      tx.oncomplete = function () {
+        snap.writing = false;
+        if (_pending === snap && _epoch === snap.epoch) { _pending = null; _runCbs(snap, true); }
+      };
+      var failed = function () {
+        snap.writing = false;      // pending stays: retried by the next hydration / write
+        _runCbs(snap, false);
+      };
+      tx.onerror = failed;
+      tx.onabort = failed;
+      var st = tx.objectStore(BASELINE_PARAMS.idbStore);
+      st.clear();
+      var rows = _currentRows();
+      for (var i = 0; i < rows.length; i++) st.put(rows[i]);
+    } catch (e) {
+      snap.writing = false;
+      try { if (tx) tx.abort(); } catch (eA) { /* ignore */ }
+      _runCbs(snap, false);
+    }
+  }
+
+  function replaceAllBaselines(rows, onDone) {
+    var prev = _pending;
+    _epoch++;
+    if (prev) _runCbs(prev, false);       // superseded snapshot: its caller must not assume success
+    _mem = Object.create(null);
+    _dirty = Object.create(null);
+    (Array.isArray(rows) ? rows : []).forEach(function (r) {
+      if (r && r.key != null) _mem[r.key] = JSON.parse(JSON.stringify(r));
+    });
+    _saveLS();
+    _pending = { epoch: _epoch, cbs: (typeof onDone === 'function') ? [onDone] : [], writing: false };
+    _flushPending();
+    return { epoch: _epoch, dbPending: !!_pending };
+  }
+
   function _idbPut(rec) {
+    if (_pending) { _flushPending(); return; }
     if (!_idb || !rec) return;
     try {
       var tx = _idb.transaction(BASELINE_PARAMS.idbStore, 'readwrite');
@@ -169,28 +245,33 @@
   }
 
   function _idbHydrate(cb) {
-    if (!_idb) { if (cb) cb(); return; }
+    if (_pending) { _flushPending(); if (cb) cb(false); return; }
+    if (!_idb) { if (cb) cb(false); return; }
     try {
+      var startEpoch = _epoch;
       var tx = _idb.transaction(BASELINE_PARAMS.idbStore, 'readonly');
       var req = tx.objectStore(BASELINE_PARAMS.idbStore).getAll();
       req.onsuccess = function () {
+        if (_epoch !== startEpoch || _pending) { _flushPending(); if (cb) cb(false); return; }
         var rows = req.result || [];
         for (var i = 0; i < rows.length; i++) {
           var row = rows[i];
           if (row && row.key && !_dirty[row.key]) _mem[row.key] = row;
         }
         _saveLS();
-        if (cb) cb();
+        if (cb) cb(true);
       };
-      req.onerror = function () { if (cb) cb(); };
+      req.onerror = function () { if (cb) cb(false); };
     } catch (e) {
-      if (cb) cb();
+      if (cb) cb(false);
     }
   }
 
   _loadLS();
   _openIdb(function (db) {
+    _idbState = db ? 'ready' : 'unavailable';
     if (db) _idbHydrate(function () {});
+    else _flushPending();
   });
 
   function _store(customerId, productId, stats, reason) {
@@ -323,6 +404,8 @@
   }
 
   global.getBaseline = getBaseline;
+  global.replaceAllBaselines = replaceAllBaselines;
+  global._baselineExportRows = _currentRows;   // test seam
   global.updateBaselineIfShifted = updateBaselineIfShifted;
   global.clearBaselineCache = clearBaselineCache;
   global.BASELINE_PARAMS = BASELINE_PARAMS;

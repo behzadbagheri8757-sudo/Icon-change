@@ -73,7 +73,9 @@
     return new Date().toISOString().slice(0, 10);
   }
 
-  function _daysAgo(iso) {
+  function _daysAgo(iso, ctx) {
+    // v117: calendar-day distance to the shared reference date (ctx.asOfDate); invalid => null
+    if (typeof analysisDaysAgo === 'function') return analysisDaysAgo(iso, ctx);
     if (typeof daysAgo === 'function') {
       var d = daysAgo(iso);
       return (d != null && isFinite(d)) ? d : null;
@@ -266,7 +268,8 @@
           memberProductIds: [],
           memberSet: Object.create(null),
           purchases: [],
-          returns: []
+          returns: [],
+          issues: []          // v117: quantity-quality issues (e.g. ambiguous raisin-pilaf units)
         };
       }
       var pr = map[key];
@@ -278,9 +281,11 @@
     }
 
     var invoices = Array.isArray(data.invoices) ? data.invoices : [];
+    var custInvIds = Object.create(null);
     for (var i = 0; i < invoices.length; i++) {
       var inv = invoices[i];
       if (!inv || inv.customerId !== customerId) continue;
+      if (inv.id) custInvIds[inv.id] = true;
       var items = inv.items || [];
       // Merge duplicate lines within the same invoice at FAMILY level:
       // one purchase event per invoice per Family (no frequency inflation).
@@ -293,11 +298,20 @@
         if (!byFam[fidI]) {
           byFam[fidI] = { qty: 0, revenue: 0, members: Object.create(null) };
         }
+        // v117: raisin-pilaf rows of one product mixing the weight / legacy-kg conventions => unit ambiguous
+        if (typeof _isRaisinPilafItem === 'function' && typeof _raisinPilafProductIds === 'function') {
+          var rIds = byFam.__raisinIds || (byFam.__raisinIds = _raisinPilafProductIds());
+          if (_isRaisinPilafItem(it, rIds)) {
+            var rk = '__r:' + it.productId;
+            var rs = byFam[rk] || (byFam[rk] = { w: false, l: false, fam: fidI });
+            if (it.weight && it.weight > 0) rs.w = true; else rs.l = true;
+          }
+        }
         byFam[fidI].qty += it.qty;
         byFam[fidI].revenue += (it.qty * (it.price || 0)) - (it.discount || 0);
         byFam[fidI].members[it.productId] = (byFam[fidI].members[it.productId] || 0) + it.qty;
       }
-      var fids = Object.keys(byFam);
+      var fids = Object.keys(byFam).filter(function (kk) { return kk.indexOf('__') !== 0; });
       for (var k = 0; k < fids.length; k++) {
         var m = byFam[fids[k]];
         // Dominant member of this invoice (largest qty; id tie-break) is the
@@ -313,6 +327,11 @@
         }
         var pair = ensure(domPid);
         for (var mj = 0; mj < memberIds.length; mj++) ensure(memberIds[mj]);
+        var ambiguousUnit = false;
+        Object.keys(byFam).forEach(function (kk) {
+          if (kk.indexOf('__r:') === 0 && byFam[kk].fam === fids[k] && byFam[kk].w && byFam[kk].l) ambiguousUnit = true;
+        });
+        if (ambiguousUnit) pair.issues.push({ code: 'unit_ambiguous', invoiceId: inv.id || null, paymentId: null });
         pair.purchases.push({
           date: inv.date,
           qty: m.qty,
@@ -336,12 +355,18 @@
         if (!ret || !ret.productId) continue;
         if (!(ret.qty > 0)) continue;
         var pairR = ensure(ret.productId);
+        var rStatus;
+        if (!pay.invoiceId) rStatus = 'unlinked';
+        else if (custInvIds[pay.invoiceId]) rStatus = 'linked';
+        else rStatus = invoices.some(function (xi) { return xi && xi.id === pay.invoiceId; }) ? 'foreign' : 'unresolved';
         pairR.returns.push({
           date: pay.date,
           productId: ret.productId,
           qty: ret.qty,
           price: ret.price || 0,
-          invoiceId: pay.invoiceId || null
+          invoiceId: pay.invoiceId || null,
+          paymentId: pay.id || null,
+          sourceStatus: rStatus
         });
       }
     }
@@ -358,6 +383,12 @@
       // Representative SKU = SKU of the most recent purchase event (display
       // / context only; never used as Family identity).
       var pr2 = map[keys[x]];
+      // v117: a linked return whose source invoice holds no purchase of this Family cannot be placed
+      pr2.returns.forEach(function (rr) {
+        if (rr.sourceStatus === 'linked' && !pr2.purchases.some(function (pp) { return pp.invoiceId === rr.invoiceId; })) {
+          rr.sourceStatus = 'not_in_source_invoice';
+        }
+      });
       if (pr2.purchases.length) {
         pr2.productId = pr2.purchases[pr2.purchases.length - 1].productId;
       }
@@ -415,10 +446,10 @@
   /* ---------------------------------------------------------
      Stage 3 — Current state (F3 event-based recent window)
      --------------------------------------------------------- */
-  function _computeCurrent(pair, historical, recent, customerInvoicesList) {
+  function _computeCurrent(pair, historical, recent, customerInvoicesList, ctx) {
     var purchases = pair.purchases;
     var last = purchases.length ? purchases[purchases.length - 1] : null;
-    var daysSinceLast = last ? _daysAgo(last.date) : null;
+    var daysSinceLast = last ? _daysAgo(last.date, ctx) : null;
     var currentGap = null;
     if (historical.typicalCycle != null && historical.typicalCycle > 0 && daysSinceLast != null) {
       currentGap = daysSinceLast - historical.typicalCycle;
@@ -437,7 +468,7 @@
     var recentFrequency = 0;
     if (freqWindowDays != null) {
       for (var i = 0; i < purchases.length; i++) {
-        var d = _daysAgo(purchases[i].date);
+        var d = _daysAgo(purchases[i].date, ctx);
         if (d != null && d <= freqWindowDays) recentFrequency++;
       }
     }
@@ -658,48 +689,63 @@
   /* ---------------------------------------------------------
      Stage 7 — Context
      --------------------------------------------------------- */
+  /* v117: returns belong to the recent window by their SOURCE INVOICE (a linked return follows the invoice it
+     returns), never by the return's own registration date. Unlinked / unresolved / foreign returns carry no
+     guessed quantity here; they are reported by _recentQuantityQuality instead. */
+  function _recentWindowInvoiceIds(pair, recentWindowSize) {
+    var purchases = pair.purchases;
+    var startIdx = Math.max(0, purchases.length - recentWindowSize);
+    var ids = Object.create(null);
+    for (var i = startIdx; i < purchases.length; i++) if (purchases[i].invoiceId) ids[purchases[i].invoiceId] = true;
+    return ids;
+  }
+
   function _netRecentQty(pair, recentWindowSize) {
     var purchases = pair.purchases;
     var startIdx = Math.max(0, purchases.length - recentWindowSize);
-    var windowPurchases = purchases.slice(startIdx);
     var gross = 0;
-    var earliest = null;
-    for (var i = 0; i < windowPurchases.length; i++) {
-      gross += windowPurchases[i].qty || 0;
-      if (!earliest || String(windowPurchases[i].date) < String(earliest)) {
-        earliest = windowPurchases[i].date;
-      }
-    }
+    for (var i = startIdx; i < purchases.length; i++) gross += purchases[i].qty || 0;
+    var ids = _recentWindowInvoiceIds(pair, recentWindowSize);
     var returned = 0;
-    if (earliest) {
-      for (var r = 0; r < pair.returns.length; r++) {
-        var ret = pair.returns[r];
-        if (String(ret.date || '') >= String(earliest)) returned += ret.qty || 0;
-      }
+    for (var r = 0; r < pair.returns.length; r++) {
+      var ret = pair.returns[r];
+      if (ret.sourceStatus === 'linked' && ids[ret.invoiceId]) returned += ret.qty || 0;
     }
     return Math.max(0, gross - returned);
   }
 
-  // BUGFIX (Audit #12): mirrors _netRecentQty's own recent-window/earliest
-  // computation, but exposes whether any return actually falls inside that
-  // window. Kept separate from _netRecentQty (rather than changing its
-  // return shape) so its one existing call site is untouched.
+  // Exposes whether any LINKED return actually belongs to the recent window (by source invoice).
   function _hasReturnsInWindow(pair, recentWindowSize) {
-    var purchases = pair.purchases;
-    var startIdx = Math.max(0, purchases.length - recentWindowSize);
-    var windowPurchases = purchases.slice(startIdx);
-    var earliest = null;
-    for (var i = 0; i < windowPurchases.length; i++) {
-      if (!earliest || String(windowPurchases[i].date) < String(earliest)) {
-        earliest = windowPurchases[i].date;
-      }
-    }
-    if (!earliest || !pair.returns) return false;
+    var ids = _recentWindowInvoiceIds(pair, recentWindowSize);
     for (var r = 0; r < pair.returns.length; r++) {
       var ret = pair.returns[r];
-      if (String(ret.date || '') >= String(earliest)) return true;
+      if (ret.sourceStatus === 'linked' && ids[ret.invoiceId]) return true;
     }
     return false;
+  }
+
+  /* v117: quantity quality of the recent window. 'uncertain' when a return that could touch the window cannot
+     be placed (unlinked / unresolved source / foreign source / item absent from its source invoice — only
+     returns not older than the window's earliest purchase can touch it) or the window's units are ambiguous. */
+  function _recentQuantityQuality(pair, recentWindowSize) {
+    var reasons = [];
+    var purchases = pair.purchases;
+    var startIdx = Math.max(0, purchases.length - recentWindowSize);
+    var earliest = null;
+    for (var i = startIdx; i < purchases.length; i++) {
+      if (!earliest || String(purchases[i].date) < String(earliest)) earliest = purchases[i].date;
+    }
+    var ids = _recentWindowInvoiceIds(pair, recentWindowSize);
+    (pair.issues || []).forEach(function (is) {
+      if (is.invoiceId && ids[is.invoiceId]) reasons.push({ code: is.code, paymentId: is.paymentId || null, invoiceId: is.invoiceId });
+    });
+    var codeOf = { unlinked: 'unlinked_return', unresolved: 'source_invoice_unresolved', foreign: 'source_invoice_foreign', not_in_source_invoice: 'return_item_not_in_source_invoice' };
+    (pair.returns || []).forEach(function (ret) {
+      if (ret.sourceStatus === 'linked') return;
+      if (earliest && ret.date && String(ret.date) < String(earliest)) return;   // cannot touch the window
+      reasons.push({ code: codeOf[ret.sourceStatus] || 'unlinked_return', paymentId: ret.paymentId || null, invoiceId: ret.invoiceId || null });
+    });
+    return { quality: reasons.length ? 'uncertain' : 'certain', reasons: reasons };
   }
 
   // familyId -> { productId: true } for products bought (qty>0) in the late
@@ -842,9 +888,12 @@
     }
 
     var recent = _computeBaseline(pair.purchases, SKU_PARAMS.recentWindowSize);
-    var current = _computeCurrent(pair, historical, recent, custInvs);
+    var current = _computeCurrent(pair, historical, recent, custInvs, ctx);
     var importance = _computeImportance(pair, historical, customerId, totalRev, totalProfit, custInvs.length, ctx);
     var confidence = _computeConfidence(historical, recent, pair);
+    // v117: quantity uncertainty never keeps full confidence (existing low-history factor, no new scoring model)
+    var qtyQuality = _recentQuantityQuality(pair, SKU_PARAMS.recentWindowSize);
+    if (qtyQuality.quality === 'uncertain') confidence = _clamp01(confidence * SKU_PARAMS.lowHistoryConfidenceFactor);
     var trend = _trendClass(historical, recent);
     var stockOut = _familyStockOut(pair.familyId, pair.memberProductIds, pair.productId, ctx);
     var productName = _productName(pair.productId, ctx);
@@ -1095,6 +1144,8 @@
         },
         evidence: (function () {
           evidence.memberProductIds = pair.memberProductIds ? pair.memberProductIds.slice() : [pair.productId];
+          evidence.quantityQuality = qtyQuality.quality;
+          evidence.uncertaintyReasons = qtyQuality.reasons;
           return evidence;
         })()
       }),
@@ -1281,7 +1332,7 @@
       var historical = _computeBaseline(pair.purchases, null);
       if (historical.purchaseCount < 1) continue;
       var recent = _computeBaseline(pair.purchases, SKU_PARAMS.recentWindowSize);
-      var current = _computeCurrent(pair, historical, recent, custInvs);
+      var current = _computeCurrent(pair, historical, recent, custInvs, ctx);
       // Same stock-context semantics as Confirmed: only used to suppress
       // timing/quantity-style dims below, never a full exclusion (unlike
       // the active gate above).
@@ -1324,6 +1375,9 @@
         historicalPresenceRate: current.historicalPresenceRate,
         currentBasketPresence: current.currentBasketPresence,
         purchaseCount: historical.purchaseCount,
+        // Last purchase of the whole Family (pair.purchases is date-ascending: sorted at the end of
+        // _aggregatePairMap; same value _computeCurrent uses for currentGap). Same set as typicalCycle/purchaseCount.
+        lastPurchaseDate: current.lastPurchaseDate,
         stockOut: stockOut
       });
     }

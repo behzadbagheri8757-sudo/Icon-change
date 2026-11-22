@@ -15,6 +15,26 @@
 
   var SEV_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
 
+  // extractCustomerSignals is memoized and may already have ACK effects applied by Risk.
+  // Clear only derived ACK annotations on the copy before applying the live ACK set once.
+  function _freshSignalCopy(s) {
+    if (!s) return s;
+    var c = Object.assign({}, s);
+    c.ackRiskDelta = undefined;
+    c.ackPriorityDelta = undefined;
+    c.ackIds = undefined;
+    c.ackPriorityById = undefined;
+    c.ackDecision = undefined;
+    c.ackExpiresAt = undefined;
+    c.ackScope = undefined;
+    c.ackActionEffect = undefined;
+    c.ackUrgency = undefined;
+    c.ackActionText = undefined;
+    c.ackActionType = undefined;
+    c.ackReviewed = undefined;
+    return c;
+  }
+
   function _sevRank(s) {
     if (!s) return 0;
     var r = SEV_RANK[s.severity];
@@ -109,6 +129,17 @@
       signals = [];
     }
 
+    // ACK: live seller decisions must shape the story exactly like Risk/Action. Applied to COPIES:
+    // the memoized signal objects are shared with risk.js (which applies ACKs in place), so mutating
+    // them here would double-count ackRiskDelta when the story runs before Risk on the same context.
+    try {
+      if (typeof isAckLayerActive === 'function' && isAckLayerActive() &&
+          typeof getActiveAcksForCustomer === 'function' && typeof applyAcksToSignals === 'function') {
+        signals = signals.map(_freshSignalCopy);
+        applyAcksToSignals(signals, getActiveAcksForCustomer(customerId));
+      }
+    } catch (eAckS) { /* fail-open */ }
+
     // Prefer priority signals if already computed upstream (same set, avoid double work)
     // Still use extractCustomerSignals as source of truth when available.
 
@@ -120,6 +151,8 @@
       var s = signals[i];
       if (!s) continue;
       if (!_isActive(s)) continue;
+      if (s.ackActionEffect === 'suppress') continue; // ACK: seller decision suppresses this signal
+      if (s.ackReviewed) continue; // V4: reviewed in a visit — not a fresh risk to narrate
       if (s.seasonallySuppressed) continue; // P-06: do not narrate false seasonal declines
       if (s.type === 'risk') risks.push(s);
       else if (s.type === 'opportunity') opportunities.push(s);

@@ -37,6 +37,7 @@
     'LONG_NO_VISIT',
     'VISIT_OVERDUE',
     'VISIT_CONVERSION_LOW',
+    'WATCH_FOLLOWUP_DUE',
     'OFFER_DEFERRED_FOLLOWUP',
     'PURCHASE_GROWTH',
   ];
@@ -128,6 +129,13 @@
       urgency: 'low',
       action: 'بررسی نرخ تبدیل ویزیت به سفارش',
     },
+    // v117: a Watch follow-up the seller scheduled himself (lifecycle pending task) whose due day has come.
+    // Built in this file from the real Watch lifecycle; never persisted, never a Signal.
+    WATCH_FOLLOWUP_DUE: {
+      actionType: 'follow_up',
+      urgency: 'medium',
+      action: 'پیگیری محصولی که زمان پیگیری‌اش رسیده',
+    },
     // Evidence-based opportunity (built in this file from a RECORDED `deferred` visit offer;
     // never persisted, never a Signal). Same urgency tier as PURCHASE_GROWTH.
     OFFER_DEFERRED_FOLLOWUP: {
@@ -148,6 +156,16 @@
     urgency: 'low',
     reason: 'بدون Signal فعال',
   };
+
+  /* v117: shared analysis reference date (ctx.asOfDate). Fallback only when no context / helper exists. */
+  function _aToday(ctx) {
+    if (typeof analysisToday === 'function') return analysisToday(ctx);
+    return (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0, 10);
+  }
+  function _aDaysAgo(iso, ctx) {
+    if (typeof analysisDaysAgo === 'function') return analysisDaysAgo(iso, ctx);
+    return (typeof daysAgo === 'function') ? daysAgo(iso) : null;
+  }
 
   function _actionPriorityRank(category) {
     const idx = ACTION_PRIORITY_ORDER.indexOf(category);
@@ -218,12 +236,12 @@
       } catch (e) { /* ignore */ }
     }
     // Fallback: visitCadence + last visit if both available
-    if (typeof visitCadence === 'function' && typeof customerBehavior === 'function' && typeof daysAgo === 'function') {
+    if (typeof visitCadence === 'function' && typeof customerBehavior === 'function') {
       try {
         var cadence = visitCadence(customerId, ctx);
         var b = customerBehavior(customerId, ctx);
         if (cadence && b && b.lastVisit && b.lastVisit.date) {
-          var days = daysAgo(b.lastVisit.date);
+          var days = _aDaysAgo(b.lastVisit.date, ctx);
           if (days != null && isFinite(days) && days >= 0) {
             var buffer = Math.min(7, cadence * 0.5);
             // due soon: within cadence window (not heavily overdue)
@@ -283,6 +301,10 @@
     }
 
     const visits = customer && Array.isArray(customer.visits) ? customer.visits : [];
+    // ACK mode: rejection reasons live in the SellerAck ledger (with expiry / cancel). The raw visit
+    // reaction must not keep hiding a signal after its ACK expired or was cancelled.
+    var ackModeOn = false;
+    try { ackModeOn = (typeof isAckLayerActive === 'function' && isAckLayerActive()); } catch (eAm0) { ackModeOn = false; }
 
     function validISODate(value) {
       return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -354,7 +376,7 @@
     return signals.filter(function (signal) {
       if (!signal || !signal.category) return true;
 
-      if (skuCategories[signal.category] && signal.productId != null && signal.productId !== '' && signal.productId !== 'multi') {
+      if (!ackModeOn && skuCategories[signal.category] && signal.productId != null && signal.productId !== '' && signal.productId !== 'multi') {
         const context = latestProductContext(signal);
         if (context && context.reaction === 'rejected' &&
             (context.rejectionReason === 'still_stock' || context.rejectionReason === 'unavailable')) {
@@ -395,7 +417,7 @@
   function _isActionEligible(winnerSignal, cid, ctx) {
     try {
       if (!winnerSignal || winnerSignal.category !== 'PURCHASE_DECLINE_SEVERE') return true;
-      if (typeof customerBehavior !== 'function' || typeof daysAgo !== 'function') return true;
+      if (typeof customerBehavior !== 'function') return true;
       if (typeof PERSISTENCE_PARAMS === 'undefined' || !PERSISTENCE_PARAMS ||
           typeof PERSISTENCE_PARAMS.windowDays !== 'number' ||
           !isFinite(PERSISTENCE_PARAMS.windowDays) || !(PERSISTENCE_PARAMS.windowDays > 0)) return true;
@@ -439,7 +461,7 @@
           const visit = visits[vi];
           if (!visit || typeof visit.date !== 'string' || !isoRe.test(visit.date) ||
               !Array.isArray(visit.offeredProducts)) continue;
-          const age = daysAgo(visit.date);
+          const age = _aDaysAgo(visit.date, ctx);
           if (age == null || !isFinite(age) || age < 0 || age > windowDays) continue;                // not a recent valid visit
           for (let oi = 0; oi < visit.offeredProducts.length; oi++) {
             const op = visit.offeredProducts[oi];
@@ -457,7 +479,7 @@
         // bought this Family after that visit => the recorded outcome is superseded: keep the action
         for (let ii = 0; ii < invoices.length; ii++) {
           const inv = invoices[ii];
-          if (!inv || inv.customerId !== cid || typeof inv.date !== 'string' || !(inv.date >= latest.date)) continue;
+          if (!inv || inv.customerId !== cid || typeof inv.date !== 'string' || !(inv.date > latest.date)) continue;
           const items = Array.isArray(inv.items) ? inv.items : [];
           for (let ti = 0; ti < items.length; ti++) {
             const it = items[ti];
@@ -512,8 +534,9 @@
 
   const CTX_SUPPRESS_CODES = {
     still_stock: true, unavailable: true, no_need: true, not_wanted: true, follow_up_later: true,
+    dismiss: true,   // ACK only
   };
-  const CTX_OBSTACLE_LABEL = { price: 'قیمت', competitor: 'رقیب', quality: 'کیفیت' };
+  const CTX_OBSTACLE_LABEL = { price: 'قیمت', competitor: 'رقیب', quality: 'کیفیت', ack_stock_unknown: 'موجودی دارد (منبع نامشخص)', ack_stock_competitor: 'موجودی از رقیب' };
   const CTX_PRODUCT_SIGNALS = {
     SKU_DELAY: true, SKU_QUANTITY_DROP: true, SKU_FREQUENCY_DROP: true,
     LINE_DROP: true, COMBINED_SKU_DETERIORATION: true,
@@ -584,12 +607,36 @@
       (byFam[fam] || (byFam[fam] = [])).push(rec);
     }
 
+    // ACK mode: the SellerAck ledger is the single reference for seller decisions
+    // (rejections from visits/invoices/Watch). Visits still contribute their non-rejection
+    // reactions (deferred / accepted), which are not ACK decisions. Dormant => legacy sources.
+    var ackMode = false;
+    try { ackMode = (typeof isAckLayerActive === 'function' && isAckLayerActive() && typeof getActiveAcksForCustomer === 'function'); } catch (eAm) { ackMode = false; }
+    if (ackMode) {
+      try {
+        getActiveAcksForCustomer(cid).forEach(function (a) {
+          if (!a || a.scope !== 'product' || !a.familyId) return;
+          var ad = String(a.createdAt || '').slice(0, 10);
+          if (!isoRe.test(ad)) return;
+          var effAct = a.effects && a.effects.action;
+          var rcode = (effAct === 'change_to') ? ((a.decision === 'still_stock') ? 'ack_' + (a.stockSource === 'unknown' ? 'stock_unknown' : 'stock_competitor') : a.decision) : a.decision;
+          add(a.familyId, {
+            source: 'ack', code: rcode, productId: a.productId, comment: a.note || '',
+            ackText: a.effects && a.effects.actionText || null, ackType: a.effects && a.effects.actionType || null,
+            ackUrgency: a.effects && a.effects.urgency || null,
+            date: ad, key: String(a.createdAt), held: true, followUpDate: a.followUpDate || null,
+            expiresAt: a.expiresAt || null, ackId: a.id,
+          });
+        });
+      } catch (eAck) { ackMode = false; }
+    }
+
     visits.forEach(function (visit) {
       if (!visit || typeof visit.date !== 'string' || !isoRe.test(visit.date) || !Array.isArray(visit.offeredProducts)) return;
       visit.offeredProducts.forEach(function (op) {
         if (!op || !op.productId) return;
         var code = null;
-        if (op.reaction === 'rejected') code = op.rejectionReason || null;
+        if (op.reaction === 'rejected') code = ackMode ? null : (op.rejectionReason || null);
         else if (op.reaction === 'deferred') code = 'deferred';
         else if (op.reaction === 'accepted') code = 'accepted';
         if (!code) return;
@@ -600,7 +647,7 @@
       });
     });
 
-    if (typeof getWatchResponsesForCustomer === 'function') {
+    if (!ackMode && typeof getWatchResponsesForCustomer === 'function') {
       try {
         (getWatchResponsesForCustomer(cid) || []).forEach(function (w) {
           if (!w || !w.productId || !w.code || typeof w.recordedAt !== 'string') return;
@@ -633,16 +680,21 @@
       var list = byFam[fam];
       if (!list || !list.length) return CTX_NONE;
       var r = list[0];                                   // the newest recorded response decides
-      if (lastPurchase[fam] && lastPurchase[fam] >= r.date) return CTX_NONE;   // superseded by a later purchase
+      if (lastPurchase[fam] && lastPurchase[fam] > r.date) return CTX_NONE;   // superseded by a later purchase
       var current = false;
-      if (r.source === 'watch' && r.held) {
+      if (r.source === 'ack') {
+        current = true;                                  // only LIVE ACKs are loaded; expiry is the ACK's own
+      } else if (r.source === 'watch' && r.held) {
         current = true;                                  // unreleased seller decision: held by the lifecycle
-      } else if (windowDays != null && typeof daysAgo === 'function') {
-        var age = daysAgo(r.date);
+      } else if (windowDays != null) {
+        var age = _aDaysAgo(r.date, ctx);
         current = (age != null && isFinite(age) && age >= 0 && age <= windowDays);
       }
       if (!current) return CTX_NONE;
       var base = { code: r.code, source: r.source, date: r.date, key: r.key, productId: r.productId, comment: r.comment };
+      if (r.source === 'ack') { base.followUpDate = r.followUpDate || null; base.expiresAt = r.expiresAt || null; base.ackText = r.ackText || null; base.ackType = r.ackType || null; base.ackUrgency = r.ackUrgency || null; }
+      // ACK follow_up_later DEFERS (follow-up text + date); it does not hide the signal.
+      if (r.source === 'ack' && r.code === 'follow_up_later') return Object.assign({ kind: 'followup' }, base);
       if (CTX_SUPPRESS_CODES[r.code]) return Object.assign({ kind: 'suppress' }, base);
       if (r.code === 'deferred') return Object.assign({ kind: 'deferred' }, base);
       if (CTX_OBSTACLE_LABEL[r.code] || (r.code === 'other' && r.comment && r.comment.trim())) {
@@ -651,7 +703,7 @@
       return CTX_NONE;
     }
 
-    return { famOf: famOf, windowDays: windowDays, byFam: byFam, lastPurchase: lastPurchase, visits: visits, verdict: verdict };
+    return { famOf: famOf, windowDays: windowDays, byFam: byFam, lastPurchase: lastPurchase, visits: visits, verdict: verdict, ctx: ctx || null };
   }
 
   // Product subjects of a signal (null = not product-specific: never touched by this layer).
@@ -683,10 +735,12 @@
     if (!Array.isArray(signals) || !signals.length) return signals || [];
     var out = [];
     signals.forEach(function (sig) {
+      // ACK account-level suppress (P3): never touches IMMEDIATE categories (not flagged by ack.js).
+      if (sig && sig.ackScope === 'account' && sig.ackActionEffect === 'suppress') return;
       var subs = _signalSubjects(sig, rc.famOf);
       if (!subs) { out.push(sig); return; }
       var total = 0, suppressedW = 0, suppressedN = 0;
-      var remaining = [], obstacles = [], deferred = [];
+      var remaining = [], obstacles = [], deferred = [], followups = [];
       subs.forEach(function (sub) {
         total += sub.weight;
         var v = rc.verdict(sub.fam);
@@ -694,11 +748,12 @@
         remaining.push(sub);
         if (v.kind === 'obstacle') obstacles.push({ sub: sub, v: v });
         else if (v.kind === 'deferred') deferred.push({ sub: sub, v: v });
+        else if (v.kind === 'followup') followups.push({ sub: sub, v: v });
       });
       if (total > 0 && (suppressedW / total) >= ACTION_ELIGIBILITY_MIN_COVERAGE) return;   // not eligible now
-      if (!suppressedN && !obstacles.length && !deferred.length) { out.push(sig); return; }
+      if (!suppressedN && !obstacles.length && !deferred.length && !followups.length) { out.push(sig); return; }
       out.push(Object.assign({}, sig, {
-        recordedContext: { remaining: remaining, obstacles: obstacles, deferred: deferred, suppressedCount: suppressedN },
+        recordedContext: { remaining: remaining, obstacles: obstacles, deferred: deferred, followups: followups, suppressedCount: suppressedN },
       }));
     });
     return out;
@@ -735,7 +790,7 @@
   }
 
   function _recordedNextActionContext(rc) {
-    if (!rc || rc.windowDays == null || typeof daysAgo !== 'function') return null;
+    if (!rc || rc.windowDays == null) return null;
     var latest = null;
     rc.visits.forEach(function (v) {
       if (!v || typeof v.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v.date)) return;
@@ -743,7 +798,7 @@
       if (!latest || key > latest.key) latest = { key: key, visit: v };
     });
     if (!latest || typeof latest.visit.nextAction !== 'string' || !latest.visit.nextAction.trim()) return null;
-    var age = daysAgo(latest.visit.date);
+    var age = _aDaysAgo(latest.visit.date, rc.ctx);
     if (age == null || !isFinite(age) || age < 0 || age > rc.windowDays) return null;
     var label = latest.visit.nextAction.trim();
     return { label: label, line: 'اقدام بعدی ثبت‌شده در ویزیت ' + _fmtDateFa(latest.visit.date) + ': ' + label };
@@ -754,6 +809,9 @@
     var text = rule.action;
     var reason = winner.reason;
     var extra = [];
+    var actionTypeOverride = null;
+    var urgencyOverride = null;
+    var ackWorded = false;      // the ACK already carries its own complete wording
     var rcx = winner.recordedContext || null;
     var cat = winner.category;
     var nameOf = function (sub) { return _catalogName(sub.productId) || (_validName(sub.name) ? sub.name : null); };
@@ -773,6 +831,8 @@
           ? 'محصول کلیدی «' + vn[0] + '» دیگر خریداری نمی‌شود'
           : 'محصولات کلیدی (' + vn.join('، ') + ') دیگر خریداری نمی‌شوند';
       }
+    } else if (cat === 'WATCH_FOLLOWUP_DUE') {
+      if (_validName(winner.productName)) text += ' («' + winner.productName + '»)';
     } else if (cat === 'OFFER_DEFERRED_FOLLOWUP') {
       var oPhrase = _namesPhrase(((winner.evidence && winner.evidence.offers) || []).map(function (o) { return o.name; }));
       if (oPhrase) text += ' (' + oPhrase + ')';
@@ -789,6 +849,29 @@
         var pPhrase = _namesPhrase(rcx.obstacles.map(function (o) { return nameOf(o.sub); }));
         text = 'پیگیری قیمت' + (pPhrase ? ' (' + pPhrase + ')' : '');
       }
+      // ACK-derived wording: the text/type stored on the ACK itself (price, competitor, quality,
+      // still_stock+competitor, still_stock+unknown). Only when ALL remaining subjects share one ACK text.
+      var allRemaining = rcx.remaining.length > 0 && !rcx.deferred.length;
+      if (allRemaining && !rcx.followups.length && rcx.obstacles.length === rcx.remaining.length &&
+          rcx.obstacles.every(function (o) { return o.v.source === 'ack' && o.v.ackText; })) {
+        var firstTxt = rcx.obstacles[0].v.ackText;
+        if (rcx.obstacles.every(function (o) { return o.v.ackText === firstTxt; })) {
+          var phr = _namesPhrase(rcx.obstacles.map(function (o) { return nameOf(o.sub); }));
+          // the "ask us-or-competitor" sentence is already complete; the others take the product names
+          text = (firstTxt.indexOf('مشتری گفت') === 0) ? firstTxt : (firstTxt + (phr ? ' (' + phr + ')' : ''));
+          actionTypeOverride = rcx.obstacles[0].v.ackType || null;
+          urgencyOverride = rcx.obstacles[0].v.ackUrgency || null;
+          ackWorded = true;
+        }
+      }
+      if (rcx.followups && rcx.followups.length && rcx.followups.length === rcx.remaining.length && !rcx.obstacles.length) {
+        var fv = rcx.followups[0].v;
+        var fuDate = fv.followUpDate || fv.expiresAt;
+        var fuPhrase = _namesPhrase(rcx.followups.map(function (o) { return nameOf(o.sub); }));
+        text = 'پیگیری در تاریخ ' + (fuDate ? _fmtDateFa(String(fuDate).slice(0, 10)) : '') + (fuPhrase ? ' (' + fuPhrase + ')' : '');
+        actionTypeOverride = 'follow_up';
+        urgencyOverride = 'low';
+      }
       var seen = {};
       // with exactly one product left whose name is already in the action text, the name adds nothing
       var prefix = function (sub) {
@@ -797,7 +880,7 @@
         if (rcx.remaining.length === 1 && text.indexOf('«' + nm + '»') >= 0) return '';
         return '«' + nm + '»: ';
       };
-      rcx.obstacles.slice(0, 2).forEach(function (o) {
+      (ackWorded ? [] : rcx.obstacles.slice(0, 2)).forEach(function (o) {
         var label = CTX_OBSTACLE_LABEL[o.v.code] || ('«' + o.v.comment.trim().slice(0, CTX_COMMENT_MAX_CHARS) + '»');
         var line = prefix(o.sub) + 'دلیل ثبت‌شده ' +
           (CTX_OBSTACLE_LABEL[o.v.code] ? '«' + label + '»' : label) + ' (' + _fmtDateFa(o.v.date) + ')';
@@ -808,7 +891,166 @@
         if (!seen[line]) { seen[line] = true; extra.push(line); }
       });
     }
-    return { text: text, reason: reason, extra: extra };
+    // ACK account-level "change_to" (competitor / price / quality on an account-level signal)
+    if (winner.ackScope === 'account' && winner.ackActionEffect === 'change_to' && winner.ackActionText) {
+      text = winner.ackActionText;
+      actionTypeOverride = winner.ackActionType || null;
+      urgencyOverride = winner.ackUrgency || null;
+    }
+    // Account-level follow-up decisions must change the queued action too; the ACK expiry
+    // carries the seller-selected follow-up date when one was supplied.
+    if (winner.ackScope === 'account' && winner.ackActionEffect === 'follow_up' && !actionTypeOverride) {
+      var accountFollowUpDate = String(winner.ackExpiresAt || '').slice(0, 10);
+      text = 'پیگیری بعدی' + (accountFollowUpDate ? ' در ' + _fmtDateFa(accountFollowUpDate) : '');
+      actionTypeOverride = 'follow_up';
+      urgencyOverride = 'low';
+    }
+    // Ordinary visit ("visit_reviewed" ACK): ordinary, non-immediate alerts read as already reviewed and
+    // drop to low urgency for the ACK's life. The signal stays in the queue (priority only dips).
+    // Never for IMMEDIATE categories, never when a product ACK already worded this action.
+    if (winner.ackReviewed && !actionTypeOverride && !(typeof ACK_IMMEDIATE_CATEGORIES !== 'undefined' && ACK_IMMEDIATE_CATEGORIES[winner.category]) &&
+        !(rcx && (rcx.obstacles.length || rcx.followups.length || rcx.deferred.length))) {
+      var rvAt = String(winner.ackReviewed.createdAt || '').slice(0, 10);
+      var rvTo = String(winner.ackReviewed.expiresAt || '').slice(0, 10);
+      var isToday = rvAt === _aToday(rc && rc.ctx);
+      text = (isToday ? 'بررسی‌شده در ویزیت امروز' : 'بررسی‌شده در ویزیت ' + (rvAt ? _fmtDateFa(rvAt) : '')) +
+             '؛ پیگیری بعدی: ' + (rvTo ? _fmtDateFa(rvTo) : '');
+      actionTypeOverride = 'follow_up';
+      urgencyOverride = 'low';
+    }
+    return { text: text, reason: reason, extra: extra, actionType: actionTypeOverride, urgency: urgencyOverride };
+  }
+
+
+  /* ============================================================
+     v117 — customer-level visit interrupt + independent exceptions
+
+     A LIVE visit_reviewed ACK (decision visit_reviewed, source visit, scope account, status active — liveness
+     and exact-timestamp expiry come from the existing ACK API, never re-implemented here) interrupts the
+     customer: no ordinary candidate may put him back in the queue, whatever its rank.
+     Only these pass:
+       - a valid CHECK_BOUNCED signal
+       - a valid PAYMENT_OVERDUE signal
+       - an invoice with a REAL due date in the past and a remainder (ctx.receivableAttention:
+         refKind === 'invoice_due' && daysSince > 0; 'invoice_date' alone is not enough)
+       - the Watch follow-up (lifecycle pending task) whose own valid due day is today or earlier
+     One exception never opens the door for an unrelated task.
+     ============================================================ */
+  var INTERRUPT_EXCEPTION_SIGNALS = { CHECK_BOUNCED: true, PAYMENT_OVERDUE: true };
+
+  function _liveVisitInterrupt(cid) {
+    try {
+      if (typeof getActiveAcksForCustomer !== 'function') return false;
+      if (typeof isAckLayerActive === 'function' && !isAckLayerActive()) return false;
+      var acks = getActiveAcksForCustomer(cid) || [];
+      for (var i = 0; i < acks.length; i++) {
+        var a = acks[i];
+        if (!a || a.status !== 'active') continue;
+        if (a.decision === 'visit_reviewed' && a.source === 'visit' && a.scope === 'account') return true;
+      }
+    } catch (e) { /* fail-open: no interrupt */ }
+    return false;
+  }
+
+  // Valid immediate signal / independent candidate allowed through an interrupt.
+  function _isInterruptException(sig) {
+    if (!sig || !sig.category) return false;
+    if (INTERRUPT_EXCEPTION_SIGNALS[sig.category]) {
+      return sig.status !== 'pending' && sig.seasonallySuppressed !== true;
+    }
+    if (sig.category === 'WATCH_FOLLOWUP_DUE') return !!sig.followUpOccurrenceId;
+    return false;
+  }
+
+  /* Watch follow-up task whose due day has come. Read from the REAL lifecycle (getPendingWatchFollowUps:
+     closed-by-decision rows whose follow_up_later suppression is unreleased), so a seller-dismissed occurrence
+     with a still-pending follow-up counts, and the life of the mirrored ACK is irrelevant. Due day =
+     suppression.followUpDate compared with ctx.asOfDate; a missing / invalid date never produces a guessed task. */
+  function _dueWatchFollowUpCandidate(cid, ctx) {
+    try {
+      if (typeof getPendingWatchFollowUps !== 'function') return null;
+      var rows = getPendingWatchFollowUps(cid) || [];
+      var due = [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (!r || !r.id || !r.suppression || r.suppression.releasedAt) continue;
+        var d = r.suppression.followUpDate;
+        if (typeof d !== 'string') continue;
+        var age = _aDaysAgo(d, ctx);
+        if (age == null || !isFinite(age) || age < 0) continue;     // invalid date, or due in the future
+        due.push({ rec: r, date: String(d).slice(0, 10) });
+      }
+      if (!due.length) return null;
+      due.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : (String(a.rec.id) < String(b.rec.id) ? -1 : 1)); });
+      var pick = due[0];
+      var pid = pick.rec.productId != null && pick.rec.productId !== '' ? pick.rec.productId : null;
+      var nm = pick.rec.productName || (pid ? _catalogName(pid) : null);
+      var cand = {
+        customerId: cid,
+        category: 'WATCH_FOLLOWUP_DUE',
+        type: 'opportunity',
+        severity: 'medium',
+        status: 'active',
+        sourceLevel: 'account',
+        productId: pid,
+        productName: _validName(nm) ? nm : null,
+        followUpOccurrenceId: pick.rec.id,
+        reason: 'زمان پیگیری ثبت‌شده (' + _fmtDateFa(pick.date) + ') رسیده است',
+        evidence: { occurrenceId: pick.rec.id, dueDate: pick.date, watchCategory: pick.rec.watchCategory || null },
+      };
+      if (pid && typeof resolveFamilyId === 'function') {
+        try { cand.familyId = resolveFamilyId(pid, ctx); } catch (eF) { /* ignore */ }
+      }
+      return cand;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* Overdue-invoice candidate (only used as an interrupt exception). Contract of the existing receivable API:
+     refKind === 'invoice_due' && daysSince > 0. No remainder / balance is recomputed here. */
+  function _invoiceDueCandidate(cid, ctx) {
+    try {
+      if (!ctx || typeof ctx.receivableAttention !== 'function') return null;
+      var att = ctx.receivableAttention();
+      var row = att && att.byCustomerId ? att.byCustomerId[cid] : null;
+      if (!row || row.refKind !== 'invoice_due' || !(Number(row.daysSince) > 0)) return null;
+      return {
+        customerId: cid,
+        category: 'PAYMENT_OVERDUE',
+        type: 'risk',
+        severity: 'high',
+        status: 'active',
+        sourceLevel: 'account',
+        source: 'receivable',
+        reason: 'سررسید فاکتور گذشته و مانده وصول نشده است',
+        evidence: { refKind: 'invoice_due', invoiceId: row.invoiceId || null, daysSince: Number(row.daysSince), balance: row.balance },
+      };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* v117 — one place for: per-candidate eligibility -> independent exceptions -> customer-level interrupt -> rank.
+     Input: ordinary candidates after the context filters. Returns the winning candidate or null. */
+  function _chooseAction(actionCandidates, cid, ctx) {
+    // v117: eligibility is decided PER ORDINARY CANDIDATE before ranking, so an ineligible top candidate can
+    // no longer hide the next valid one. Signals / evidence are never touched; only the candidate list.
+    actionCandidates = actionCandidates.filter(function (cand) {
+      return _isActionEligible(cand, cid, ctx);
+    });
+    // Independent exceptions, each with its own validation (they are not ordinary candidates and are not
+    // run through the ordinary eligibility rules).
+    const interrupted = _liveVisitInterrupt(cid);
+    const followUpCand = _dueWatchFollowUpCandidate(cid, ctx);
+    if (followUpCand) actionCandidates = actionCandidates.concat([followUpCand]);
+    if (interrupted) {
+      const invoiceCand = _invoiceDueCandidate(cid, ctx);
+      if (invoiceCand) actionCandidates = actionCandidates.concat([invoiceCand]);
+      // customer-level interrupt: only the exceptions survive
+      actionCandidates = actionCandidates.filter(_isInterruptException);
+    }
+    return _pickActionSignal(actionCandidates);
   }
 
   function calculateCustomerAction(cid, precomputedPriority, opts, skipMemo) {
@@ -840,40 +1082,7 @@
       rcCtx = null;
       actionCandidates = _applyCurrentContextFilter(cid, priority.signals, ctx);
     }
-    let winner = _pickActionSignal(actionCandidates);
-    // A core-product competitor ACK is itself an actionable Watch decision.
-    // Promote only its exact product/family subject, and never ahead of immediate
-    // financial warnings. Account-level signals remain intact in Priority/Risk.
-    if (typeof listSellerAcks === 'function') {
-      try {
-        var hasImmediateAction = actionCandidates.some(function(s){return s && (s.category === 'CHECK_BOUNCED' || s.category === 'PAYMENT_OVERDUE');});
-        if (!hasImmediateAction) {
-          var coreCompetitorAck = (listSellerAcks(cid, false) || []).find(function(a){return a && a.scope === 'product' && a.decision === 'competitor' && a.coreProduct && a.actionText;});
-          if (coreCompetitorAck) {
-            var subjectSignals = (priority.signals || []).filter(function(s){
-              if (!s || s.productId == null || s.productId === '' || typeof getSellerAckForSignal !== 'function') return false;
-              var matchingAck = getSellerAckForSignal(s);
-              if (!matchingAck || matchingAck.id !== coreCompetitorAck.id) return false;
-              var sf = s.familyId;
-              if (sf == null || sf === '') { try { sf = typeof resolveFamilyId === 'function' ? resolveFamilyId(s.productId) : s.productId; } catch(e) { sf = s.productId; } }
-              var af = coreCompetitorAck.familyId || coreCompetitorAck.productId;
-              return String(s.productId) === String(coreCompetitorAck.productId) || String(sf) === String(af);
-            });
-            if (subjectSignals.length) winner = subjectSignals[0];
-          }
-        }
-      } catch (eCoreCompetitorAction) { /* fail open */ }
-    }
-    // Action Eligibility: the winner is chosen first; if it is no longer needed
-    // given a recent related visit, the existing NO_ACTION path is used. The next
-    // candidate is deliberately NOT promoted, and the signal itself is untouched.
-    if (winner && !_isActionEligible(winner, cid, ctx)) {
-      var visitAckKeepsAction = false;
-      if (typeof getSellerAckForSignal === 'function') {
-        try { var eligibilityAck = getSellerAckForSignal(winner); visitAckKeepsAction = !!(eligibilityAck && eligibilityAck.scope === 'account' && eligibilityAck.decision === 'visit_reviewed'); } catch (eEligibilityAck) {}
-      }
-      if (!visitAckKeepsAction) winner = null;
-    }
+    let winner = _chooseAction(actionCandidates, cid, ctx);
 
     if (!winner) {
       return Object.assign({
@@ -889,27 +1098,6 @@
     var decision = _composeDecisionText(winner, rule, rcCtx);
     var actionText = decision.text;
     var winnerReason = decision.reason;
-    // ACK is a reversible, temporary decision layer. Preserve the customer and
-    // primary signal in the queue; display the follow-up instruction instead of
-    // pretending the underlying condition vanished.
-    if (typeof getSellerAckForSignal === 'function') {
-      try {
-        var actionAck = getSellerAckForSignal(winner);
-        if (actionAck && actionAck.actionText) {
-          actionText = actionAck.actionText;
-          if (actionAck.decision === 'visit_reviewed' && /^PURCHASE_DECLINE/.test(String(winner.category || ''))) {
-            var visitDateLabel = String(actionAck.visitDate || actionAck.createdAt || '').slice(0, 10);
-            var currentDayLabel = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0, 10);
-            var visitLabel;
-            if (visitDateLabel && visitDateLabel === currentDayLabel) visitLabel = 'ویزیت امروز';
-            else if (visitDateLabel) visitLabel = 'ویزیت مورخ ' + _fmtDateFa(visitDateLabel);
-            else visitLabel = 'ویزیت اخیر';
-            actionText = 'بررسی‌شده در ' + visitLabel + '؛ پیگیری افت خرید در تاریخ ' + _fmtDateFa(actionAck.expiresAt);
-          }
-          winnerReason = 'تصمیم فروشنده تا ' + _fmtDateFa(actionAck.expiresAt) + ' معتبر است؛ هشدار پایه حذف نشده است.';
-        }
-      } catch (eActionAck) { /* fail open */ }
-    }
 
     // P-07: append real operational contexts only (short, non-duplicative).
     var contexts = [];
@@ -952,8 +1140,8 @@
     return {
       customerId: cid,
       action: actionText,
-      actionType: rule.actionType,
-      urgency: rule.urgency,
+      actionType: decision.actionType || rule.actionType,
+      urgency: decision.urgency || rule.urgency,
       reason: winnerReason,
       primarySignal: winner,
       priorityScore: priority.priorityScore,
@@ -974,7 +1162,7 @@
     }
     if (typeof data === 'undefined' || !Array.isArray(data.customers)) return [];
     const economicRankMap = (typeof _buildEconomicRankMap === 'function') ? _buildEconomicRankMap(ctx) : null;
-    const customers = data.customers.filter(function (c) { return c && c.active !== false; });
+    const customers = data.customers.filter(isTrackedCustomer);
     const results = customers.map(function (c) {
       return calculateCustomerAction(c.id, null, { economicRankMap: economicRankMap, ctx: ctx });
     });
@@ -1003,7 +1191,7 @@
     }
     const rows = [];
     data.customers.forEach(function (c) {
-      if (!c || c.active === false) return;
+      if (!isTrackedCustomer(c)) return;
       let invTotal = null;
       try {
         const t = customerTotals(c.id, ctx);
@@ -1034,21 +1222,87 @@
     return 10;
   }
 
-  function _customerWhyNow(cid, ctx) {
+  // Visit-based timing: the ONLY honest "now" for visit-type actions.
+  function _visitWhyNow(cid, ctx) {
     const overdue = (typeof visitOverdueDays === 'function') ? visitOverdueDays(cid, ctx) : 0;
     if (overdue > 0) return 'ویزیت ' + Math.round(overdue) + ' روز عقب‌افتاده';
     if (typeof customerBehavior === 'function') {
       try {
         const b = customerBehavior(cid, ctx);
-        if (b && b.lastVisit && b.lastVisit.date && typeof daysAgo === 'function') {
-          const d = daysAgo(b.lastVisit.date);
+        if (b && b.lastVisit && b.lastVisit.date) {
+          const d = _aDaysAgo(b.lastVisit.date, ctx);
           if (d != null && isFinite(d) && d !== Infinity) {
             return d === 0 ? 'ویزیت امروز' : (Math.round(d) + ' روز از آخرین ویزیت');
           }
         }
       } catch (e) {}
     }
-    return 'نیاز به پیگیری';
+    return null;
+  }
+
+  // "الان" must explain why THIS action is timely, from the evidence of its own primary signal.
+  // Presentation only: no scoring / ordering input. When the signal has no provable timing
+  // evidence the neutral wording is shown; nothing is invented.
+  const WHYNOW_NEUTRAL = 'نیاز به پیگیری';
+  const WHYNOW_VISIT_SIGNALS = { LONG_NO_VISIT: true, VISIT_OVERDUE: true, VISIT_CONVERSION_LOW: true, CONSECUTIVE_NO_ORDER: true };
+  const WHYNOW_PRODUCT_GAP_SIGNALS = { SKU_DELAY: true, COMBINED_SKU_DETERIORATION: true, SKU_FREQUENCY_DROP: true, SKU_QUANTITY_DROP: true, LINE_DROP: true };
+
+  function _whyNowNum(n) {
+    const v = Math.round(Number(n));
+    return (typeof enToFaDigits === 'function') ? enToFaDigits(String(v)) : String(v);
+  }
+  function _whyNowFinite(n) { return typeof n === 'number' && isFinite(n) && n > 0; }
+
+  function _customerWhyNow(cid, ctx, signal) {
+    try {
+      const cat = signal && signal.category;
+      // No signal info (legacy callers) or a visit-type signal: the visit timing is the real reason.
+      if (!cat || WHYNOW_VISIT_SIGNALS[cat]) return _visitWhyNow(cid, ctx) || WHYNOW_NEUTRAL;
+
+      if (cat === 'CHECK_BOUNCED' && _whyNowFinite(signal.value)) {
+        return _whyNowNum(signal.value) + ' چک برگشتی ثبت‌شده';
+      }
+      if (cat === 'WATCH_FOLLOWUP_DUE' && signal.evidence && signal.evidence.dueDate) {
+        return 'موعد پیگیری ' + _fmtDateFa(signal.evidence.dueDate) + ' رسیده است';
+      }
+      if (cat === 'PAYMENT_OVERDUE' && signal.evidence && signal.evidence.refKind === 'invoice_due' && _whyNowFinite(signal.evidence.daysSince)) {
+        return _whyNowNum(signal.evidence.daysSince) + ' روز از سررسید فاکتور گذشته';
+      }
+      if (cat === 'PAYMENT_OVERDUE' && _whyNowFinite(signal.value)) {
+        return _whyNowNum(signal.value) + ' چک سررسیدگذشته و وصول‌نشده';
+      }
+
+      const b = (typeof customerBehavior === 'function') ? customerBehavior(cid, ctx) : null;
+
+      if (cat === 'PURCHASE_DECLINE_SEVERE' || cat === 'PURCHASE_DECLINE_MILD') {
+        if (b && typeof b.sales30 === 'number' && typeof b.salesPrev30 === 'number' && b.salesPrev30 > 0 &&
+            typeof toman === 'function') {
+          return 'فروش ۳۰ روز اخیر ' + toman(b.sales30) + ' ت در برابر ' + toman(b.salesPrev30) + ' ت در ۳۰ روز قبل از آن';
+        }
+        return WHYNOW_NEUTRAL;
+      }
+
+      if (cat === 'BEHIND_PATTERN') {
+        const gap = b && b.daysSinceLast;
+        const typical = b && b.avgDistinctIntervalDays;
+        if (_whyNowFinite(gap) && _whyNowFinite(typical)) {
+          return 'آخرین خرید ' + _whyNowNum(gap) + ' روز پیش؛ فاصلهٔ معمول خرید حدود ' + _whyNowNum(typical) + ' روز';
+        }
+        return WHYNOW_NEUTRAL;
+      }
+
+      if (WHYNOW_PRODUCT_GAP_SIGNALS[cat]) {
+        const ev = signal.evidence || {};
+        const gap = _whyNowFinite(ev.daysSinceLast) ? ev.daysSinceLast : (signal.unit === 'days' ? signal.value : null);
+        const typical = ev.typicalCycle;
+        if (_whyNowFinite(gap) && _whyNowFinite(typical)) {
+          const nm = _validName(signal.productName) ? ('«' + signal.productName + '» ') : '';
+          return 'آخرین خرید ' + nm + _whyNowNum(gap) + ' روز پیش؛ چرخهٔ معمول خرید ' + _whyNowNum(typical) + ' روز';
+        }
+        return WHYNOW_NEUTRAL;
+      }
+    } catch (e) { /* fall through to neutral */ }
+    return WHYNOW_NEUTRAL;
   }
 
   function _prospectTiming(days) {
@@ -1102,6 +1356,23 @@
     return out;
   }
 
+  /* Visit-ACK interrupt, list-level view (v117). The interrupt itself is applied per customer inside
+     calculateCustomerAction (see _liveVisitInterrupt / _isInterruptException), so every public API behaves the
+     same. This helper answers: "is this customer's base action blocked by a live visit_reviewed ACK?".
+     Exceptions: valid CHECK_BOUNCED, valid PAYMENT_OVERDUE, an invoice with a real past due date
+     (refKind invoice_due, daysSince > 0) and the due Watch follow-up of the lifecycle.
+     Fail-open: any error / missing ACK layer => not blocked. */
+  function _visitAckHidesFromSuggested(cid, base, ctx) {
+    try {
+      if (!_liveVisitInterrupt(cid)) return false;
+      // Same rule as calculateCustomerAction: only an exception candidate may stay while the customer is
+      // interrupted. (calculateCustomerAction already enforces it; this keeps the list-level check consistent.)
+      return !_isInterruptException(base && base.primarySignal);
+    } catch (e) {
+      return false;
+    }
+  }
+
   function calculateAllActions(ctx, skipMemo) {
     if (ctx && typeof ctx.memo === 'function' && !skipMemo) {
       return ctx.memo('allActions', 'all', function () {
@@ -1114,15 +1385,16 @@
 
     if (typeof data !== 'undefined' && Array.isArray(data.customers)) {
       data.customers.forEach(function (c) {
-        if (!c || c.active === false) return;
+        if (!isTrackedCustomer(c)) return;
         const base = calculateCustomerAction(c.id, null, { economicRankMap: economicRankMap, ctx: ctx });
         if (!base || base.actionType === 'no_action') return;
+        if (_visitAckHidesFromSuggested(c.id, base, ctx)) return;
 
         const urgencyPts = URGENCY_SCORE[base.urgency] || 10;
         const impactPts = impactMap[c.id] != null ? impactMap[c.id] : 15;
         const timingPts = _customerTiming(c.id, ctx);
         const unifiedScore = urgencyPts + impactPts + timingPts;
-        const whyNow = _customerWhyNow(c.id, ctx);
+        const whyNow = _customerWhyNow(c.id, ctx, base.primarySignal);
 
         actions.push({
           type: 'customer',
@@ -1157,5 +1429,7 @@
   global.calculateCustomerAction = calculateCustomerAction;
   global.calculateAllCustomerActions = calculateAllCustomerActions;
   global.calculateAllActions = calculateAllActions;
+  global._visitAckHidesFromSuggested = _visitAckHidesFromSuggested;   // test seam
+  global._intelligenceChooseAction = _chooseAction;                    // test seam
 
 })(typeof window !== 'undefined' ? window : this);

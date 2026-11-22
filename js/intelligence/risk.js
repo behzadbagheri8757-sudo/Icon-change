@@ -33,6 +33,8 @@
      for backward compatibility.
    - Pending signals remain in the array for Priority/Action visibility.
 
+   ACK (SellerAck): effectivePoints uses ackRiskDelta INSTEAD of riskModifier when an ACK matched.
+
    P-03 Seller Feedback:
    - effectivePoints = basePoints + riskModifier (if present)
    - effectivePoints floored at 0; total score capped at 100
@@ -49,6 +51,9 @@
     medium: 40,
     low: 20,
   };
+
+  // Highest score that still reads as 'medium' (_levelFromScore: >= 50 is 'high').
+  const GROWTH_SKU_ONLY_MAX_SCORE = 49;
 
   function _levelFromScore(score) {
     if (score >= 75) return 'critical';
@@ -69,6 +74,12 @@
     var mod = 0;
     if (s && typeof s.riskModifier === 'number' && isFinite(s.riskModifier)) {
       mod = s.riskModifier;
+    }
+    // ACK: when a live SellerAck matched this signal it is the single source of truth and
+    // REPLACES the legacy feedback riskModifier (otherwise one decision would count twice:
+    // feedback -30 AND ack -30). No ACK => unchanged P-03 behaviour.
+    if (s && typeof s.ackRiskDelta === 'number' && isFinite(s.ackRiskDelta)) {
+      mod = s.ackRiskDelta;
     }
     var effective = base + mod;
     if (effective < 0) effective = 0;
@@ -92,6 +103,16 @@
     const signals = (typeof extractCustomerSignals === 'function')
       ? (extractCustomerSignals(cid, ctx) || [])
       : [];
+
+    // ACK: attach the seller's live decisions to the signals (in place) BEFORE scoring.
+    // Priority and Action receive these same signal objects via risk.signals. Dormant
+    // until the legacy migration flag is set (fallbackToLegacy). Fail-open.
+    try {
+      if (typeof isAckLayerActive === 'function' && isAckLayerActive() &&
+          typeof getActiveAcksForCustomer === 'function' && typeof applyAcksToSignals === 'function') {
+        applyAcksToSignals(signals, getActiveAcksForCustomer(cid));
+      }
+    } catch (eAck) { /* fail-open */ }
 
     const riskSignals = signals.filter(function (s) {
       return s && s.type === 'risk' && _isActiveForRisk(s);
@@ -119,6 +140,23 @@
       score += _signalPoints(s);
     });
     if (score > 100) score = 100;
+
+    // Growth consistency (UI-level risk label only): when the ONLY risk evidence is SKU-level
+    // (no account-level risk) while the account's own purchases are verifiably growing
+    // (active PURCHASE_GROWTH, same 30d-vs-previous-30d basis as the decline signals), the
+    // account is not "urgent" / "critical" for sales risk — a single product slipping inside a
+    // growing account is a product-level matter. The level is held below 'high'. Signals,
+    // Watches, ACK effects and the Action Engine are untouched, so the SKU problem is still
+    // listed and actionable; account-level risk (incl. CHECK_BOUNCED / PAYMENT_OVERDUE) is never capped.
+    if (!hasAccountRisk && scoringPool.length && score > GROWTH_SKU_ONLY_MAX_SCORE) {
+      var growing = false;
+      for (var gi = 0; gi < signals.length; gi++) {
+        var gs = signals[gi];
+        if (gs && gs.category === 'PURCHASE_GROWTH' && gs.type === 'opportunity' &&
+            gs.sourceLevel === 'account' && _isActiveForRisk(gs)) { growing = true; break; }
+      }
+      if (growing) score = GROWTH_SKU_ONLY_MAX_SCORE;
+    }
 
     return {
       customerId: cid,

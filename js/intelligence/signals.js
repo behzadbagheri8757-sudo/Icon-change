@@ -46,6 +46,16 @@
     return new Date().toISOString();
   }
 
+  /* v117: shared reference date of the analysis context (ctx.asOfDate); without a context it is the system day. */
+  function _sigToday(ctx) {
+    if (typeof analysisToday === 'function') return analysisToday(ctx);
+    return (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0, 10);
+  }
+  function _sigDaysAgo(iso, ctx) {
+    if (typeof analysisDaysAgo === 'function') return analysisDaysAgo(iso, ctx);
+    return (typeof daysAgo === 'function') ? daysAgo(iso) : null;
+  }
+
   function _round(n, dp) {
     const m = Math.pow(10, dp || 0);
     return Math.round((n + Number.EPSILON) * m) / m;
@@ -282,6 +292,16 @@
   /* ---------------------------------------------------------
      6: BASKET_SHRINK
      --------------------------------------------------------- */
+  function _declineEvidenceRow(p) {
+    return {
+      productId: p.productId, name: p.name,
+      earlyQty: p.earlyQty, lateQty: p.lateQty,
+      lateGrossQty: p.lateGrossQty, lateReturnQty: p.lateReturnQty, lateNetQty: p.lateNetQty,
+      latePurchaseState: p.latePurchaseState,
+      quantityQuality: p.quantityQuality,
+      uncertaintyReasons: Array.isArray(p.uncertaintyReasons) ? p.uncertaintyReasons.slice() : []
+    };
+  }
   function _basketShrinkSignal(cid, b, out, productsById, lateProductIds) {
     if (!(b.invoiceCount >= 4)) return;
     const declining = Array.isArray(b.decliningProducts) ? b.decliningProducts : [];
@@ -299,6 +319,8 @@
       unit: 'count',
       reason: 'تعدادی از کالاهای سبد خرید کاهش یافته‌اند',
       confidence: 0.75,
+      // v117: every involved product with gross / return / net split and any uncertainty kept
+      evidence: { affectedProducts: meaningful.map(_declineEvidenceRow) },
     }));
   }
 
@@ -313,7 +335,8 @@
   function _keyProductLostSignal(cid, b, out, productsById, lateProductIds) {
     const declining = Array.isArray(b.decliningProducts) ? b.decliningProducts : [];
     const lost = declining.filter(function (p) {
-      return p && p.earlyQty >= 5 && p.lateQty === 0;
+      // v117: a late net of 0 after a return is NOT a purchase stop; uncertain evidence is not firm either.
+      return p && p.earlyQty >= 5 && p.lateQty === 0 && p.latePurchaseState === 'no_purchase';
     });
     if (!lost.length) return;
 
@@ -383,7 +406,7 @@
 
     const lastVisitDate = b.lastVisit.date;
     if (!lastVisitDate) return;
-    const days = (typeof daysAgo === 'function') ? daysAgo(lastVisitDate) : null;
+    const days = _sigDaysAgo(lastVisitDate, ctx);
     if (days == null || !isFinite(days)) return;
     if (days < 45) return;
 
@@ -411,7 +434,7 @@
 
     let daysSince = null;
     if (b && b.lastVisit && b.lastVisit.date) {
-      daysSince = (typeof daysAgo === 'function') ? daysAgo(b.lastVisit.date) : null;
+      daysSince = _sigDaysAgo(b.lastVisit.date, ctx);
     }
     if (daysSince == null || !isFinite(daysSince)) {
       const cust = (ctx && typeof ctx.customerById === 'function')
@@ -426,7 +449,7 @@
             return String(b2.date || '').localeCompare(String(a.date || ''));
           });
           if (visits[0] && visits[0].date) {
-            daysSince = (typeof daysAgo === 'function') ? daysAgo(visits[0].date) : null;
+            daysSince = _sigDaysAgo(visits[0].date, ctx);
           }
         }
       }
@@ -480,7 +503,7 @@
     if (typeof data === 'undefined' || !Array.isArray(data.checks) || data.checks.length === 0) {
       return;
     }
-    const today = (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0, 10);
+    const today = _sigToday(ctx);
     const custChecks = (typeof customerChecks === 'function')
       ? customerChecks(cid, ctx)
       : data.checks.filter(function (c) { return c && c.customerId === cid; });
@@ -604,7 +627,11 @@
       }
     }
     if (skuSignals.length) {
-        _dedupeSkuAgainstAccountSignals(out, skuSignals, ctx);
+      // v117: SKU signals need their persistence status BEFORE dedupe (only an ACTIVE witness may cover an
+      // account signal). Family identity first (it is part of the occurrence key), then persistence once.
+      _assignFamilyIds(skuSignals, ctx);
+      _persistSignals(skuSignals, ctx);
+      _dedupeSkuAgainstAccountSignals(out, skuSignals, ctx);
       for (var si = 0; si < skuSignals.length; si++) {
         if (skuSignals[si]) {
           // P-01: guarantee sourceLevel on SKU-origin signals (sku_intelligence
@@ -623,26 +650,14 @@
     // productId is preserved for display/context. familyId is never
     // persisted (it only feeds the persistence KEY string).
     // ------------------------------------------------------------------
-    if (typeof resolveFamilyId === 'function') {
-      for (var fmi = 0; fmi < out.length; fmi++) {
-        var fs = out[fmi];
-        if (!fs || fs.familyId != null) continue;
-        if (fs.productId == null || fs.productId === '' || fs.productId === 'multi') continue;
-        try { fs.familyId = resolveFamilyId(fs.productId, ctx); } catch (eFam) { /* fail-open */ }
-      }
-    }
+    _assignFamilyIds(out, ctx);
 
     // ------------------------------------------------------------------
     // P-02 Persistence: record occurrence + set status pending|active.
     // Does not remove signals. Risk only scores status === 'active'.
     // ------------------------------------------------------------------
-    if (typeof applyPersistence === 'function') {
-      try {
-        applyPersistence(out);
-      } catch (ePersist) {
-        // Fail-open: persistence errors must not break signal extraction.
-      }
-    }
+    // SKU signals were already persisted above (once); only the remaining ones are handled here.
+    _persistSignals(out.filter(function (x) { return x && x.status == null; }), ctx);
 
     // ------------------------------------------------------------------
     // P-03 Seller Feedback: attach evidence + riskModifier when present.
@@ -675,113 +690,107 @@
     return out;
   }
 
-  /* F4 — KEY_PRODUCT_LOST / BASKET_SHRINK deduplication against SKU signals.
-     Mutates accountSignals in place; may filter skuSignals array length by
-     leaving suppressed account signals removed from accountSignals. */
-  function _dedupeSkuAgainstAccountSignals(accountSignals, skuSignals, ctx) {
-    if (!accountSignals || !skuSignals || !skuSignals.length) return;
+  function _assignFamilyIds(list, ctx) {
+    if (typeof resolveFamilyId !== 'function') return;
+    for (var fmi = 0; fmi < list.length; fmi++) {
+      var fs = list[fmi];
+      if (!fs || fs.familyId != null) continue;
+      if (fs.productId == null || fs.productId === '' || fs.productId === 'multi') continue;
+      try { fs.familyId = resolveFamilyId(fs.productId, ctx); } catch (eFam) { /* fail-open */ }
+    }
+  }
 
-    var skuProductIds = Object.create(null);
-    var famOfD = (typeof makeFamilyResolver === 'function')
-      ? makeFamilyResolver(ctx)
-      : function (pid) { return pid; };
-    var skuFamilyIds = Object.create(null);
-    var hasLineDropSku = false;
+  function _persistSignals(list, ctx) {
+    if (!list || !list.length || typeof applyPersistence !== 'function') return;
+    try {
+      // v117: when the context reference date is not the system day, the occurrence is dated by it
+      var sysDay = (typeof todayISO === 'function') ? todayISO() : null;
+      var asOf = _sigToday(ctx);
+      if (sysDay && asOf !== sysDay) {
+        for (var i = 0; i < list.length; i++) if (list[i]) list[i].detectedAt = asOf + 'T12:00:00.000Z';
+      }
+      applyPersistence(list, ctx);
+    } catch (ePersist) {
+      // Fail-open: persistence errors must not break signal extraction.
+    }
+  }
+
+  /* F4 (v117) — KEY_PRODUCT_LOST / BASKET_SHRINK deduplication against SKU signals.
+     An account-level finding is covered ONLY by a witness that means the same thing for the same SKU:
+         skuSignal.category === 'LINE_DROP'
+         skuSignal.status === 'active'
+         skuSignal.productId === affectedProductId
+         skuSignal.evidence.currentBasketPresence === 0     (a real number zero)
+     null / undefined / '' / false / '0' are NOT a zero witness (the producer must emit a number; the
+     consumer is deliberately not loosened with Number()). SKU_DELAY, pending signals, a shared Family
+     without the same SKU, or partial coverage of a multi-product finding never remove the account signal.
+     Mutates accountSignals in place; never touches the SKU signals. */
+  function _skuZeroPresenceWitnesses(skuSignals) {
+    var covered = Object.create(null);
     for (var i = 0; i < skuSignals.length; i++) {
       var ss = skuSignals[i];
-      if (!ss) continue;
-      if (ss.productId && ss.productId !== 'multi') skuProductIds[ss.productId] = true;
-      if (ss.familyId != null && ss.familyId !== '') skuFamilyIds[ss.familyId] = true;
-      // Family-level SKU signals cover EVERY member SKU of the Family.
-      if (ss.evidence && Array.isArray(ss.evidence.memberProductIds)) {
-        for (var mm = 0; mm < ss.evidence.memberProductIds.length; mm++) {
-          skuProductIds[ss.evidence.memberProductIds[mm]] = true;
-        }
-      }
-      if (ss.evidence && Array.isArray(ss.evidence.affectedFamilyIds)) {
-        for (var af = 0; af < ss.evidence.affectedFamilyIds.length; af++) {
-          skuFamilyIds[ss.evidence.affectedFamilyIds[af]] = true;
-        }
-      }
-      if (ss.evidence && Array.isArray(ss.evidence.affectedProductIds)) {
-        for (var a = 0; a < ss.evidence.affectedProductIds.length; a++) {
-          skuProductIds[ss.evidence.affectedProductIds[a]] = true;
-        }
-      }
-      var cat = ss.category;
-      if (cat === 'LINE_DROP' || cat === 'SKU_CHURN' || cat === 'SKU_QUANTITY_DROP' ||
-          cat === 'COMBINED_SKU_DETERIORATION' || cat === 'MULTI_SKU_DECLINE' ||
-          cat === 'SKU_FREQUENCY_DROP') {
-        hasLineDropSku = true;
-      }
+      if (!ss || ss.category !== 'LINE_DROP' || ss.status !== 'active') continue;
+      if (ss.productId == null || ss.productId === '' || ss.productId === 'multi') continue;
+      if (!ss.evidence || ss.evidence.currentBasketPresence !== 0) continue;
+      covered[ss.productId] = true;
     }
+    return covered;
+  }
+
+  function _dedupeSkuAgainstAccountSignals(accountSignals, skuSignals, ctx) {
+    if (!accountSignals || !skuSignals || !skuSignals.length) return;
+    var covered = _skuZeroPresenceWitnesses(skuSignals);
+    var isCovered = function (pid) { return pid != null && pid !== '' && covered[pid] === true; };
 
     for (var j = accountSignals.length - 1; j >= 0; j--) {
       var s = accountSignals[j];
       if (!s) continue;
 
-      if (s.category === 'BASKET_SHRINK' && hasLineDropSku) {
-        accountSignals.splice(j, 1);
+      if (s.category === 'BASKET_SHRINK') {
+        var affected = (s.evidence && Array.isArray(s.evidence.affectedProducts)) ? s.evidence.affectedProducts : null;
+        if (!affected || !affected.length) continue;     // nothing provable => keep
+        var allCovered = true;
+        for (var ai = 0; ai < affected.length; ai++) {
+          if (!(affected[ai] && isCovered(affected[ai].productId))) { allCovered = false; break; }
+        }
+        if (allCovered) accountSignals.splice(j, 1);     // every involved SKU has its own exact active witness
         continue;
       }
 
       if (s.category === 'KEY_PRODUCT_LOST') {
-        // Rebuild reason from remaining SKUs if we can parse product names;
-        // KEY_PRODUCT_LOST does not store productId list on the signal, only
-        // a Persian reason string built from decliningProducts at generation
-        // time. Re-derive from customerBehavior so F4 can remove matched SKUs.
         var remainingNames = [];
-        var remainingCount = 0;
+        var remainingHard = [];
         var retainedRemaining = [];
         if (s.evidence && Array.isArray(s.evidence.retainedLost)) {
-          retainedRemaining = s.evidence.retainedLost.slice();
+          retainedRemaining = s.evidence.retainedLost.slice();   // independent part: never dropped by hard-lost removal
         }
+        var coveredAny = false;
         if (s.evidence && Array.isArray(s.evidence.hardLost)) {
           var hardLost = s.evidence.hardLost;
           for (var hli = 0; hli < hardLost.length; hli++) {
-            var hardPid = hardLost[hli] && hardLost[hli].productId;
-            if (hardPid && (skuProductIds[hardPid] || skuFamilyIds[famOfD(hardPid)])) continue; // removed by SKU-level signal
-            remainingNames.push((hardLost[hli] && hardLost[hli].name) || hardPid || '');
-            remainingCount++;
-          }
-        } else if (typeof customerBehavior === 'function') {
-          try {
-            var b = customerBehavior(s.customerId, ctx);
-            var declining = (b && Array.isArray(b.decliningProducts)) ? b.decliningProducts : [];
-            var retainedIds = Object.create(null);
-            for(var rli=0; rli<retainedRemaining.length; rli++){
-              var retainedPid = retainedRemaining[rli] && retainedRemaining[rli].productId;
-              if(retainedPid) retainedIds[retainedPid] = true;
-            }
-            var lost = declining.filter(function (p) {
-              return p && p.earlyQty >= 5 && p.lateQty === 0 && !retainedIds[p.productId];
-            });
-            for (var k = 0; k < lost.length; k++) {
-              var pid = lost[k].productId;
-              if (pid && (skuProductIds[pid] || skuFamilyIds[famOfD(pid)])) continue; // removed by SKU-level signal
-              remainingNames.push(lost[k].name || pid || '');
-              remainingCount++;
-            }
-          } catch (e) {
-            remainingCount = s.value || 0;
-            remainingNames = [];
+            var hl = hardLost[hli];
+            var hardPid = hl && hl.productId;
+            if (isCovered(hardPid)) { coveredAny = true; continue; }   // really covered => removed from the hard part
+            remainingHard.push(hl);
+            remainingNames.push((hl && hl.name) || hardPid || '');
           }
         } else {
-          remainingCount = s.value || 0;
+          // legacy shape without evidence lists: nothing provable to remove => leave the signal untouched
+          continue;
         }
+        if (!coveredAny) continue;                           // no real coverage => untouched
 
-        if (remainingCount > 0) {
-          s.value = remainingCount;
+        if (remainingHard.length > 0) {
+          s.value = remainingHard.length;
           s.severity = 'high';
-          if (remainingNames.length) {
-            s.reason = remainingNames.length === 1
-              ? 'محصول کلیدی «' + remainingNames[0] + '» دیگر خریداری نمی‌شود'
-              : 'محصولات کلیدی (' + remainingNames.join('، ') + ') دیگر خریداری نمی‌شوند';
-          }
+          s.reason = remainingNames.length === 1
+            ? 'محصول کلیدی «' + remainingNames[0] + '» دیگر خریداری نمی‌شود'
+            : 'محصولات کلیدی (' + remainingNames.join('، ') + ') دیگر خریداری نمی‌شوند';
+          s.evidence = Object.assign({}, s.evidence, { hardLost: remainingHard, retainedLost: retainedRemaining });
         } else if (retainedRemaining.length > 0) {
           var retainedNames = retainedRemaining.map(function (p) {
             var prod = (typeof data !== 'undefined' && Array.isArray(data.products))
-              ? data.products.find(function(x){ return x && x.id === p.productId; }) : null;
+              ? data.products.find(function (x) { return x && p && x.id === p.productId; }) : null;
             var groupName = _analysisGroupNameById(prod ? prod.analysisGroupId : null);
             return 'محصول «' + ((p && p.name) || '') + '» دیگر خریداری نمی‌شود، اما گروه تحلیلی «'
               + (groupName || '') + '» با محصول جایگزین حفظ شده است';
@@ -789,6 +798,7 @@
           s.value = retainedRemaining.length;
           s.severity = 'low';
           s.reason = retainedNames.join(' — ');
+          s.evidence = Object.assign({}, s.evidence, { hardLost: [], retainedLost: retainedRemaining });
         } else {
           accountSignals.splice(j, 1);
         }
@@ -797,6 +807,7 @@
   }
 
   global.extractCustomerSignals = extractCustomerSignals;
+  global._intelligenceDedupeSkuAgainstAccount = _dedupeSkuAgainstAccountSignals;   // test seam
 
   /* ============================================================
      WATCH / EARLY WARNING LAYER (frozen spec — implementation only)
@@ -864,7 +875,31 @@
       }
       return map;
     }
-    return { invoiceCount: count, early: qtyMap(early), late: qtyMap(late) };
+    // v117: gross / return / net + ambiguity per product, same allocation rules as customerBehavior
+    var detail = null;
+    if (typeof _behaviorProductSplit === 'function' && typeof _behaviorReturnPayments === 'function') {
+      try { detail = _behaviorProductSplit(invs, _behaviorReturnPayments(cid, ctx), mid, ctx); } catch (eDet) { detail = null; }
+    }
+    return { invoiceCount: count, early: qtyMap(early), late: qtyMap(late), detail: detail };
+  }
+
+  function _watchDetailFields(split, pid) {
+    var d = split && split.detail && split.detail[pid];
+    if (!d) return {};
+    var r2 = function (n) { return Math.round(n * 100) / 100; };
+    return {
+      lateGrossQty: r2(d.late.gross), lateReturnQty: r2(d.late.ret), lateNetQty: r2(d.late.gross - d.late.ret),
+      latePurchaseState: d.latePurchaseState,
+      quantityQuality: d.issues.length ? 'uncertain' : 'certain',
+      uncertaintyReasons: d.issues.map(function (i) { return { code: i.code, section: i.section, paymentId: i.paymentId, invoiceId: i.invoiceId }; })
+    };
+  }
+  // KEY_PRODUCT_LOST_WATCH is a purchase STOP: only a firm no_purchase late half qualifies
+  // (fully returned / uncertain late halves are not a stop). Without detail (no calc helper) keep legacy.
+  function _watchIsNoPurchase(split, pid) {
+    if (!split || !split.detail) return true;
+    var d = split.detail[pid];
+    return !d || d.latePurchaseState === 'no_purchase';
   }
 
   function _mkWatch(cid, category, opts) {
@@ -948,7 +983,7 @@
       var aq = al ? al.qty : 0;
       if (!(ae.qty >= 2 && aq <= ae.qty * 0.5)) continue;
       if (_isGroupRetained(apid, productsById, lateProductIds)) continue;
-      affected.push({ productId: apid, productName: ae.name || _watchProductName(apid), earlyQty: ae.qty, lateQty: aq });
+      affected.push(Object.assign({ productId: apid, productName: ae.name || _watchProductName(apid), earlyQty: ae.qty, lateQty: aq }, _watchDetailFields(split, apid)));
     }
     out.push(_mkWatch(cid, 'BASKET_SHRINK_WATCH', {
       level: level,
@@ -981,6 +1016,7 @@
       var l = split.late[pid];
       var lateQty = l ? l.qty : 0;
       if (e.qty >= 3 && lateQty === 0) {
+        if (!_watchIsNoPurchase(split, pid)) continue;
         // Product Analysis Group: retained-by-group SKU never becomes a
         // hard-lost Watch item (spec §4.6). Watch lifecycle untouched otherwise.
         if (_isGroupRetained(pid, productsById, lateProductIds)) continue;
@@ -996,8 +1032,9 @@
       var ll = split.late[lpid];
       var lq = ll ? ll.qty : 0;
       if (!(le.qty >= 3 && lq === 0)) continue;
+      if (!_watchIsNoPurchase(split, lpid)) continue;
       if (_isGroupRetained(lpid, productsById, lateProductIds)) continue;
-      lostProducts.push({ productId: lpid, productName: le.name || _watchProductName(lpid), earlyQty: le.qty, lateQty: lq });
+      lostProducts.push(Object.assign({ productId: lpid, productName: le.name || _watchProductName(lpid), earlyQty: le.qty, lateQty: lq }, _watchDetailFields(split, lpid)));
     }
     out.push(_mkWatch(cid, 'KEY_PRODUCT_LOST_WATCH', {
       level: level,

@@ -46,7 +46,7 @@
     { code: 'follow_up_later', label: 'بعداً پیگیری می‌کنم', kind: 'decision' },
     { code: 'price', label: 'قیمت' },
     { code: 'competitor', label: 'خرید از رقیب' },
-    { code: 'no_need', label: 'فعلاً نیاز ندارد' },
+    { code: 'no_need', label: 'فعلاً نیاز ندارد', kind: 'decision' },
     { code: 'quality', label: 'مشکل کیفیت' },
     { code: 'other', label: 'سایر' }
   ];
@@ -165,7 +165,7 @@
         }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
+        _idb = ev.target.result;
         if (cb) cb(_idb);
       };
       req.onerror = function () { if (cb) cb(null); };
@@ -518,12 +518,12 @@
     if (ctx && typeof ctx.customerById === 'function') {
       var c = ctx.customerById(cid);
       if (!c) return false;
-      return c.active !== false;
+      return isTrackedCustomer(c); // inactive OR one-off («متفرقه») customers generate no Watches
     }
     if (typeof data === 'undefined' || !Array.isArray(data.customers)) return true;
     var c2 = data.customers.find(function (x) { return x && x.id === cid; });
     if (!c2) return false;
-    return c2.active !== false;
+    return isTrackedCustomer(c2);
   }
 
   function _findLatestAlertSuperseded(key, ctx) {
@@ -554,6 +554,8 @@
   function reconcileWatchLifecycle(customerId, ctx) {
     return new Promise(function (resolve) {
       function run() {
+        // ACK: expire due ACKs first (also releases their Watch tombstones). Fail-open.
+        try { if (typeof expireAcks === 'function') expireAcks(); } catch (eExp) { /* ignore */ }
         var customerIds = [];
         if (customerId) {
           customerIds = [customerId];
@@ -806,15 +808,6 @@
       if (!r || r.status !== 'active') continue;
       if (customerId && String(r.customerId) !== String(customerId)) continue;
       if (!_isCustomerActive(r.customerId)) continue;
-      // Unified ACKs defer only the matching Watch subject. Financial-immediate
-      // categories are guarded in getSellerAckForSignal and remain visible.
-      if (typeof getSellerAckForSignal === 'function') {
-        try {
-          var ackSignal = { customerId: r.customerId, category: r.watchCategory, productId: r.productId == null ? null : r.productId, sourceLevel: r.productId == null ? 'account' : 'sku', familyId: r.familyId };
-          var ack = getSellerAckForSignal(ackSignal);
-          if (ack && ack.watchMode === 'defer') continue;
-        } catch (eAckFilter) { /* fail open */ }
-      }
       out.push(r);
     }
     // Sort: unreviewed first, then level desc
@@ -839,14 +832,6 @@
       if (!r || r.status === 'active' || !r.suppression || r.suppression.releasedAt) continue;
       if (r.suppression.type !== 'follow_up_later') continue;
       if (customerId && String(r.customerId) !== String(customerId)) continue;
-      if (typeof getSellerAckForSignal === 'function') {
-        try {
-          var followSignal = { customerId: r.customerId, category: r.watchCategory, productId: r.productId == null ? null : r.productId, sourceLevel: r.productId == null ? 'account' : 'sku', familyId: r.familyId };
-          var followAck = getSellerAckForSignal(followSignal);
-          var currentDay = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0,10);
-          if (followAck && followAck.decision === 'follow_up_later' && String(followAck.expiresAt) > String(currentDay)) continue;
-        } catch (eFollowAck) { /* fail open */ }
-      }
       out.push(r);
     }
     out.sort(function (a, b) {
@@ -898,6 +883,17 @@
     return { active: rows.length, unreviewed: unreviewed };
   }
 
+  // A completed follow-up ends the premise of the pending follow_up_later ACK. Without this the old ACK
+  // stays active until its date and, when it expires, _releaseWatchFor() would release the NEW suppression
+  // and bring the alert back although the seller already answered. Fail-open, same guard as the mirror.
+  function _closePendingFollowUpAck(rec) {
+    try {
+      if (typeof ackReverseForWatch !== 'function') return;
+      if (typeof ackWatchSyncActive === 'function' && ackWatchSyncActive()) return;
+      ackReverseForWatch(rec.id);
+    } catch (eClose) { /* best-effort */ }
+  }
+
   /**
    * Record seller reason + optional note. Does NOT resolve the Watch.
    * Status stays 'active'; badge becomes «بررسی شده».
@@ -911,61 +907,41 @@
       atInvoiceSeq: isFinite(seq) ? seq : null,
       atDate: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
       levelAtDecision: rec.level || null,
+      // ACK: optional seller-chosen follow-up date (follow_up_later only); null when not given.
+      followUpDate: null,
       releasedAt: null,
       releasedBy: null
     };
   }
 
-  function _recordUnifiedSellerAckFromWatch(rec, code, comment) {
-    if (!rec || typeof createSellerAck !== 'function' || !code) return null;
+  // ACK bridge (fail-open). Watch stays the owner of its tombstone; every decision is mirrored
+  // into the unified SellerAck unless the call itself came FROM an ACK (re-entrancy guard).
+  function _mirrorToAck(rec, decision, comment, followUpDate, supersede) {
     try {
-      var productId = _normPid(rec.productId);
-      var scope = productId != null ? 'product' : 'account';
-      var days = code === 'no_need' || code === 'not_wanted' ? 14 : code === 'price' ? 5 : code === 'follow_up_later' ? 5 : 7;
-      var coreProduct = false;
-      if (productId != null) {
-        try {
-          var appData = (typeof data !== 'undefined' && data) ? data : (global.data || {});
-          var prod = (appData.products || []).find(function(p){return p && String(p.id)===String(productId);});
-          coreProduct = !!(prod && (prod.isCore === true || prod.coreProduct === true));
-          if (!coreProduct && typeof customerBehavior === 'function') {
-            var behavior = customerBehavior(rec.customerId) || {};
-            coreProduct = (behavior.topProducts || []).slice(0,3).some(function(tp){return tp && String(tp.productId)===String(productId);});
-          }
-        } catch (eCore) {}
-      }
-      var riskDelta = code === 'still_stock' ? -10 : code === 'no_need' ? -30 : code === 'not_wanted' ? -40 : code === 'follow_up_later' ? -10 : code === 'competitor' && coreProduct ? 10 : 0;
-      var priorityDelta = code === 'still_stock' || code === 'follow_up_later' ? -3 : code === 'no_need' ? -5 : code === 'not_wanted' ? -8 : code === 'competitor' && coreProduct ? 5 : 0;
-      var actionText = code === 'still_stock' ? 'بپرس از ما دارد یا رقیب'
-        : code === 'no_need' ? 'فعلاً نیاز ندارد؛ بررسی بعد از ۱۴ روز'
-        : code === 'not_wanted' ? 'محصول را نمی‌خواهد؛ بازبینی پس از ۱۴ روز'
-        : code === 'price' ? 'پیگیری قیمت / پیدا کردن راهکار'
-        : code === 'competitor' ? (coreProduct ? 'بازگرداندن مشتری — خرید از رقیب' : 'برو بپرس این جنس را دیگر نمی‌خواهد؟')
-        : code === 'follow_up_later' ? 'پیگیری مجدد'
-        : 'بررسی علت نامشخص — پیگیری بعدی';
-      var created = (rec.reason && rec.reason.recordedAt) || _nowISO();
-      var due = rec.followUpDate || rec.nextFollowUpDate || (rec.suppression && rec.suppression.followUpDate) || null;
-      var expires = due && /^\d{4}-\d{2}-\d{2}$/.test(String(due).slice(0,10)) ? String(due).slice(0,10) : null;
-      if (expires) {
-        var nowDay = String(created).slice(0,10);
-        var diff = Math.round((new Date(expires+'T12:00:00').getTime()-new Date(nowDay+'T12:00:00').getTime())/86400000);
-        days = Math.max(0, diff);
-      }
-      return createSellerAck({ customerId: rec.customerId, scope: scope, productId: productId,
-        familyId: productId != null && typeof resolveFamilyId === 'function' ? resolveFamilyId(productId) : null,
-        decision: code, durationDays: days, createdAt: created, expiresAt: expires || undefined,
-        source: 'watch', sourceId: rec.id, subjectKey: 'watch:' + String(rec.id), reason: code,
-        comment: comment || '', riskDelta: riskDelta, priorityDelta: priorityDelta,
-        priorityUntil: priorityDelta ? (expires || undefined) : undefined, riskOverride: code !== 'other', coreProduct: coreProduct,
-        actionText: actionText, watchMode: (code === 'price' || code === 'competitor' || code === 'quality') ? 'active' : 'defer' });
-    } catch (e) { return null; }
+      if (typeof createAck !== 'function') return;
+      if (typeof ackWatchSyncActive === 'function' && ackWatchSyncActive()) return;
+      var pid = _normPid(rec.productId);
+      createAck({
+        customerId: rec.customerId,
+        productId: pid,
+        scope: pid ? 'product' : 'account',
+        decision: decision,
+        source: 'watch',
+        sourceId: rec.id,
+        legacyKey: 'watch:' + rec.id,
+        sourceContext: { watchCategory: rec.watchCategory || null },
+        note: comment || '',
+        followUpDate: followUpDate || null,
+        supersedeExisting: supersede ? true : undefined   // undefined → ACK's own default (unchanged for every existing caller)
+      });
+    } catch (eAck) { console.warn('ACK mirror failed (Watch unaffected)', eAck); }
   }
 
   /**
    * Record seller reason + optional note.
    * - Plain reasons (price, competitor, ...): data capture only; status stays
    *   'active' (unchanged V1 behavior).
-   * - Decision reasons (still_stock, not_wanted, follow_up_later): the
+   * - Decision reasons (still_stock, not_wanted, follow_up_later, no_need): the
    *   structured code is authoritative; the note is stored beside it in
    *   reason.comment. The occurrence is closed and carries a suppression
    *   marker so the same subject does not regenerate (see "Seller decisions").
@@ -977,8 +953,6 @@
     if (!rec) return null;
     if (rec.status !== 'active') return null;
     var code = reasonCode ? String(reasonCode) : null;
-    if (code === 'follow_up_later' && followUpDate && /^\d{4}-\d{2}-\d{2}$/.test(String(followUpDate).slice(0,10))) rec.followUpDate = String(followUpDate).slice(0,10);
-    else if (code === 'follow_up_later') delete rec.followUpDate;
     // 'dismiss' is an explicit close action, not a reason code. Never
     // silently reinterpret it as 'other'; callers must use
     // dismissWatchOccurrence() so the lifecycle state is actually closed.
@@ -987,7 +961,7 @@
       // Preserve the existing safe fallback for unknown reason codes.
       code = 'other';
     }
-    if (code === 'still_stock' || code === 'not_wanted' || code === 'follow_up_later') {
+    if (code === 'still_stock' || code === 'not_wanted' || code === 'follow_up_later' || code === 'no_need') {
       // not_wanted needs a product subject; never guess one for an
       // account-level Watch.
       if (code === 'not_wanted' && _normPid(rec.productId) == null) return null;
@@ -999,8 +973,9 @@
       rec.lastEvaluatedAt = nowD;
       rec.resolution = { type: 'seller_' + code, resolvedAt: nowD, note: null };
       rec.suppression = _decisionSnapshot(rec, code);
-      _recordUnifiedSellerAckFromWatch(rec, code, text);
+      if (code === 'follow_up_later' && followUpDate) rec.suppression.followUpDate = String(followUpDate).slice(0, 10);
       _persist(rec);
+      _mirrorToAck(rec, code, text, code === 'follow_up_later' ? followUpDate : null);
       return rec;
     }
     rec.reason = {
@@ -1008,8 +983,8 @@
       comment: comment ? String(comment).slice(0, 500) : '',
       recordedAt: _nowISO()
     };
-    _recordUnifiedSellerAckFromWatch(rec, code, rec.reason.comment);
     _persist(rec);
+    if (code) _mirrorToAck(rec, code, rec.reason.comment, null);
     return rec;
   }
 
@@ -1042,6 +1017,7 @@
     rec.suppression = _decisionSnapshot(rec, 'dismiss');
     // Reason/comment history (if any was recorded earlier) is untouched.
     _persist(rec);
+    _mirrorToAck(rec, 'dismiss', note ? String(note).slice(0, 500) : '', null);
     return rec;
   }
 
@@ -1068,13 +1044,6 @@
       var held = false;
       for (var k = 0; k < ts.length; k++) {
         if (!_releaseReasonFor(ts[k], w, ctx)) { held = true; break; }
-      }
-      if (!held && typeof getSellerAckForSignal === 'function') {
-        try {
-          var ackSignal = { customerId: customerId, category: w.category, productId: w.productId == null ? null : w.productId, sourceLevel: w.productId == null ? 'account' : 'sku' };
-          var ack = getSellerAckForSignal(ackSignal);
-          if (ack && ack.watchMode === 'defer') held = true;
-        } catch (eAckRawFilter) { /* fail open */ }
       }
       if (!held) out.push(w);
     }
@@ -1113,6 +1082,8 @@
       // can still be reopened later by the existing genuine escalation path.
       rec.suppression = _decisionSnapshot(rec, 'dismiss');
       _persist(rec);
+      _closePendingFollowUpAck(rec);
+      _mirrorToAck(rec, 'dismiss', text, null, true);
       return rec;
     }
     rec.reason = {
@@ -1132,8 +1103,9 @@
     rec.suppression.resultComment = text;
     rec.suppression.releasedAt = null;
     rec.suppression.releasedBy = null;
-    _recordUnifiedSellerAckFromWatch(rec, code, text);
     _persist(rec);
+    _closePendingFollowUpAck(rec);
+    _mirrorToAck(rec, code, text, null, true);
     return rec;
   }
 
@@ -1142,9 +1114,12 @@
     var rec = _mem[occurrenceId];
     if (!rec || !rec.suppression || rec.suppression.releasedAt) return null;
     _releaseSuppression(rec, 'seller_reversal');
-    if (typeof listSellerAcks === 'function' && typeof reverseSellerAck === 'function') {
-      try { (listSellerAcks(rec.customerId, true) || []).forEach(function(a){ if(a && (a.source === 'watch' || a.source === 'watch_migration') && String(a.sourceId) === String(rec.id)) reverseSellerAck(a.id); }); } catch (eAckReverse) {}
-    }
+    // ACK: a reversal made on the Watch side reverses the mirrored ACK too (no loop: guard + status check).
+    try {
+      if (typeof ackReverseForWatch === 'function' && !(typeof ackWatchSyncActive === 'function' && ackWatchSyncActive())) {
+        ackReverseForWatch(occurrenceId);
+      }
+    } catch (eRev) { /* best-effort */ }
     return rec;
   }
 

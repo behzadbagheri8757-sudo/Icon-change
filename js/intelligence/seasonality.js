@@ -195,7 +195,7 @@
     var series = _buildMonthlySeries(customerId, productId != null ? productId : null, ctx);
     if (!series) return 0;
 
-    var cm = _calendarMonth(date || (typeof todayISO === 'function' ? todayISO() : new Date().toISOString()));
+    var cm = _calendarMonth(date || (typeof analysisToday === 'function' ? analysisToday(ctx) : (typeof todayISO === 'function' ? todayISO() : new Date().toISOString())));
     if (!cm) return 0;
 
     var monthMean = series.byCalMonth[cm];
@@ -231,7 +231,7 @@
     // Family identity (runtime): prefer signal.familyId; else productId
     // (getSeasonalFactor resolves either to the same Family key).
     var pid = signal.familyId != null ? signal.familyId : (signal.productId != null ? signal.productId : null);
-    var when = signal.detectedAt || (typeof todayISO === 'function' ? todayISO() : new Date().toISOString());
+    var when = signal.detectedAt || (typeof analysisToday === 'function' ? analysisToday(ctx) : (typeof todayISO === 'function' ? todayISO() : new Date().toISOString()));
 
     var factor = getSeasonalFactor(cid, pid, when, ctx);
     signal.seasonalFactor = factor;

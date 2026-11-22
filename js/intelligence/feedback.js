@@ -98,11 +98,15 @@
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
         }
         if (!db.objectStoreNames.contains('seller_acks')) {
-          db.createObjectStore('seller_acks', { keyPath: 'id' });
+          var _ackSt = db.createObjectStore('seller_acks', { keyPath: 'id' });
+          try {
+            _ackSt.createIndex('by_customer_status', ['customerId', 'status'], { unique: false });
+            _ackSt.createIndex('by_expiry', 'expiresAt', { unique: false });
+          } catch (_ackIdxErr) { /* ignore */ }
         }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
+        _idb = ev.target.result;
         if (cb) cb(_idb);
       };
       req.onerror = function () { if (cb) cb(null); };
@@ -111,7 +115,75 @@
     }
   }
 
+
+  /* ---------- v117: safe Restore / hydration ----------
+     replace = epoch++ -> memory EXACTLY the new snapshot (no merge) -> LS mirror aligned -> snapshot marked
+     pending -> written to IndexedDB in ONE transaction (clear + every put) when the DB is ready.
+     pending is cleared ONLY in transaction.oncomplete, and only if it still belongs to that snapshot's epoch;
+     error / abort / synchronous failures keep it, and the next hydration / write retries (no timers, no queues).
+     A hydration read remembers the epoch it started in: a late answer after a replace is ignored entirely. */
+  var _epoch = 0;
+  var _pending = null;            // { epoch, cbs, writing }
+  var _idbState = 'opening';      // 'opening' | 'ready' | 'unavailable'
+
+  function _currentRows() {
+    return _mem.slice();
+  }
+
+  function _runCbs(snap, ok) {
+    var cbs = snap.cbs || [];
+    snap.cbs = [];
+    for (var i = 0; i < cbs.length; i++) {
+      try { cbs[i](ok); } catch (e) { /* caller errors never break storage */ }
+    }
+  }
+
+  function _flushPending() {
+    var snap = _pending;
+    if (!snap || snap.writing) return;
+    if (!_idb) {
+      // no IndexedDB at all (unsupported / failed to open): memory + LS mirror are the persistence layer
+      if (_idbState === 'unavailable') { _pending = null; _runCbs(snap, true); }
+      return;                      // still opening: the first hydration / write after it is ready flushes
+    }
+    var tx = null;
+    try {
+      tx = _idb.transaction(FEEDBACK_PARAMS.idbStore, 'readwrite');
+      snap.writing = true;
+      tx.oncomplete = function () {
+        snap.writing = false;
+        if (_pending === snap && _epoch === snap.epoch) { _pending = null; _runCbs(snap, true); }
+      };
+      var failed = function () {
+        snap.writing = false;      // pending stays: retried by the next hydration / write
+        _runCbs(snap, false);
+      };
+      tx.onerror = failed;
+      tx.onabort = failed;
+      var st = tx.objectStore(FEEDBACK_PARAMS.idbStore);
+      st.clear();
+      var rows = _currentRows();
+      for (var i = 0; i < rows.length; i++) st.put(rows[i]);
+    } catch (e) {
+      snap.writing = false;
+      try { if (tx) tx.abort(); } catch (eA) { /* ignore */ }
+      _runCbs(snap, false);
+    }
+  }
+
+  function replaceAllFeedback(rows, onDone) {
+    var prev = _pending;
+    _epoch++;
+    if (prev) _runCbs(prev, false);       // superseded snapshot: its caller must not assume success
+    _mem = (Array.isArray(rows) ? rows : []).filter(function (r) { return r && r.id; }).map(function (r) { return JSON.parse(JSON.stringify(r)); });
+    _saveLS();
+    _pending = { epoch: _epoch, cbs: (typeof onDone === 'function') ? [onDone] : [], writing: false };
+    _flushPending();
+    return { epoch: _epoch, dbPending: !!_pending };
+  }
+
   function _idbPut(rec) {
+    if (_pending) { _flushPending(); return; }
     if (!_idb || !rec) return;
     try {
       var tx = _idb.transaction(FEEDBACK_PARAMS.idbStore, 'readwrite');
@@ -120,11 +192,14 @@
   }
 
   function _idbHydrate(cb) {
-    if (!_idb) { if (cb) cb(); return; }
+    if (_pending) { _flushPending(); if (cb) cb(false); return; }
+    if (!_idb) { if (cb) cb(false); return; }
     try {
+      var startEpoch = _epoch;
       var tx = _idb.transaction(FEEDBACK_PARAMS.idbStore, 'readonly');
       var req = tx.objectStore(FEEDBACK_PARAMS.idbStore).getAll();
       req.onsuccess = function () {
+        if (_epoch !== startEpoch || _pending) { _flushPending(); if (cb) cb(false); return; }
         var rows = req.result || [];
         // merge by id
         var byId = Object.create(null);
@@ -134,17 +209,19 @@
         }
         _mem = Object.keys(byId).map(function (k) { return byId[k]; });
         _saveLS();
-        if (cb) cb();
+        if (cb) cb(true);
       };
-      req.onerror = function () { if (cb) cb(); };
+      req.onerror = function () { if (cb) cb(false); };
     } catch (e) {
-      if (cb) cb();
+      if (cb) cb(false);
     }
   }
 
   _loadLS();
   _openIdb(function (db) {
+    _idbState = db ? 'ready' : 'unavailable';
     if (db) _idbHydrate(function () {});
+    else _flushPending();
   });
 
   /**
@@ -169,6 +246,23 @@
     _mem.push(rec);
     _saveLS();
     _idbPut(rec);
+    // ACK: mirror into the unified SellerAck AFTER the legacy write. Legacy write is never
+    // rolled back and a failure here never reaches the caller (fail-open).
+    try {
+      if (typeof createAck === 'function' && typeof ackNormalizeDecision === 'function' && ackNormalizeDecision(reasonCode)) {
+        createAck({
+          customerId: customerId,
+          productId: rec.productId,
+          scope: rec.productId ? 'product' : 'account',
+          decision: reasonCode,
+          source: (source === 'visit' || source === 'invoice') ? source : 'invoice',
+          sourceId: null,
+          sourceContext: { signalCategory: signalCategory },
+          note: rec.comment,
+          legacyKey: 'fb:' + rec.id
+        });
+      }
+    } catch (eAck) { console.warn('ACK mirror failed (feedback kept)', eAck); }
     return rec;
   }
 
@@ -279,18 +373,7 @@
     if (!signal) return signal;
     var fb = getFeedbackForSignal(signal);
     if (!fb) {
-      // No feedback does not mean no ACK: apply an active ACK independently.
-      if (typeof getSellerAckForSignal === 'function') {
-        try {
-          var ackOnly = getSellerAckForSignal(signal);
-          if (ackOnly) {
-            signal.sellerAck = { id: ackOnly.id, decision: ackOnly.decision, scope: ackOnly.scope,
-              expiresAt: ackOnly.expiresAt, actionText: ackOnly.actionText || '', priorityDelta: ackOnly.priorityDelta || 0,
-              watchMode: ackOnly.watchMode || 'defer', reason: ackOnly.reason || '' };
-            if (ackOnly.riskOverride !== false) signal.riskModifier = Number(ackOnly.riskDelta) || 0;
-          }
-        } catch (ackOnlyErr) { /* fail open */ }
-      }
+      // no feedback → leave signal unchanged (modifier absent = 0)
       return signal;
     }
     var code = fb.reasonCode;
@@ -307,20 +390,6 @@
     signal.riskModifier = modifier;
     if (code && REASON_ACTION_HINT[code]) {
       signal.feedbackHint = REASON_ACTION_HINT[code];
-    }
-    // Unified ACK layer: a matching active ACK replaces (never adds to) the
-    // feedback modifier. Product ACKs are scope-checked by ack.js and cannot
-    // match account-level PURCHASE_DECLINE or financial signals.
-    if (typeof getSellerAckForSignal === 'function') {
-      try {
-        var ack = getSellerAckForSignal(signal);
-        if (ack) {
-          signal.sellerAck = { id: ack.id, decision: ack.decision, scope: ack.scope,
-            expiresAt: ack.expiresAt, actionText: ack.actionText || '', priorityDelta: ack.priorityDelta || 0,
-            watchMode: ack.watchMode || 'defer', reason: ack.reason || '' };
-          if (ack.riskOverride !== false) signal.riskModifier = Number(ack.riskDelta) || 0;
-        }
-      } catch (ackErr) { /* ACK failure must not break legacy feedback */ }
     }
     return signal;
   }
@@ -384,6 +453,8 @@
   }
 
   global.recordFeedback = recordFeedback;
+  global.replaceAllFeedback = replaceAllFeedback;
+  global._feedbackExportRows = _currentRows;   // test seam
   global.getFeedbackForSignal = getFeedbackForSignal;
   global.applyFeedbackToSignal = applyFeedbackToSignal;
   global.applyFeedbackToSignals = applyFeedbackToSignals;

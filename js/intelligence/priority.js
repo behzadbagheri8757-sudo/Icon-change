@@ -108,7 +108,7 @@
     var rows = [];
     for (var i = 0; i < data.customers.length; i++) {
       var c = data.customers[i];
-      if (!c || c.active === false) continue;
+      if (!isTrackedCustomer(c)) continue;
       var invTotal = null;
       try {
         var t = customerTotals(c.id, ctx);
@@ -153,7 +153,7 @@
     var rows = [];
     for (var i = 0; i < data.customers.length; i++) {
       var c = data.customers[i];
-      if (!c || c.active === false) continue;
+      if (!isTrackedCustomer(c)) continue;
       var invTotal = null;
       try {
         var t = customerTotals(c.id, ctx);
@@ -208,8 +208,10 @@
     if (overdue == null && typeof customerBehavior === 'function') {
       try {
         var b = customerBehavior(cid, ctx);
-        if (b && b.lastVisit && b.lastVisit.date && typeof daysAgo === 'function') {
-          var d = daysAgo(b.lastVisit.date);
+        if (b && b.lastVisit && b.lastVisit.date) {
+          // v117: calendar-day distance to the shared reference date (ctx.asOfDate)
+          var d = (typeof analysisDaysAgo === 'function') ? analysisDaysAgo(b.lastVisit.date, ctx)
+            : ((typeof daysAgo === 'function') ? daysAgo(b.lastVisit.date) : null);
           if (d != null && isFinite(d) && d !== Infinity) overdue = d;
         }
       } catch (e2) { /* ignore */ }
@@ -289,28 +291,29 @@
       W_OPPORTUNITY * opportunityComponent +
       W_TIMING * timingComponent;
 
+    // ACK: customer-level aggregate of the DISTINCT live ACKs that actually matched a signal,
+    // bounded to ±15 so several ACKs can never erase an important customer (P6).
+    var ackPriorityDelta = 0;
+    try {
+      var seenAck = Object.create(null);
+      for (var ai = 0; ai < signals.length; ai++) {
+        var sg = signals[ai];
+        if (!sg || !sg.ackIds || !sg.ackIds.length) continue;
+        // count each ACK once per customer, with its exact delta
+        for (var aj = 0; aj < sg.ackIds.length; aj++) {
+          var aid = sg.ackIds[aj];
+          if (seenAck[aid]) continue;
+          seenAck[aid] = true;
+          ackPriorityDelta += (sg.ackPriorityById && typeof sg.ackPriorityById[aid] === 'number') ? sg.ackPriorityById[aid] : 0;
+        }
+      }
+      var capP = (typeof ACK_PARAMS !== 'undefined' && ACK_PARAMS && ACK_PARAMS.priorityCap) || 15;
+      if (ackPriorityDelta > capP) ackPriorityDelta = capP;
+      if (ackPriorityDelta < -capP) ackPriorityDelta = -capP;
+    } catch (eAckP) { ackPriorityDelta = 0; }
+    weighted += ackPriorityDelta;
+
     var priorityScore = Math.round(weighted * 10) / 10;
-    // ACK adjustments are score-only; they never remove a customer from Priority.
-    var ackIds = Object.create(null), ackDelta = 0;
-    var hasBounced = signals.some(function (sig) { return sig && sig.category === 'CHECK_BOUNCED'; });
-    if (typeof getSellerAckForSignal === 'function') {
-      signals.forEach(function (sig) {
-        try {
-          var ack = getSellerAckForSignal(sig);
-          if (ack && !ackIds[ack.id]) { ackIds[ack.id] = true; var delta = Number(ack.priorityDelta) || 0; if (ack.decision === 'visit_reviewed' && ack.priorityUntil) { var pd = String(ack.priorityUntil).slice(0,10); var td = typeof todayISO === 'function' ? todayISO() : new Date().toISOString().slice(0,10); if (pd < td || hasBounced) delta = 0; } ackDelta += delta; }
-        } catch (eAck) { /* fail open */ }
-      });
-    }
-    // Ordinary visit ACK gives a small temporary reduction only when no bounced check exists.
-    if (!hasBounced && typeof getSellerAckPriorityAdjustment === 'function') {
-      try { var visitAck = getSellerAckPriorityAdjustment(cid); if (visitAck && !ackIds[visitAck.id]) ackDelta += Number(visitAck.priorityDelta) || -5; } catch (eVisitAck) {}
-    }
-    // A single visit may create several product ACKs. Cap their combined
-    // negative effect at -10 and positive effect at +5 so one event cannot
-    // swing a customer's priority excessively in either direction.
-    if (ackDelta < -10) ackDelta = -10;
-    if (ackDelta > 5) ackDelta = 5;
-    priorityScore += ackDelta;
     if (priorityScore > 100) priorityScore = 100;
     if (priorityScore < 0) priorityScore = 0;
 
@@ -347,7 +350,7 @@
         economic: economicComponent,
         opportunity: opportunityComponent,
         timing: timingComponent,
-        sellerAckDelta: ackDelta,
+        ackPriorityDelta: ackPriorityDelta,
         weights: {
           risk: W_RISK,
           economic: W_ECONOMIC,
@@ -369,7 +372,7 @@
     if (typeof data === 'undefined' || !Array.isArray(data.customers)) return [];
 
     var economicRankMap = _buildEconomicRankMap(ctx);
-    var customers = data.customers.filter(function (c) { return c && c.active !== false; });
+    var customers = data.customers.filter(isTrackedCustomer);
     var results = customers.map(function (c) {
       return calculateCustomerPriority(c.id, { economicRankMap: economicRankMap, ctx: ctx });
     });

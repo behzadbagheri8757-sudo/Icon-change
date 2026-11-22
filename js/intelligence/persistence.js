@@ -133,11 +133,15 @@
           db.createObjectStore('baseline_cache', { keyPath: 'key' });
         }
         if (!db.objectStoreNames.contains('seller_acks')) {
-          db.createObjectStore('seller_acks', { keyPath: 'id' });
+          var _ackSt = db.createObjectStore('seller_acks', { keyPath: 'id' });
+          try {
+            _ackSt.createIndex('by_customer_status', ['customerId', 'status'], { unique: false });
+            _ackSt.createIndex('by_expiry', 'expiresAt', { unique: false });
+          } catch (_ackIdxErr) { /* ignore */ }
         }
       };
       req.onsuccess = function (ev) {
-        _idb = ev.target.result; try { _idb.onversionchange = function(){ try{_idb.close();}catch(e){} _idb=null; }; } catch(e) {}
+        _idb = ev.target.result;
         if (cb) cb(_idb);
       };
       req.onerror = function () {
@@ -148,7 +152,79 @@
     }
   }
 
+
+  /* ---------- v117: safe Restore / hydration ----------
+     replace = epoch++ -> memory EXACTLY the new snapshot (no merge) -> LS mirror aligned -> snapshot marked
+     pending -> written to IndexedDB in ONE transaction (clear + every put) when the DB is ready.
+     pending is cleared ONLY in transaction.oncomplete, and only if it still belongs to that snapshot's epoch;
+     error / abort / synchronous failures keep it, and the next hydration / write retries (no timers, no queues).
+     A hydration read remembers the epoch it started in: a late answer after a replace is ignored entirely. */
+  var _epoch = 0;
+  var _pending = null;            // { epoch, cbs, writing }
+  var _idbState = 'opening';      // 'opening' | 'ready' | 'unavailable'
+
+  function _currentRows() {
+    return Object.keys(_mem).map(function (k) { return { key: k, dates: _mem[k].slice() }; });
+  }
+
+  function _runCbs(snap, ok) {
+    var cbs = snap.cbs || [];
+    snap.cbs = [];
+    for (var i = 0; i < cbs.length; i++) {
+      try { cbs[i](ok); } catch (e) { /* caller errors never break storage */ }
+    }
+  }
+
+  function _flushPending() {
+    var snap = _pending;
+    if (!snap || snap.writing) return;
+    if (!_idb) {
+      // no IndexedDB at all (unsupported / failed to open): memory + LS mirror are the persistence layer
+      if (_idbState === 'unavailable') { _pending = null; _runCbs(snap, true); }
+      return;                      // still opening: the first hydration / write after it is ready flushes
+    }
+    var tx = null;
+    try {
+      tx = _idb.transaction(PERSISTENCE_PARAMS.idbStore, 'readwrite');
+      snap.writing = true;
+      tx.oncomplete = function () {
+        snap.writing = false;
+        if (_pending === snap && _epoch === snap.epoch) { _pending = null; _runCbs(snap, true); }
+      };
+      var failed = function () {
+        snap.writing = false;      // pending stays: retried by the next hydration / write
+        _runCbs(snap, false);
+      };
+      tx.onerror = failed;
+      tx.onabort = failed;
+      var st = tx.objectStore(PERSISTENCE_PARAMS.idbStore);
+      st.clear();
+      var rows = _currentRows();
+      for (var i = 0; i < rows.length; i++) st.put(rows[i]);
+    } catch (e) {
+      snap.writing = false;
+      try { if (tx) tx.abort(); } catch (eA) { /* ignore */ }
+      _runCbs(snap, false);
+    }
+  }
+
+  function replaceAllOccurrences(rows, onDone) {
+    var prev = _pending;
+    _epoch++;
+    if (prev) _runCbs(prev, false);       // superseded snapshot: its caller must not assume success
+    _mem = Object.create(null);
+    (Array.isArray(rows) ? rows : []).forEach(function (r) {
+      if (r && r.key != null && Array.isArray(r.dates)) _mem[r.key] = r.dates.slice();
+    });
+    _hydrated = true;
+    _saveLocalStorage();
+    _pending = { epoch: _epoch, cbs: (typeof onDone === 'function') ? [onDone] : [], writing: false };
+    _flushPending();
+    return { epoch: _epoch, dbPending: !!_pending };
+  }
+
   function _idbPut(key, dates) {
+    if (_pending) { _flushPending(); return; }   // a pending restore is written as a whole, never overtaken
     if (!_idb) return;
     try {
       var tx = _idb.transaction(PERSISTENCE_PARAMS.idbStore, 'readwrite');
@@ -158,6 +234,7 @@
   }
 
   function _idbDelete(key) {
+    if (_pending) { _flushPending(); return; }
     if (!_idb) return;
     try {
       var tx = _idb.transaction(PERSISTENCE_PARAMS.idbStore, 'readwrite');
@@ -165,16 +242,24 @@
     } catch (e) { /* ignore */ }
   }
 
+  // cb(applied): applied === false means nothing was read into memory / LS (stale answer, pending restore, error)
   function _idbHydrate(cb) {
+    if (_pending) { _flushPending(); if (cb) cb(false); return; }   // restored snapshot goes TO the DB, never the reverse
     if (!_idb) {
-      if (cb) cb();
+      if (cb) cb(false);
       return;
     }
     try {
+      var startEpoch = _epoch;
       var tx = _idb.transaction(PERSISTENCE_PARAMS.idbStore, 'readonly');
       var store = tx.objectStore(PERSISTENCE_PARAMS.idbStore);
       var req = store.getAll();
       req.onsuccess = function () {
+        if (_epoch !== startEpoch || _pending) {       // a replace happened while this read was in flight
+          _flushPending();
+          if (cb) cb(false);
+          return;
+        }
         var rows = req.result || [];
         for (var i = 0; i < rows.length; i++) {
           var row = rows[i];
@@ -186,11 +271,11 @@
           }
         }
         _hydrated = true;
-        if (cb) cb();
+        if (cb) cb(true);
       };
-      req.onerror = function () { if (cb) cb(); };
+      req.onerror = function () { if (cb) cb(false); };
     } catch (e) {
-      if (cb) cb();
+      if (cb) cb(false);
     }
   }
 
@@ -237,8 +322,10 @@
   // recordOccurrence, or getOccurrenceCount — bootstrap-only, once per load.
   _loadLocalStorage();
   _openIdb(function (db) {
-    if (db) _idbHydrate(function () { _saveLocalStorage(); _sweepColdKeys(); });
-    else _sweepColdKeys();
+    _idbState = db ? 'ready' : 'unavailable';
+    // Bootstrap GC must never prune / delete a snapshot restored before it ran (_epoch > 0).
+    if (db) _idbHydrate(function (applied) { if (!applied) return; _saveLocalStorage(); if (_epoch === 0) _sweepColdKeys(); });
+    else { _flushPending(); if (_epoch === 0) _sweepColdKeys(); }
   });
 
   function recordOccurrence(customerId, category, productId, timestamp) {
@@ -295,9 +382,10 @@
    * - Never removes signals from the array
    * Returns the same array.
    */
-  function applyPersistence(signals) {
+  function applyPersistence(signals, ctx) {
     if (!signals || !signals.length) return signals || [];
-    var today = _today();
+    // v117: the context reference date (when a context is given) is the day of this evaluation
+    var today = (ctx && typeof analysisToday === 'function') ? analysisToday(ctx) : _today();
     for (var i = 0; i < signals.length; i++) {
       var s = signals[i];
       if (!s || !s.category || !s.customerId) {
@@ -352,6 +440,8 @@
   }
 
   global.applyPersistence = applyPersistence;
+  global.replaceAllOccurrences = replaceAllOccurrences;
+  global._persistenceExportRows = _currentRows;   // test seam
   global.getOccurrenceCount = getOccurrenceCount;
   global.clearIntelligencePersistence = clearIntelligencePersistence;
   global.PERSISTENCE_PARAMS = PERSISTENCE_PARAMS;
