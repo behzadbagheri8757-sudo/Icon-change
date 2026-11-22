@@ -39,7 +39,12 @@
    configured, so it is boot-critical, not merely a nice-to-have precache
    entry. It was already in PRECACHE_URLS; no asset list, route, or business
    logic otherwise changed.) */
-const CACHE_NAME = 'baqeri-shell-v87';
+/* CHANGED: v99 -> v100 (Quick View pre-visit summary: customer.js, app.js BagheriPresent.lastOfferMap export, additive CSS. No asset list or route changed.) */
+/* CHANGED: v112 -> v113 — Stage 2 UX: normalized buttons and states, accessible sheet focus handling, customer action layout, and keyboard-accessible report chart. UI-only; no CRM data or accounting behavior changed. */
+/* CHANGED: v111 -> v112 — UI typography, shared segmented filters, theme-aware form colors and validation states. Removed the obsolete bundled font asset from the offline precache. */
+/* Previous v110 -> v111 — 00-chrome.css and 10-disclosure.css were missing from PRECACHE_URLS (first load / offline showed unstyled header and disclosure surfaces until the network fetch finished). Both added; cache bumped so devices re-fetch the updated CSS instead of serving the stale cached copy. */
+/* CHANGED: v98 -> v99 (Soft iOS look: CSS-only visual refresh — tokens in visual-grammar.css and a new layer at the end of visual-grammar-pages.css. No asset list, route or business logic changed.) */
+const CACHE_NAME = 'baqeri-shell-v115';
 
 /** App Shell — paths relative to this SW (same directory as index.html). */
 const PRECACHE_URLS = [
@@ -48,6 +53,8 @@ const PRECACHE_URLS = [
   './css/visual-grammar.css',
   './css/visual-grammar-components.css',
   './css/visual-grammar-pages.css',
+  './css/00-chrome.css',
+  './css/10-disclosure.css',
   './css/shamsi-calendar.css',
   './js/shamsi-calendar.js',
   './js/models.js',
@@ -55,6 +62,9 @@ const PRECACHE_URLS = [
   './js/db.js',
   './js/location.js',
   './js/calc.js',
+  './js/payment-promises.js',
+  './js/delivery-promises.js',
+  './js/visit-plan.js',
   './js/computation-bank.js',
   './js/stock.js',
   './js/backup.js',
@@ -71,11 +81,13 @@ const PRECACHE_URLS = [
   './js/router.js',
   './js/view.host.js',
   './js/views/dashboard.js',
-  './js/intelligence/ack.js',
   './js/views/reports.js',
   './js/views/products.js',
   './js/views/inventory.js',
   './js/views/customers.js',
+  './js/views/payment-promises.js',
+  './js/views/delivery-promises.js',
+  './js/views/visit-plan.js',
   './js/views/customer.js',
   './js/views/payments.js',
   './js/views/invoices.js',
@@ -100,8 +112,7 @@ const PRECACHE_URLS = [
   './icons/apple-touch-icon.png',
   './icons/icon-152.png',
   './logo-export.png',
-  './fonts/Vazirmatn[wght].woff2',
-
+  './js/intelligence/ack.js',
   './js/intelligence/persistence.js',
   './js/intelligence/feedback.js',
   './js/intelligence/baseline_manager.js',
