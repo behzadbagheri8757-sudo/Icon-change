@@ -1,388 +1,73 @@
-/* ============================================================
-   BAGHERI VISUAL GRAMMAR — FOUNDATION v2
-   Single source of truth for design tokens.
-   No component definitions. Only tokens and base environment.
-   ============================================================ */
-
-:root{
-  /* ---------- Color roles ---------- */
-  --vg-color-bg:               #FFF9F4;
-  --vg-color-surface:          #FFFFFF;
-  --vg-color-surface-soft:     #FDEFE3;
-  --vg-color-text:             #1F2937;
-  --vg-color-text-secondary:   #4B5563;
-  --vg-color-text-muted:       #667085;
-  --vg-color-border:           rgba(31,41,55,.075);
-  --vg-color-divider:          rgba(31,41,55,.055);
-  --vg-color-brand:            #EC7728;
-  --vg-color-brand-soft:       #FDEFE3;
-  --vg-color-primary:          #B65415;
-  --vg-color-primary-soft:     #FDEFE3;
-  --vg-color-success:          #3F8E69;
-  --vg-color-success-text:     #2F6B50;
-  --vg-color-success-soft:     #E8F3ED;
-  --vg-color-earth:            #915933;
-  --vg-color-gold:             #C89B3C;
-  --vg-color-warning:          #915933;
-  --vg-color-warning-soft:     #FFF4DF;
-  --vg-color-danger:           #C0392B;
-  --vg-color-danger-soft:      #FCEBE8;
-  --vg-color-neutral:          #6B7280;
-  --vg-color-neutral-soft:     #F3F4F6;
-  --vg-color-icon:             #2F6B50;
-  --vg-color-on-primary:       #FFFFFF;
-  --vg-color-primary-rgb:      182 84 21;
-  --vg-color-gold-rgb:         200 155 60;
-
-  /* Legacy aliases are intentionally token-backed so older view CSS follows
-     the new brand without changing view or data logic. */
-  --olive-dark:                var(--vg-color-primary);
-  --gold:                      var(--vg-color-brand);
-  --ink:                       var(--vg-color-text);
-  --ink-soft:                  var(--vg-color-text-muted);
-  --card:                      var(--vg-color-surface);
-  --line:                      var(--vg-color-border);
-  --accent-dark:               var(--vg-color-primary);
-  --accent-soft:               var(--vg-color-brand-soft);
-
-  /* ---------- Spacing scale ---------- */
-  --vg-space-tight:            6px;
-  --vg-space-related:          10px;
-  --vg-space-group:            16px;
-  --vg-space-section:          24px;
-  --vg-space-module:           32px;
-
-  /* ---------- Radius scale (Capsule / Circle / Soft / Raised) ---------- */
-  --vg-radius-control:         999px;   /* Capsule for inputs, buttons, chips */
-  --vg-radius-circle:          50%;     /* Circle for icon-only controls */
-  --vg-radius-soft:            14px;    /* Soft surfaces: cards, panels */
-  --vg-radius-raised:          16px;    /* Raised surfaces: sheets, modals */
-  --vg-radius-pill:            999px;   /* Badges and small pills */
-
-  /* ---------- Shadow scale ---------- */
-  --vg-shadow-group:           0 2px 10px rgba(31,41,55,.045);
-  --vg-shadow-raised:          0 6px 20px rgba(31,41,55,.075);
-  --vg-shadow-overlay:         0 12px 32px rgba(31,41,55,.12);
-  --vg-shadow-glass:           0 6px 24px rgba(26,38,52,.12), 0 1px 3px rgba(26,38,52,.08);
-
-  /* ---------- Typography roles ---------- */
-  --vg-type-page:              1.05rem;
-  --vg-type-section:           .88rem;
-  --vg-type-primary:           1.12rem;
-  --vg-type-secondary:         .92rem;
-  --vg-type-label:             .70rem;
-  --vg-type-meta:              .64rem;
-  --vg-type-action:            .88rem;
-
-  /* ---------- Font weights ----------
-     Retuned one 100-weight tier lighter (2026-09 iOS Bold-Text retuning pass):
-     baseline visual density now targets iPhone "Bold Text: ON" as the real-world
-     rendering condition instead of "Bold Text: OFF". Floor kept at 400. */
-  --vg-weight-regular:         400;
-  --vg-weight-medium:          400;
-  --vg-weight-label:           500;
-  --vg-weight-title:           600;
-  --vg-weight-value:           700;
-  --vg-weight-emphasis:        800;
-
-  /* ---------- Control height (minimum touch target) ---------- */
-  --vg-control-height:         44px;
-
-  /* ---------- Motion tokens (iOS 26 interaction layer) ----------
-     Moved here from css/app.css so this file remains the single
-     source of truth for tokens, per this file's own header comment.
-     Values unchanged — this is a location fix only, not a value change. */
-  --ios-ease-out:               cubic-bezier(.22,1,.36,1);
-  --ios-route-ease:             cubic-bezier(0.32, 0.72, 0, 1);
-  --ios-ease-spring:            cubic-bezier(.22,1.18,.36,1);
-  --ios-touch:                  120ms;
-  --ios-control:                180ms;
-  --ios-route:                  240ms;
-  --ios-glass:                  rgba(255,255,255,.72);
-  --ios-glass-border:           rgba(255,255,255,.58);
-}
-
-/* ---------- Base environment ---------- */
-html{
-  background:var(--vg-color-bg);
-  -webkit-text-size-adjust:100%;
-}
-
-body{
-  margin:0;
-  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Helvetica Neue',Arial,sans-serif;
-  background:var(--vg-color-bg);
-  color:var(--vg-color-text);
-  font-size:16px;
-  line-height:1.55;
-  font-variant-numeric:tabular-nums;
-  -webkit-font-smoothing:antialiased;
-  overflow-x:hidden;
-  max-width:100vw;
-  overscroll-behavior-y:contain;
-  touch-action:manipulation;
-  -webkit-overflow-scrolling:touch;
-}
-
-/* ---------- Typography hierarchy ---------- */
-h1,h2,h3,h4,h5,h6{
-  margin:0;
-  font-weight:var(--vg-weight-title);
-  color:var(--vg-color-text);
-}
-
-h2.section-title{
-  font-size:var(--vg-type-page);
-  letter-spacing:-.18px;
-  line-height:1.3;
-}
-
-h3.sub-title{
-  font-size:var(--vg-type-section);
-  line-height:1.3;
-}
-
-a{
-  color:inherit;
-  text-decoration:none;
-}
-
-p{
-  margin:0 0 1em;
-}
-
-/* ---------- Reduced motion ---------- */
+:root{--vg-glass-tint:rgba(255,255,255,.76);--vg-glass-blur:saturate(180%) blur(22px);--vg-glass-border:rgba(255,255,255,.55);--vg-color-bg:#F2F2F7;--vg-color-surface:#FFFFFF;--vg-color-surface-soft:#F2F2F7;--vg-color-text:#000000;--vg-color-text-secondary:rgba(60,60,67,.6);--vg-color-text-muted:rgba(60,60,67,.6);--vg-color-border:transparent;--vg-color-divider:rgba(60,60,67,.29);--vg-color-primary:#007AFF;--vg-color-primary-soft:rgba(0,122,255,.12);--vg-color-success:#34C759;--vg-color-success-soft:rgba(52,199,89,.12);--vg-color-warning:#9A6700;--vg-color-warning-soft:#FFF3DF;--vg-color-danger:#FF3B30;--vg-color-danger-soft:rgba(255,59,48,.12);--vg-color-neutral:#6B7280;--vg-color-neutral-soft:rgba(118,118,128,.12);--vg-color-icon:#000000;--vg-space-tight:6px;--vg-space-related:10px;--vg-space-group:16px;--vg-space-section:24px;--vg-radius-control:999px;--vg-radius-circle:50%;--vg-radius-soft:20px;--vg-radius-raised:22px;--vg-radius-pill:999px;--vg-shadow-group:none;--vg-shadow-raised:0 1px 2px rgba(15,23,42,.06);--vg-shadow-overlay:0 12px 32px rgba(31,41,55,.12);--vg-type-page:17px;--vg-type-section:15px;--vg-type-primary:17px;--vg-type-secondary:15px;--vg-type-label:12px;--vg-type-meta:11px;--vg-type-action:15px;--vg-weight-regular:400;--vg-weight-label:500;--vg-weight-title:600;--vg-weight-value:600;--vg-weight-emphasis:700;--vg-control-height:44px;--ios-ease-out:cubic-bezier(.22,1,.36,1);--ios-route-ease:cubic-bezier(0.32, 0.72, 0, 1);--ios-ease-spring:cubic-bezier(.22,1.18,.36,1);--ios-touch:120ms;--ios-control:180ms;--ios-route:240ms;--ios-glass:rgba(255,255,255,.72);--ios-glass-border:rgba(255,255,255,.58);}
+html{background:var(--vg-color-bg);-webkit-text-size-adjust:100%;}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','SF Arabic','Helvetica Neue',sans-serif;background:var(--vg-color-bg);color:var(--vg-color-text);line-height:1.55;font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased;overflow-x:hidden;max-width:100vw;overscroll-behavior-y:contain;touch-action:manipulation;-webkit-overflow-scrolling:touch;font-size:17px;font-weight:400;}
+h1,
+h2,
+h3,
+h4,
+h5,
+h6{margin:0;font-weight:var(--vg-weight-title);color:var(--vg-color-text);}
+h2.section-title{letter-spacing:-.18px;line-height:1.3;font-size:17px;font-weight:600;}
+h3.sub-title{line-height:1.3;font-size:15px;font-weight:600;}
+a{color:inherit;text-decoration:none;}
+p{margin:0 0 1em;}
 @media (prefers-reduced-motion:reduce){
-  *,
-  *::before,
-  *::after{
-    animation-duration:.01ms!important;
-    animation-iteration-count:1!important;
-    transition-duration:.01ms!important;
-  }
+*,
+*::before,
+*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important;}
 }
-
-/* --------------------------------------------------------------------------
-   CANVAS BACKGROUND HOOK (iOS 26 two-tier background patch)
-   Self-contained: these two classes control ONLY the page canvas color.
-   Not part of the .vg-route-* namespace (that namespace is intentionally
-   left untouched/dormant elsewhere in this project). Applied to <html> by
-   router.js so it wins on both the html and body paint layers (covers
-   iOS rubber-band overscroll on either element).
-   -------------------------------------------------------------------------- */
-:root{
-  --vg-color-bg-system: #FFFFFF;
-}
-html.vg-canvas-white,
-html.vg-canvas-white body{
-  background:var(--vg-color-bg-system);
-}
+:root{--vg-color-bg-system:#FFFFFF;}
 html.vg-canvas-grouped,
-html.vg-canvas-grouped body{
-  background:var(--vg-color-bg);
-}
-
-/* Search field (capsule) contrast: on the flat white canvas the existing
-   ios-glass background/border pairing (designed to sit over the grouped
-   #F5F7FA canvas) becomes visually indistinguishable from the page itself.
-   Minimum fix: swap only the border color back to the standard, visible
-   border token when the white canvas is active. No size/background/shadow/
-   blur/behavior/DOM change. */
+html.vg-canvas-grouped body{background:var(--vg-color-bg);}
 html.vg-canvas-white input[type="search"],
-html.vg-canvas-white input[placeholder*="جستجو"]{
-  border-color:var(--vg-color-border);
-}
-
-
-/* ============================================================
-   BAGHERI THEME LAYER — Dark Mode
-   The root attribute is the resolved theme (light/dark). The stored
-   preference itself remains in localStorage as system/light/dark.
-   ============================================================ */
-
-:root{
-  color-scheme:light;
-}
-
-html[data-theme="light"]{
-  color-scheme:light;
-}
-
-html[data-theme="dark"]{
-  color-scheme:dark;
-
-  --vg-color-bg:               #17100B;
-  --vg-color-bg-system:        #050403;
-  --vg-color-surface:          #241A13;
-  --vg-color-surface-soft:     #302219;
-  --vg-color-text:             #F2F2F7;
-  --vg-color-text-secondary:   #C7C9D1;
-  --vg-color-text-muted:       #9699A3;
-  --vg-color-border:           rgba(255,255,255,.105);
-  --vg-color-divider:          rgba(255,255,255,.075);
-  --vg-color-brand:            #F18A43;
-  --vg-color-brand-soft:       rgba(236,119,40,.18);
-  --vg-color-primary:          #E17A36;
-  --vg-color-primary-soft:     rgba(236,119,40,.18);
-  --vg-color-success:          #69B88F;
-  --vg-color-success-text:     #9AD5B2;
-  --vg-color-success-soft:     rgba(63,142,105,.18);
-  --vg-color-earth:            #C4875B;
-  --vg-color-gold:             #E0B85D;
-  --vg-color-warning:          #E0B85D;
-  --vg-color-warning-soft:     rgba(200,155,60,.18);
-  --vg-color-danger:           #E46B5D;
-  --vg-color-danger-soft:      rgba(192,57,43,.20);
-  --vg-color-neutral:          #A7ABB5;
-  --vg-color-neutral-soft:     #292C32;
-  --vg-color-icon:             #F4C39A;
-  --vg-color-on-primary:       #1B1009;
-  --vg-color-primary-rgb:      225 122 54;
-  --vg-color-gold-rgb:         224 184 93;
-
-  --vg-shadow-group:           0 2px 10px rgba(0,0,0,.20);
-  --vg-shadow-raised:          0 6px 20px rgba(0,0,0,.28);
-  --vg-shadow-overlay:         0 12px 32px rgba(0,0,0,.38);
-  --vg-shadow-glass:           0 6px 24px rgba(0,0,0,.28), 0 1px 3px rgba(0,0,0,.22);
-
-  --ios-glass:                 rgba(28,30,35,.78);
-  --ios-glass-border:          rgba(255,255,255,.13);
-
-  /* Existing legacy aliases used by protected application CSS. */
-  --olive-dark:                var(--vg-color-primary);
-  --gold:                      var(--vg-color-brand);
-  --ink:                       var(--vg-color-text);
-  --ink-soft:                  var(--vg-color-text-muted);
-  --card:                      var(--vg-color-surface);
-  --line:                      var(--vg-color-border);
-  --accent-dark:               var(--vg-color-primary);
-  --accent-soft:               var(--vg-color-brand-soft);
-}
-
-/* Canvas + native iOS/PWA surfaces */
+html.vg-canvas-white input[placeholder*="جستجو"]{border-color:var(--vg-color-border);}
+:root{color-scheme:light;}
+html[data-theme="light"]{color-scheme:light;}
+html[data-theme="dark"]{color-scheme:dark;--vg-glass-tint:rgba(28,28,30,.62);--vg-glass-border:rgba(255,255,255,.12);--vg-color-bg:#000000;--vg-color-bg-system:#000000;--vg-color-surface:#1C1C1E;--vg-color-surface-soft:#2C2C2E;--vg-color-text:#FFFFFF;--vg-color-text-secondary:rgba(235,235,245,.6);--vg-color-text-muted:rgba(235,235,245,.6);--vg-color-border:transparent;--vg-color-divider:rgba(84,84,88,.65);--vg-color-primary:#0A84FF;--vg-color-primary-soft:rgba(10,132,255,.2);--vg-color-success:#30D158;--vg-color-success-soft:rgba(48,209,88,.16);--vg-color-warning:#F3B85B;--vg-color-warning-soft:rgba(245,161,49,.15);--vg-color-danger:#FF453A;--vg-color-danger-soft:rgba(255,69,58,.16);--vg-color-neutral:#A7ABB5;--vg-color-neutral-soft:#292C32;--vg-color-icon:#FFFFFF;--vg-shadow-group:none;--vg-shadow-raised:0 1px 2px rgba(0,0,0,.35);--vg-shadow-overlay:0 12px 32px rgba(0,0,0,.38);--ios-glass:rgba(28,30,35,.78);--ios-glass-border:rgba(255,255,255,.13);--olive-dark:var(--vg-color-primary);--gold:#FF5C35;--ink:var(--vg-color-text);--ink-soft:var(--vg-color-text-muted);--line:var(--vg-color-divider);--accent-dark:#FF7658;}
 html[data-theme="dark"],
-html[data-theme="dark"] body{
-  background:var(--vg-color-bg-system);
-}
-
-html[data-theme="dark"] body{
-  color:var(--vg-color-text);
-}
-
+html[data-theme="dark"] body{background:var(--vg-color-bg-system);}
+html[data-theme="dark"] body{color:var(--vg-color-text);}
 html[data-theme="dark"] input,
 html[data-theme="dark"] textarea,
 html[data-theme="dark"] select,
-html[data-theme="dark"] button{
-  color-scheme:dark;
-}
-
-/* Global glass/navigation surfaces */
-html[data-theme="dark"] header{
-  background:var(--vg-color-surface);
-  border-bottom-color:var(--vg-color-border);
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] header h1{
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] header .header-date{
-  color:var(--vg-color-text-muted);
-}
-html[data-theme="dark"] .bottom-nav{
-  background:rgba(24,26,31,.84);
-  border-color:var(--vg-color-border);
-  box-shadow:0 8px 24px rgba(0,0,0,.30),0 2px 6px rgba(0,0,0,.22);
-}
-html[data-theme="dark"] .bn-indicator{
-  background:rgba(255,255,255,.075);
-  border-color:rgba(255,255,255,.12);
-  box-shadow:0 1px 3px rgba(0,0,0,.20),0 5px 12px rgba(0,0,0,.18),
-             inset 0 1px 0 rgba(255,255,255,.10),inset 0 -1px 0 rgba(0,0,0,.12);
-}
+html[data-theme="dark"] button{color-scheme:dark;}
+html[data-theme="dark"] header{border-bottom-color:var(--vg-color-border);color:var(--vg-color-text);}
+html[data-theme="dark"] header h1{color:var(--vg-color-text);}
+html[data-theme="dark"] header .header-date{color:var(--vg-color-text-muted);}
 html[data-theme="dark"] .bn-indicator.is-lifted,
 html[data-theme="dark"] .bn-indicator.is-traveling,
-html[data-theme="dark"] .bn-indicator.is-settling{
-  box-shadow:0 4px 10px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.11);
-}
-
-html[data-theme="dark"] .more-overlay{
-  background:rgba(0,0,0,.58);
-}
-html[data-theme="dark"] .more-sheet,
-html[data-theme="dark"] .more-sheet-item{
-  background:var(--vg-color-surface);
-  color:var(--vg-color-text);
-  border-color:var(--vg-color-border);
-}
+html[data-theme="dark"] .bn-indicator.is-settling{box-shadow:0 4px 10px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.11);}
+html[data-theme="dark"] .more-overlay{background:rgba(0,0,0,.58);}
+html[data-theme="dark"] .more-sheet{background:var(--vg-glass-tint);color:var(--vg-color-text);border-color:var(--vg-glass-border);}
+html[data-theme="dark"] .more-sheet-item{background:var(--vg-color-surface);color:var(--vg-color-text);border-color:var(--vg-color-border);}
 html.theme-transition,
-html.theme-transition *{
-  transition:background-color 180ms ease,
+html.theme-transition *{transition:background-color 180ms ease,
              color 180ms ease,
              border-color 180ms ease,
-             box-shadow 180ms ease !important;
-}
-
-html[data-theme="dark"] .sheet-handle{
-  background:rgba(255,255,255,.16);
-}
-html[data-theme="dark"] .more-sheet-handle{
-  background:rgba(255,255,255,.16);
-}
-html[data-theme="dark"] .more-sheet-title{
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] .more-sheet-item.active{
-  background:var(--vg-color-primary-soft);
-  border-color:var(--vg-color-primary);
-  color:var(--vg-color-primary);
-}
-html[data-theme="dark"] .more-sheet-item-ico{
-  background:rgb(var(--vg-color-primary-rgb) / .14);
-  color:var(--vg-color-icon);
-}
-html[data-theme="dark"] .more-sheet-item.active .more-sheet-item-ico{
-  background:rgb(var(--vg-color-primary-rgb) / .20);
-}
-html[data-theme="dark"] .more-sheet-item-chevron{
-  color:var(--vg-color-text-muted);
-}
-
-/* Common application surfaces that were intentionally white in Light Mode. */
+             box-shadow 180ms ease !important;}
+html[data-theme="dark"] .sheet-handle{background:rgba(255,255,255,.16);}
+html[data-theme="dark"] .more-sheet-handle{background:rgba(255,255,255,.16);}
+html[data-theme="dark"] .more-sheet-title{color:var(--vg-color-text);}
+html[data-theme="dark"] .more-sheet-item.active{background:var(--vg-color-primary-soft);border-color:var(--vg-color-primary);color:var(--vg-color-primary);}
+html[data-theme="dark"] .more-sheet-item-ico{background:rgba(90,169,240,.14);color:var(--vg-color-icon);}
+html[data-theme="dark"] .more-sheet-item.active .more-sheet-item-ico{background:rgba(90,169,240,.20);}
+html[data-theme="dark"] .more-sheet-item-chevron{color:var(--vg-color-text-muted);}
 html[data-theme="dark"] .card,
 html[data-theme="dark"] .dash-health-row,
-html[data-theme="dark"] .dash-monthly-target,
 html[data-theme="dark"] .dash-qa-btn,
 html[data-theme="dark"] .dash-activity-section,
-html[data-theme="dark"] .dash-watch-compact,
-html[data-theme="dark"] .biz-status-secondary,
 html[data-theme="dark"] .cust-summary,
-html[data-theme="dark"] .cust-recommended-action,
 html[data-theme="dark"] .tx-details,
-html[data-theme="dark"] .prospect-daily-target,
-html[data-theme="dark"] .inv-items-card,
-html[data-theme="dark"] .inv-profit-summary,
-html[data-theme="dark"] .inv-summary-section{
-  background:var(--vg-color-surface);
-  color:var(--vg-color-text);
-  border-color:var(--vg-color-border);
-  box-shadow:var(--vg-shadow-group);
-}
-
+html[data-theme="dark"] .prospect-daily-target{background:var(--vg-color-surface);color:var(--vg-color-text);border-color:var(--vg-color-border);}
 html[data-theme="dark"] .dash-health-label,
 html[data-theme="dark"] .dash-health-value,
 html[data-theme="dark"] .dash-section-label,
-html[data-theme="dark"] .dash-monthly-target,
-html[data-theme="dark"] .biz-stat-value,
 html[data-theme="dark"] .action-person,
 html[data-theme="dark"] .action-main,
 html[data-theme="dark"] .customer-row-name,
 html[data-theme="dark"] .tx-identity-title,
-html[data-theme="dark"] .cust-summary-story,
-html[data-theme="dark"] .cust-summary-action{
-  color:var(--vg-color-text);
-}
+html[data-theme="dark"] .cust-summary-story{color:var(--vg-color-text);}
 html[data-theme="dark"] .dash-health-label,
-html[data-theme="dark"] .biz-stat-label,
 html[data-theme="dark"] .action-why,
 html[data-theme="dark"] .action-why-now,
 html[data-theme="dark"] .action-badge,
@@ -392,12 +77,9 @@ html[data-theme="dark"] .tx-hint,
 html[data-theme="dark"] .tx-identity-meta,
 html[data-theme="dark"] .tx-dot,
 html[data-theme="dark"] .dash-activity .ledger-row .sub,
-html[data-theme="dark"] .dash-watch-compact-label,
-html[data-theme="dark"] .dash-watch-compact-chevron,
 html[data-theme="dark"] .inv-section-title,
 html[data-theme="dark"] .inv-section-title-optional,
 html[data-theme="dark"] .inv-customer-meta,
-html[data-theme="dark"] .inv-date-field label,
 html[data-theme="dark"] .inv-items-card-label,
 html[data-theme="dark"] .inv-line-calc,
 html[data-theme="dark"] .inv-line-x,
@@ -405,40 +87,14 @@ html[data-theme="dark"] .inv-line-unit,
 html[data-theme="dark"] .inv-line-market-details,
 html[data-theme="dark"] .inv-line-market-row span,
 html[data-theme="dark"] .inv-payment-panel-head small,
-html[data-theme="dark"] .inv-payment-panel > label,
-html[data-theme="dark"] .inv-payment-check-due > label,
-html[data-theme="dark"] .inv-discount-label,
-html[data-theme="dark"] .inv-summary-discount{
-  color:var(--vg-color-text-muted);
-}
-
-/* Dashboard semantic controls */
-html[data-theme="dark"] .dmt-title{color:var(--vg-color-primary);}
-html[data-theme="dark"] .dmt-figures,
-html[data-theme="dark"] .dmt-pace,
-html[data-theme="dark"] .dmt-figures-num{color:var(--vg-color-text-muted);}
-html[data-theme="dark"] .dmt-bar,
-html[data-theme="dark"] .prospect-daily-target .pdt-bar{
-  background:rgba(255,255,255,.10);
-}
-html[data-theme="dark"] .dash-watch-compact-ico{
-  background:var(--vg-color-warning-soft);
-  color:var(--vg-color-icon);
-}
-
-/* Sheets, forms and native controls */
+html[data-theme="dark"] .inv-payment-panel>label,
+html[data-theme="dark"] .inv-payment-check-due>label,
+html[data-theme="dark"] .inv-discount-label{color:var(--vg-color-text-muted);}
+html[data-theme="dark"] .prospect-daily-target .pdt-bar{background:rgba(255,255,255,.10);}
 html[data-theme="dark"] .overlay .sheet,
-html[data-theme="dark"] .sheet{
-  background:var(--vg-color-surface);
-  color:var(--vg-color-text);
-  border-color:var(--vg-color-border);
-  box-shadow:var(--vg-shadow-raised);
-}
-html[data-theme="dark"] .inv-payment-panel{
-  background:var(--vg-color-surface);
-  border-color:var(--vg-color-border);
-  box-shadow:var(--vg-shadow-overlay), 0 0 0 100vmax rgba(0,0,0,.45);
-}
+html[data-theme="dark"] .sheet:not(.inv-sheet-host){background:var(--vg-glass-tint);color:var(--vg-color-text);border-color:var(--vg-glass-border);box-shadow:var(--vg-shadow-raised);}
+html[data-theme="dark"] .sheet.inv-sheet-host{background:var(--vg-color-surface);color:var(--vg-color-text);border-color:var(--vg-color-border);box-shadow:var(--vg-shadow-raised);}
+html[data-theme="dark"] .inv-payment-panel{background:var(--vg-color-surface);border-color:var(--vg-color-border);box-shadow:var(--vg-shadow-overlay), 0 0 0 100vmax rgba(0,0,0,.45);}
 html[data-theme="dark"] .field input,
 html[data-theme="dark"] .field select,
 html[data-theme="dark"] .field textarea,
@@ -446,36 +102,18 @@ html[data-theme="dark"] input[type="search"],
 html[data-theme="dark"] input[placeholder*="جستجو"],
 html[data-theme="dark"] .tx-toolbar-select,
 html[data-theme="dark"] .inv-mini-input,
-html[data-theme="dark"] .inv-payment-panel > input,
+html[data-theme="dark"] .inv-payment-panel>input,
 html[data-theme="dark"] .inv-payment-check-due input,
 html[data-theme="dark"] .inv-discount-block input,
-html[data-theme="dark"] .prod-drop-search{
-  background-color:var(--vg-color-surface-soft);
-  color:var(--vg-color-text);
-  border-color:var(--vg-color-border);
-}
+html[data-theme="dark"] .prod-drop-search{background-color:var(--vg-color-surface-soft);color:var(--vg-color-text);border-color:var(--vg-color-border);}
 html[data-theme="dark"] input::placeholder,
-html[data-theme="dark"] textarea::placeholder{
-  color:var(--vg-color-text-muted);
-}
+html[data-theme="dark"] textarea::placeholder{color:var(--vg-color-text-muted);}
 html[data-theme="dark"] .field select,
 html[data-theme="dark"] .tx-toolbar-select,
-html[data-theme="dark"] .inv-discount-block select{
-  background-color:var(--vg-color-surface-soft);
-}
-html[data-theme="dark"] .prod-drop-panel{
-  background:rgba(24,26,31,.97);
-  border-color:var(--vg-color-border);
-  box-shadow:var(--vg-shadow-overlay);
-}
-html[data-theme="dark"] .prod-drop-search-wrap{
-  background:var(--vg-color-surface-soft);
-  border-color:var(--vg-color-divider);
-}
+html[data-theme="dark"] .inv-discount-block select{background-color:var(--vg-color-surface-soft);}
+html[data-theme="dark"] .prod-drop-search-wrap{background:var(--vg-color-surface-soft);border-color:var(--vg-color-divider);}
 html[data-theme="dark"] .prod-drop-item:active,
-html[data-theme="dark"] .prod-drop-item:focus{
-  background:rgba(255,255,255,.07);
-}
+html[data-theme="dark"] .prod-drop-item:focus{background:rgba(255,255,255,.07);}
 html[data-theme="dark"] .prod-drop-name,
 html[data-theme="dark"] .inv-customer-name,
 html[data-theme="dark"] .inv-line-collapsed .inv-line-amount,
@@ -483,324 +121,102 @@ html[data-theme="dark"] .inv-payment-panel-head,
 html[data-theme="dark"] .inv-payment-total,
 html[data-theme="dark"] .inv-summary-section #calc-summary .ledger-row .amount,
 html[data-theme="dark"] .inv-summary-section #calc-summary .inv-total-row .name,
-html[data-theme="dark"] .inv-summary-section #calc-summary .inv-total-row .amount{
-  color:var(--vg-color-text);
-}
-
-/* Invoice entry only — printable .inv-doc/#printArea remain untouched. */
-html[data-theme="dark"] .inv-header{
-  background:rgba(24,26,31,.88);
-  color:var(--vg-color-text);
-  border-color:var(--vg-color-border);
-}
+html[data-theme="dark"] .inv-summary-section #calc-summary .inv-total-row .amount{color:var(--vg-color-text);}
+html[data-theme="dark"] .inv-header{background:rgba(24,26,31,.88);color:var(--vg-color-text);border-color:var(--vg-color-border);}
 html[data-theme="dark"] .inv-header-title-main,
-html[data-theme="dark"] .inv-summary-section #calc-summary .ledger-row .name{
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] .inv-line-view-active{
-  background:var(--vg-color-surface-soft);
-}
-html[data-theme="dark"] .inv-line + .inv-line::before{
-  background:var(--vg-color-divider);
-}
-html[data-theme="dark"] .inv-payment-action{
-  background:var(--vg-color-surface);
-  color:var(--vg-color-text);
-  border-color:var(--vg-color-border);
-}
-html[data-theme="dark"] .inv-payment-action.is-active{
-  background:var(--vg-color-primary-soft);
-  border-color:var(--vg-color-primary);
-  color:var(--vg-color-primary);
-}
-html[data-theme="dark"] .inv-payment-backdrop{
-  background:rgba(0,0,0,.56);
-}
-html[data-theme="dark"] .inv-discount-block{
-  background:var(--vg-color-surface-soft);
-}
-html[data-theme="dark"] .inv-discount-type{
-  background:rgba(255,255,255,.07);
-}
-html[data-theme="dark"] .inv-discount-type-btn.is-active{
-  background:var(--vg-color-surface);
-  color:var(--vg-color-primary);
-  box-shadow:0 1px 4px rgba(0,0,0,.28);
-}
-html[data-theme="dark"] .inv-line-avg-cost{
-  background:rgba(255,255,255,.06);
-  color:var(--vg-color-text-secondary);
-}
-html[data-theme="dark"] .inv-line-avg-cost.is-below{
-  background:var(--vg-color-danger-soft);
-  color:var(--vg-color-danger);
-}
-html[data-theme="dark"] .dash-qa-label{
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] .dashboard-eyebrow{
-  color:var(--vg-color-text-muted);
-}
-html[data-theme="dark"] .report-summary-value.debt{
-  color:var(--vg-color-danger);
-}
-html[data-theme="dark"] .inv-customer-kicker{
-  color:var(--vg-color-text-muted);
-}
-html[data-theme="dark"] button.app-back{
-  background:rgba(255,255,255,.08);
-}
-html[data-theme="dark"] .prod-drop-ico{
-  background:var(--vg-color-primary-soft);
-}
-html[data-theme="dark"] .inv-line-market-details summary{
-  color:var(--vg-color-text-secondary);
-}
+html[data-theme="dark"] .inv-summary-section #calc-summary .ledger-row .name{color:var(--vg-color-text);}
+html[data-theme="dark"] .inv-line-view-active{background:var(--vg-color-surface-soft);}
+html[data-theme="dark"] .inv-line+.inv-line::before{background:var(--vg-color-divider);}
+html[data-theme="dark"] .inv-payment-action{background:transparent;color:var(--vg-color-text);}
+html[data-theme="dark"] .inv-payment-action.is-active{background:var(--vg-color-primary-soft);color:var(--vg-color-primary);}
+html[data-theme="dark"] .inv-payment-backdrop{background:rgba(0,0,0,.56);}
+html[data-theme="dark"] .inv-discount-type{background:rgba(255,255,255,.07);}
+html[data-theme="dark"] .inv-discount-type-btn.is-active{background:var(--vg-color-surface);color:var(--vg-color-primary);box-shadow:0 1px 4px rgba(0,0,0,.28);}
+html[data-theme="dark"] .inv-line-avg-cost{background:rgba(255,255,255,.06);color:var(--vg-color-text-secondary);}
+html[data-theme="dark"] .inv-line-avg-cost.is-below{background:var(--vg-color-danger-soft);color:var(--vg-color-danger);}
+html[data-theme="dark"] .dash-qa-label{color:var(--vg-color-text);}
+html[data-theme="dark"] .dashboard-eyebrow{color:var(--vg-color-text-muted);}
+html[data-theme="dark"] button.app-back{background:rgba(255,255,255,.08);}
+html[data-theme="dark"] .prod-drop-ico{background:var(--vg-color-primary-soft);}
+html[data-theme="dark"] .inv-line-market-details summary{color:var(--vg-color-text-secondary);}
 html[data-theme="dark"] .inv-payment-close,
-html[data-theme="dark"] .inv-header-btn{
-  background:rgba(255,255,255,.07);
-  color:var(--vg-color-text-muted);
-}
-/* Destructive row action stays a danger color in Dark Mode (Light Mode: var(--vg-color-danger)). */
-html[data-theme="dark"] .inv-line-del{
-  background:rgba(255,255,255,.07);
-  color:var(--vg-color-danger);
-}
-
-/* Prospect, evaluation and Game Center */
+html[data-theme="dark"] .inv-header-btn{background:rgba(255,255,255,.07);color:var(--vg-color-text-muted);}
+html[data-theme="dark"] .inv-line-del{background:rgba(255,255,255,.07);color:var(--vg-color-danger);}
 html[data-theme="dark"] .prospect-daily-target .pdt-label,
-html[data-theme="dark"] .prospect-daily-target .pdt-count{
-  color:var(--vg-color-text);
-}
+html[data-theme="dark"] .prospect-daily-target .pdt-count{color:var(--vg-color-text);}
 html[data-theme="dark"] .prospect-daily-target .pdt-pct,
 html[data-theme="dark"] .prospect-daily-target .pdt-caption,
-html[data-theme="dark"] .prospect-daily-target .pdt-of{
-  color:var(--vg-color-text-muted);
-}
+html[data-theme="dark"] .prospect-daily-target .pdt-of{color:var(--vg-color-text-muted);}
 html[data-theme="dark"] .q-title{color:var(--vg-color-primary);}
 html[data-theme="dark"] .q-block{border-color:var(--vg-color-divider);}
-html[data-theme="dark"] .gc-title{color:var(--vg-color-text)!important;}
+html[data-theme="dark"] .gc-title{color:var(--vg-color-text) !important;}
 html[data-theme="dark"] .gc-title-line{background:var(--vg-color-divider);}
 html[data-theme="dark"] .gc-seg{background:rgba(255,255,255,.07);}
 html[data-theme="dark"] .gc-seg-btn{color:var(--vg-color-text-muted);}
-html[data-theme="dark"] .gc-seg-btn.is-active{
-  background:var(--vg-color-surface);
-  color:var(--vg-color-text);
-  box-shadow:0 1px 2px rgba(0,0,0,.24);
-}
+html[data-theme="dark"] .gc-seg-btn.is-active{background:var(--vg-color-surface);color:var(--vg-color-text);box-shadow:0 1px 2px rgba(0,0,0,.24);}
 html[data-theme="dark"] .gc-section-ico,
 html[data-theme="dark"] .gc-section-title,
-html[data-theme="dark"] .gc-mission-icon{
-  color:var(--vg-color-icon);
-}
-html[data-theme="dark"] .gc-mission-icon{
-  background:rgba(255,255,255,.06);
-}
-
-/* Status colors retain semantic meaning while gaining dark-theme contrast. */
-html[data-theme="dark"] .watch-level-high{
-  color:#F3A56B;
-}
+html[data-theme="dark"] .gc-mission-icon{color:var(--vg-color-icon);}
+html[data-theme="dark"] .gc-mission-icon{background:rgba(255,255,255,.06);}
+html[data-theme="dark"] .watch-level-high{color:#F3A56B;}
 html[data-theme="dark"] .action-row-critical::after{background:var(--vg-color-danger);}
 html[data-theme="dark"] .action-row-high::after{background:var(--vg-color-warning);}
-html[data-theme="dark"] .dash-risk-badge{
-  color:var(--vg-color-danger);
-  background:var(--vg-color-danger-soft);
-  border-color:var(--vg-color-danger-soft);
-}
-html[data-theme="dark"] .action-urgency-critical{
-  color:var(--vg-color-danger);
-  background:var(--vg-color-danger-soft);
-}
-html[data-theme="dark"] .action-urgency-high{
-  color:#FF9A78;
-  background:rgba(255,92,53,.16);
-}
-html[data-theme="dark"] .action-urgency-medium{
-  color:var(--vg-color-primary);
-  background:var(--vg-color-primary-soft);
-}
-html[data-theme="dark"] .action-urgency-low{
-  color:var(--vg-color-neutral);
-  background:var(--vg-color-neutral-soft);
-}
-
-html[data-theme="dark"] .watch-severity-high{
-  color:var(--vg-color-danger)!important;
-  background:rgba(250,57,70,.15);
-}
-html[data-theme="dark"] .watch-detail-reason .watch-detail-value{
-  color:var(--vg-color-warning);
-}
-html[data-theme="dark"] .dash-action-toggle{
-  border-color:rgba(255,255,255,.14);
-  color:var(--vg-color-warning);
-}
-
-/* Settings */
-html[data-theme="dark"] .settings-warn{
-  color:var(--accent-dark);
-  background:var(--vg-color-warning-soft);
-}
-html[data-theme="dark"] .auto-backup-row{
-  border-bottom-color:var(--vg-color-divider);
-}
-html[data-theme="dark"] .tech-label{
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] .tech-chevron{
-  color:var(--vg-color-text-muted);
-}
-
-
-/* Surgical dark corrections for page-specific literals that cannot be
-   migrated globally without changing the Light-mode rendering. */
-html[data-theme="dark"] .dash-health-value.debt{
-  color:var(--vg-color-danger);
-}
+html[data-theme="dark"] .dash-risk-badge{color:var(--vg-color-danger);background:var(--vg-color-danger-soft);border-color:var(--vg-color-danger-soft);}
+html[data-theme="dark"] .action-urgency-critical{color:var(--vg-color-danger);background:var(--vg-color-danger-soft);}
+html[data-theme="dark"] .action-urgency-high{color:#FF9A78;background:rgba(255,92,53,.16);}
+html[data-theme="dark"] .action-urgency-medium{color:var(--vg-color-primary);background:var(--vg-color-primary-soft);}
+html[data-theme="dark"] .action-urgency-low{color:var(--vg-color-neutral);background:var(--vg-color-neutral-soft);}
+html[data-theme="dark"] .watch-severity-high{color:#FF6973 !important;background:rgba(250,57,70,.15);}
+html[data-theme="dark"] .dash-action-toggle{border-color:rgba(255,255,255,.14);color:var(--vg-color-warning);}
+html[data-theme="dark"] .settings-warn{color:var(--accent-dark);background:var(--vg-color-warning-soft);}
+html[data-theme="dark"] .auto-backup-row{border-bottom-color:var(--vg-color-divider);}
+html[data-theme="dark"] .tech-label{color:var(--vg-color-text);}
+html[data-theme="dark"] .tech-chevron{color:var(--vg-color-text-muted);}
+html[data-theme="dark"] .dash-health-value.debt{color:var(--vg-color-danger);}
 html[data-theme="dark"] .dash-health-link:active,
 html[data-theme="dark"] .dash-qa-btn:active,
-html[data-theme="dark"] .cust-actions-secondary .btn:active{
-  background:var(--vg-color-surface-soft);
-}
-html[data-theme="dark"] .product-profit-pct{
-  color:var(--vg-color-text);
-  background:var(--vg-color-primary-soft);
-}
-html[data-theme="dark"] .inv-summary-quiet .value{
-  color:var(--vg-color-text-secondary);
-}
-html[data-theme="dark"] .field-score-value{
-  color:var(--vg-color-text);
-}
+html[data-theme="dark"] .cust-actions-secondary .btn:active{background:var(--vg-color-surface-soft);}
+html[data-theme="dark"] .product-profit-pct{color:var(--vg-color-text);background:var(--vg-color-primary-soft);}
+html[data-theme="dark"] .inv-summary-quiet .value{color:var(--vg-color-text-secondary);}
+html[data-theme="dark"] .field-score-value{color:var(--vg-color-text);}
 html[data-theme="dark"] .field-score-meta,
-html[data-theme="dark"] .report-note{
-  color:var(--vg-color-text-muted);
-}
-html[data-theme="dark"] .report-profit-secondary .value{
-  color:var(--vg-color-text-secondary);
-}
+html[data-theme="dark"] .report-note{color:var(--vg-color-text-muted);}
 html[data-theme="dark"] #import-file,
 html[data-theme="dark"] input[type="file"]#import-file,
-html[data-theme="dark"] .ff-date-field .shamsi-date-field{
-  color:var(--vg-color-text);
-  background:var(--vg-color-surface-soft);
-  border-color:var(--vg-color-border);
-}
-html[data-theme="dark"] .eval-incomplete-note{
-  background:rgba(255,255,255,.04);
-  border-color:var(--vg-color-border);
-}
+html[data-theme="dark"] .ff-date-field .shamsi-date-field{color:var(--vg-color-text);background:var(--vg-color-surface-soft);border-color:var(--vg-color-border);}
+html[data-theme="dark"] .eval-incomplete-note{background:rgba(255,255,255,.04);border-color:var(--vg-color-border);}
 html[data-theme="dark"] .eval-incomplete-title,
-html[data-theme="dark"] .rank-pill-incomplete{
-  color:var(--vg-color-text-secondary);
-}
-html[data-theme="dark"] .rank-pill-incomplete{
-  background:rgba(255,255,255,.08);
-}
-html[data-theme="dark"] .snapshot-edit-option.selected{
-  background:var(--vg-color-primary-soft);
-  border-color:rgb(var(--vg-color-primary-rgb) / .24);
-  color:var(--vg-color-text);
-}
-html[data-theme="dark"] .inv-payment-panel > input:focus,
-html[data-theme="dark"] .inv-payment-check-due input:focus{
-  border-color:var(--vg-color-primary);
-}
-html[data-theme="dark"] .inv-payment-check-due input:focus{
-  box-shadow:0 0 0 3px var(--vg-color-danger-soft);
-}
-html[data-theme="dark"] .report-accordion-chevron::before{
-  border-right-color:var(--vg-color-text-muted);
-  border-bottom-color:var(--vg-color-text-muted);
-}
+html[data-theme="dark"] .rank-pill-incomplete{color:var(--vg-color-text-secondary);}
+html[data-theme="dark"] .rank-pill-incomplete{background:rgba(255,255,255,.08);}
+html[data-theme="dark"] .snapshot-edit-option.selected{background:var(--vg-color-primary-soft);border-color:rgba(90,169,240,.24);color:var(--vg-color-text);}
+html[data-theme="dark"] .inv-payment-panel>input:focus,
+html[data-theme="dark"] .inv-payment-check-due input:focus{border-color:var(--vg-color-primary);}
+html[data-theme="dark"] .inv-payment-check-due input:focus{box-shadow:0 0 0 3px var(--vg-color-danger-soft);}
 html[data-theme="dark"] .inv-profit-summary,
-html[data-theme="dark"] .inv-profit-summary .name{
-  color:var(--vg-color-text-secondary);
-}
-html[data-theme="dark"] .dmt-status-behind,
-html[data-theme="dark"] .report-summary-meta.down{
-  color:var(--vg-color-danger);
-}
-html[data-theme="dark"] .dmt-status-ontrack{
-  color:var(--vg-color-warning);
-}
-html[data-theme="dark"] .dmt-status-ahead,
-html[data-theme="dark"] .report-summary-value.profit,
-html[data-theme="dark"] .report-summary-meta.up,
+html[data-theme="dark"] .inv-profit-summary .name{color:var(--vg-color-text-secondary);}
 html[data-theme="dark"] .gc-mission.is-complete .gc-mission-icon,
 html[data-theme="dark"] .gc-line-val.is-ok,
-html[data-theme="dark"] .gc-pill.is-on{
-  color:var(--vg-color-success);
-}
-
-/* Global icon consumers: currentColor remains the source of truth. */
+html[data-theme="dark"] .gc-pill.is-on{color:var(--vg-color-success);}
 html[data-theme="dark"] .app-icon,
 html[data-theme="dark"] .bottom-nav-item .bn-ico,
 html[data-theme="dark"] .dash-section-ico,
-html[data-theme="dark"] .dash-qa-ico{
-  color:var(--vg-color-icon);
-}
+html[data-theme="dark"] .dash-qa-ico{color:var(--vg-color-icon);}
 html[data-theme="dark"] .bottom-nav-item.active .bn-ico,
-html[data-theme="dark"] .bottom-nav-item.active .bn-ico .app-icon{
-  color:var(--vg-color-primary);
-}
-
-
-/* ============================================================
-   DARK MODE SURFACE MATERIAL — refined
-   Dark cards use subtle border separation instead of
-   black-on-dark box shadows. Scoped to Dark Mode only.
-   Elevation is intentionally retained for sheets, modals,
-   confirm dialogs, toast and floating controls.
-   ============================================================ */
+html[data-theme="dark"] .bottom-nav-item.active .bn-ico .app-icon{color:var(--vg-color-primary);}
 html[data-theme="dark"] .card,
 html[data-theme="dark"] .dash-health-row,
-html[data-theme="dark"] .dash-monthly-target,
 html[data-theme="dark"] .dash-qa-btn,
 html[data-theme="dark"] .dash-activity-section,
-html[data-theme="dark"] .dash-watch-compact,
 html[data-theme="dark"] .cust-summary,
-html[data-theme="dark"] .cust-recommended-action,
 html[data-theme="dark"] .prospect-daily-target,
 html[data-theme="dark"] .settings-section,
 html[data-theme="dark"] .gc-panel,
 html[data-theme="dark"] .gc-mission,
 html[data-theme="dark"] .more-group-card,
-html[data-theme="dark"] .inv-items-card,
-html[data-theme="dark"] .inv-profit-summary,
-html[data-theme="dark"] .inv-summary-section,
-html[data-theme="dark"] .biz-status-secondary,
-html[data-theme="dark"] .report-summary,
-html[data-theme="dark"] .report-summary-card,
 html[data-theme="dark"] .prospect-result-card,
-html[data-theme="dark"] .tx-details {
-  box-shadow: none;
-  border: 1px solid rgba(255,255,255,.10);
-}
-
-/* Settings: nested .card is an intentionally flat content box (see
-   .settings-section .card in app.css). The generic Dark Mode .card rules above
-   are more specific than that rule, so restate the flat treatment here. */
-html[data-theme="dark"] .settings-section .card{
-  background:transparent;
-  border:none;
-  box-shadow:none;
-}
-
-/* Game Center secondary surfaces: the Light Mode black-alpha fills/lines
-   (.05-.08) vanish on the dark surface. Subtle white-alpha equivalents,
-   matching the existing Dark Mode values used by .gc-seg / --vg-color-divider. */
-html[data-theme="dark"] .gc-track{
-  background:rgba(255,255,255,.08);
-}
-html[data-theme="dark"] .gc-pill:not(.is-on){
-  background:rgba(255,255,255,.07);
-}
-html[data-theme="dark"] .gc-line{
-  border-bottom-color:var(--vg-color-divider);
-}
-/* Default/subtle urgency indicator only; critical/high keep their own colors. */
-html[data-theme="dark"] .action-row:not(.action-row-critical):not(.action-row-high)::after{
-  background:rgba(255,255,255,.16);
-}
+html[data-theme="dark"] .tx-details{box-shadow:none;border:1px solid rgba(255,255,255,.10);}
+html[data-theme="dark"] .settings-section .card{background:transparent;border:none;box-shadow:none;}
+html[data-theme="dark"] .gc-track{background:rgba(255,255,255,.08);}
+html[data-theme="dark"] .gc-pill:not(.is-on){background:rgba(255,255,255,.07);}
+html[data-theme="dark"] .gc-line{border-bottom-color:var(--vg-color-divider);}
+html[data-theme="dark"] .action-row:not(.action-row-critical):not(.action-row-high)::after{background:rgba(255,255,255,.16);}
