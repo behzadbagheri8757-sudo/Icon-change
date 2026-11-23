@@ -2793,6 +2793,7 @@ function openInvoiceForm(cid, editInv, opts){
           <span class="prod-drop-name">${esc(p.name)}</span>
           ${hl.length ? `<span class="prod-drop-hint">${window.BagheriPresent.hintHtml(hl)}</span>` : ''}
         </span>
+        ${(p.retail||p.sell) ? `<span class="prod-drop-price">${toman(p.retail||p.sell)} ت</span>` : ''}
         <span class="prod-drop-stock">${enToFaDigits(fmtQtyDisplay(p.stockQty||0))}</span>
         <span class="prod-drop-chevron" aria-hidden="true">›</span>
       </div>
@@ -2800,7 +2801,8 @@ function openInvoiceForm(cid, editInv, opts){
   }
   function productDropListHtml(idx, query){
     const q = (query||'').trim();
-    const matches = p=>!q || (p.name||'').includes(q);
+    const nq = normalizeSearchText(q);
+    const matches = p=>!nq || normalizeSearchText(p.name).includes(nq);
     // Inactive products (active===false) excluded from NEW invoice product selector only.
     const activeOnly = data.products.filter(p=>p.active!==false);
     // Section 1 — this customer's most-purchased products; section 2 — everything else (max 40).
@@ -2821,8 +2823,10 @@ function openInvoiceForm(cid, editInv, opts){
   function productDropPanelHtml(idx){
     return `
       <div class="prod-drop-panel">
+        <div class="prod-drop-grabber" aria-hidden="true"></div>
+        <div class="prod-drop-head"><span class="prod-drop-title">انتخاب کالا</span><button type="button" class="prod-drop-close" data-prod-drop-close aria-label="بستن">×</button></div>
         <div class="prod-drop-search-wrap">
-          <input type="search" class="prod-drop-search" data-row="${idx}" placeholder="جستجوی کالا..." value="" autocomplete="off" enterkeyhint="search">
+          <input type="search" class="prod-drop-search" data-row="${idx}" placeholder="جستجوی کالا..." value="" autocomplete="off" enterkeyhint="search" aria-label="جستجوی کالا">
         </div>
         <div class="prod-drop-list">${productDropListHtml(idx, '')}</div>
       </div>`;
@@ -2917,10 +2921,29 @@ function openInvoiceForm(cid, editInv, opts){
     const totalChipEl = document.getElementById('inv-total-chip-value');
     if(totalChipEl) totalChipEl.textContent = toman(total) + ' ت';
     const summaryEl = document.getElementById('calc-summary');
+    // Presentation-only status label from the SAME numbers the engine already produced
+    // (total / paid) — identical thresholds to invoicePayStatus() used on saved invoices.
+    let payPill = null;
+    if(total > 0){
+      if(paid <= 0) payPill = { cls:'is-unpaid', label:'پرداخت‌نشده' };
+      else if(paid + 0.5 >= total) payPill = { cls:'is-paid', label:'تسویه روی فاکتور' };
+      else payPill = { cls:'is-partial', label:'پرداخت جزئی' };
+    }
+    const pillEl = document.getElementById('inv-pay-pill');
+    if(pillEl){
+      pillEl.hidden = !payPill;
+      pillEl.className = 'inv-pay-pill' + (payPill ? ' ' + payPill.cls : '');
+      pillEl.textContent = payPill ? payPill.label : '';
+    }
     if(summaryEl) summaryEl.innerHTML = `
-      <div class="ledger-row inv-sum-tertiary"><span class="name">مانده قبلی مشتری</span><span class="filler"></span><span class="amount">${toman(prevBalance)} ت</span></div>
-      <div class="ledger-row inv-total-row inv-sum-primary"><span class="name">جمع این فاکتور</span><span class="filler"></span><span class="amount">${toman(total)} ت</span></div>
+      <div class="inv-sum-hero">
+        <div class="inv-sum-hero-label">جمع این فاکتور</div>
+        <div class="inv-sum-hero-amount">${toman(total)} <span class="inv-sum-hero-unit">ت</span></div>
+        ${payPill ? `<span class="inv-pay-pill ${payPill.cls}">${payPill.label}</span>` : ''}
+      </div>
+      ${discountAmount>0?`<div class="ledger-row inv-sum-secondary"><span class="name">جمع اقلام</span><span class="filler"></span><span class="amount">${toman(metrics.subtotal)} ت</span></div>`:''}
       ${discountAmount>0?`<div class="ledger-row inv-discount-row"><span class="name">تخفیف کلی فاکتور</span><span class="filler"></span><span class="amount">− ${toman(discountAmount)} ت</span></div>`:''}
+      <div class="ledger-row inv-sum-tertiary"><span class="name">مانده قبلی مشتری</span><span class="filler"></span><span class="amount">${toman(prevBalance)} ت</span></div>
       <div class="ledger-row inv-sum-secondary"><span class="name">پرداختی</span><span class="filler"></span><span class="amount">(${toman(paid)}) ت</span></div>
       <div class="ledger-row inv-remain-row inv-sum-primary"><span class="name ${remainCls}">مانده جدید</span><span class="filler"></span><span class="amount ${remainCls}">${toman(Math.abs(newBalance))} ت ${balanceStatusWord(newBalance)}</span></div>
     `;
@@ -2975,10 +2998,12 @@ function openInvoiceForm(cid, editInv, opts){
           <div class="inv-section inv-customer-section">
             <h2 class="inv-section-title">مشخصات مشتری</h2>
             <div class="inv-customer-context">
+              <span class="inv-customer-avatar" aria-hidden="true">${esc(String((cust&&cust.name)||'؟').trim().charAt(0)||'؟')}</span>
               <div class="inv-customer-info">
                 <div class="inv-customer-name">${custDisplay}</div>
-                ${cust&&cust.phone?`<div class="inv-customer-meta">${esc(cust.phone)}</div>`:''}
+                ${(cust&&(cust.phone||cust.region))?`<div class="inv-customer-meta">${[cust.phone,cust.region].filter(Boolean).map(esc).join(' · ')}</div>`:''}
               </div>
+              ${editInv?'':'<button type="button" class="inv-customer-change" id="inv-change-customer">تغییر</button>'}
             </div>
           </div>
 
@@ -3024,6 +3049,7 @@ function openInvoiceForm(cid, editInv, opts){
             <div class="inv-payment-heading">
               <h2 class="inv-section-title">دریافتی همراه این فاکتور <span class="inv-section-title-optional">(اختیاری)</span></h2>
               <span class="inv-payment-total" id="inv-payment-total">${toman(cashPaid+cardPaid+transferPaid+checkAmount)} ت</span>
+              <span class="inv-pay-pill" id="inv-pay-pill" hidden></span>
             </div>
 
             <div class="inv-payment-actions" role="group" aria-label="روش دریافت">
@@ -3108,6 +3134,7 @@ function openInvoiceForm(cid, editInv, opts){
           </div>
           <div class="inv-profit-summary" id="inv-profit-summary" aria-label="سود این فاکتور"></div>
         </div>
+
       </div>
     `, {dirtyCheck:true});
     const invoiceBottomNav = document.getElementById('bottom-nav');
@@ -3133,6 +3160,24 @@ function openInvoiceForm(cid, editInv, opts){
       if(cancelBtn) cancelBtn.addEventListener('click', async ()=>{
         if(await window.__requestAppExit('invoice-cancel')) closeModal();
       });
+    })();
+    /* Stage 4 — presentation wiring only.
+       «تغییر» (new invoices only) reuses the Stage 3 customer picker and reopens a blank
+       form for the chosen customer. Invoice submission remains on the original header button. */
+    (function(){
+      const changeBtn = document.getElementById('inv-change-customer');
+      if(changeBtn){
+        changeBtn.addEventListener('click', async ()=>{
+          const touched = rows.some(r=>r.productId) || cashPaid || cardPaid || transferPaid || checkAmount || discount;
+          if(touched && typeof appConfirm === 'function'){
+            if(!(await appConfirm('با تغییر مشتری، اقلام و مبالغ واردشده پاک می‌شود. ادامه می‌دهی؟'))) return;
+          }
+          const nextOpts = Object.assign({}, opts); delete nextOpts.visitId; delete nextOpts.deliveryId;
+          if(typeof openCustomerPicker === 'function'){
+            openCustomerPicker('تغییر مشتری', function(newCid){ openInvoiceForm(newCid, null, nextOpts); });
+          }
+        });
+      }
     })();
     if(_prevScrollTop){
       const _newScrollEl = document.querySelector('.inv-body') || document.querySelector('.sheet');
@@ -3224,6 +3269,7 @@ function openInvoiceForm(cid, editInv, opts){
     function closeAllProductDrops(){
       prodDropOpenRow = null;
       prodDropOpening = false;
+      detachProdDropViewport();
       document.querySelectorAll('.prod-drop').forEach(d=>{
         d.hidden = true;
         d.classList.remove('is-open');
@@ -3263,30 +3309,32 @@ function openInvoiceForm(cid, editInv, opts){
       if(newActiveEl) newActiveEl.classList.add('is-active');
     }
 
-    function positionProductDrop(dropEl, anchorEl){
-      if(!dropEl || !anchorEl) return;
-      const margin = 10;
-      const rect = anchorEl.getBoundingClientRect();
+    /* Presentation only: the product picker is a bottom sheet pinned to the VISUAL viewport,
+       so the iOS keyboard (which shrinks visualViewport, not the layout viewport) never covers
+       the list or the search box. No data or calculation is touched here. */
+    // The listener handle lives on document so a re-render (new closure) can still detach the previous one.
+    function detachProdDropViewport(){
+      const h = document._invProdDropVvHandler;
+      if(h && window.visualViewport){
+        window.visualViewport.removeEventListener('resize', h);
+        window.visualViewport.removeEventListener('scroll', h);
+      }
+      document._invProdDropVvHandler = null;
+    }
+    function positionProductDrop(dropEl){
+      if(!dropEl) return;
       const vv = window.visualViewport;
       const vh = vv ? vv.height : window.innerHeight;
       const vTop = vv ? vv.offsetTop : 0;
-      // Height cap: ~38% viewport, max 300px, min 180px
-      const maxH = Math.min(300, Math.max(180, Math.round(vh * 0.38)));
-      dropEl.style.left = margin + 'px';
-      dropEl.style.right = margin + 'px';
+      const kb = Math.max(0, window.innerHeight - (vTop + vh));
+      dropEl.style.left = '0';
+      dropEl.style.right = '0';
       dropEl.style.width = 'auto';
-      dropEl.style.maxHeight = maxH + 'px';
-      const spaceBelow = (vTop + vh) - rect.bottom - 8;
-      const spaceAbove = rect.top - vTop - 8;
-      if(spaceBelow >= Math.min(maxH, 200) || spaceBelow >= spaceAbove){
-        dropEl.style.top = (rect.bottom + 4) + 'px';
-        dropEl.style.bottom = 'auto';
-        if(spaceBelow < maxH) dropEl.style.maxHeight = Math.max(160, spaceBelow) + 'px';
-      }else{
-        dropEl.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-        dropEl.style.top = 'auto';
-        if(spaceAbove < maxH) dropEl.style.maxHeight = Math.max(160, spaceAbove) + 'px';
-      }
+      dropEl.style.top = vTop + 'px';
+      dropEl.style.bottom = kb + 'px';
+      dropEl.style.maxHeight = 'none';
+      const panel = dropEl.querySelector('.prod-drop-panel');
+      if(panel) panel.style.maxHeight = Math.max(240, Math.round(vh * 0.78)) + 'px';
     }
     function openProductDrop(idx){
       idx = String(idx);
@@ -3312,8 +3360,15 @@ function openInvoiceForm(cid, editInv, opts){
         dropEl.innerHTML = productDropPanelHtml(idx);
         dropEl.hidden = false;
         dropEl.classList.add('is-open');
-        positionProductDrop(dropEl, anchor);
+        positionProductDrop(dropEl);
         prodDropOpenRow = idx;
+        detachProdDropViewport();
+        if(window.visualViewport){
+          const vvh = function(){ positionProductDrop(dropEl); };
+          document._invProdDropVvHandler = vvh;
+          window.visualViewport.addEventListener('resize', vvh);
+          window.visualViewport.addEventListener('scroll', vvh);
+        }
         const search = dropEl.querySelector('.prod-drop-search');
         const list = dropEl.querySelector('.prod-drop-list');
         if(search && list){
@@ -3388,6 +3443,12 @@ function openInvoiceForm(cid, editInv, opts){
         e.preventDefault();
       });
       dropEl.addEventListener('click', e=>{
+        if(e.target === dropEl || e.target.closest('[data-prod-drop-close]')){
+          e.preventDefault();
+          e.stopPropagation();
+          closeAllProductDrops();
+          return;
+        }
         const item = e.target.closest('.prod-drop-item');
         if(!item) return;
         e.preventDefault();

@@ -291,16 +291,6 @@ function runIntelligenceRestoreTx(db, bundle){
   });
 }
 
-/* v117: the Intelligence modules keep their own in-memory state; after a Restore it must become exactly the restored
-   snapshot (epoch-guarded inside each module, so a late hydration can never bring the old rows back). */
-function _replaceIntelligenceModuleState(bundle){
-  try{
-    if(typeof replaceAllOccurrences==='function') replaceAllOccurrences(Array.isArray(bundle.occurrences) ? bundle.occurrences : []);
-    if(typeof replaceAllFeedback==='function') replaceAllFeedback(Array.isArray(bundle.seller_feedback) ? bundle.seller_feedback : []);
-    if(typeof replaceAllBaselines==='function') replaceAllBaselines(Array.isArray(bundle.baseline_cache) ? bundle.baseline_cache : []);
-  }catch(e){ console.warn('intelligence module state refresh failed', e); }
-}
-
 async function restoreIntelligenceBundle(bundle){
   if(!bundle || typeof bundle !== 'object') return false;
   if(!Array.isArray(bundle.occurrences) && !Array.isArray(bundle.seller_feedback) && !Array.isArray(bundle.baseline_cache)){
@@ -338,7 +328,6 @@ async function restoreIntelligenceBundle(bundle){
         localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache, JSON.stringify(baseMap));
         localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks, JSON.stringify(Array.isArray(bundle.seller_acks) ? bundle.seller_acks : []));
         if(typeof replaceAllAcks==='function') replaceAllAcks(Array.isArray(bundle.seller_acks) ? bundle.seller_acks : []);
-        _replaceIntelligenceModuleState(bundle);
       }
     }catch(lsErr){
       console.warn('intelligence localStorage mirror refresh failed', lsErr);
@@ -936,7 +925,6 @@ async function restoreIntelligenceBundleStrict(bundle){
   localStorage.setItem(INTELLIGENCE_LS_KEYS.baseline_cache,JSON.stringify(baseMap));
   localStorage.setItem(INTELLIGENCE_LS_KEYS.seller_acks,JSON.stringify(bundle.seller_acks||[]));
   if(typeof replaceAllAcks==='function') replaceAllAcks(bundle.seller_acks||[]);
-  _replaceIntelligenceModuleState(bundle);
   return true;
 }
 

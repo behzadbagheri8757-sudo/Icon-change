@@ -995,12 +995,7 @@ function _behaviorReturnsInRange(returns, startISO, endISO, invs){
   }, 0);
 }
 
-function _behaviorISODaysAgo(n, ctx){
-  /* v117: reference day = ctx.asOfDate (falls back to the system day without a context). */
-  if (typeof analysisISODaysAgo === 'function') {
-    const iso = analysisISODaysAgo(n, ctx);
-    if (iso) return iso;
-  }
+function _behaviorISODaysAgo(n){
   const ref = new Date();
   const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - n);
   const y = d.getFullYear();
@@ -1080,7 +1075,7 @@ function visitOverdueDays(cid, ctx, skipMemo){
   });
   const lastDate = sorted[0] && sorted[0].date;
   if(!lastDate) return 0;
-  const daysSince = (typeof analysisDaysAgo === 'function') ? analysisDaysAgo(lastDate, ctx) : ((typeof daysAgo === 'function') ? daysAgo(lastDate) : null);
+  const daysSince = (typeof daysAgo === 'function') ? daysAgo(lastDate) : null;
   if(daysSince == null || !isFinite(daysSince)) return 0;
   return Math.max(0, daysSince - cadence);
 }
@@ -1207,293 +1202,11 @@ function _behaviorVisitInvoiceStats(invs, visits){
   };
 }
 
-
-/* ============================================================
-   v117 — late-half purchase / return split per product (READ-ONLY, derived).
-   Shared by customerBehavior().decliningProducts and the raw Watch split in signals.js.
-
-   invs  : the customer's invoices sorted ascending (early = [0, mid), late = [mid, end])
-   Rules:
-   - a LINKED return (payment.invoiceId resolves to one of this customer's invoices) is allocated to the
-     section that holds its SOURCE INVOICE (never by the return's own date);
-   - an unlinked return, an unresolved / foreign source invoice, a product that is not on its source invoice,
-     or an ambiguous unit (raisin-pilaf rows mixing the weight / legacy-kg conventions) produce NO guessed
-     quantity: the reason is kept in `issues` and the product state becomes 'uncertain'.
-   latePurchaseState:
-     no_purchase    — nothing related in the late half (no purchase, no return) and nothing ambiguous
-     net_positive   — related purchase/return exists and late net > 0
-     net_nonpositive— related purchase/return exists and late net <= 0 (e.g. fully returned)
-     uncertain      — an issue that can touch the late half prevents a firm conclusion
-   ============================================================ */
-function _behaviorProductSplit(invs, returns, mid, ctxArg){
-  const raisinIds = _raisinPilafProductIds();
-  const sectionOfInv = Object.create(null);
-  const invById = Object.create(null);
-  invs.forEach(function(inv, i){
-    if(inv && inv.id){ sectionOfInv[inv.id] = i < mid ? 'early' : 'late'; invById[inv.id] = inv; }
-  });
-  const map = Object.create(null);
-  function keyOf(pid, name){ return pid || ('n:' + (name || '')); }
-  function ent(pid, name){
-    const k = keyOf(pid, name);
-    if(!map[k]) map[k] = { key: k, productId: pid || null, name: name || '—',
-      early: { gross: 0, ret: 0 }, late: { gross: 0, ret: 0 }, issues: [] };
-    return map[k];
-  }
-  function productOf(pid){
-    return (typeof data !== 'undefined' && Array.isArray(data.products)) ? data.products.find(function(x){ return x && x.id === pid; }) : null;
-  }
-  invs.forEach(function(inv, i){
-    const sec = i < mid ? 'early' : 'late';
-    (inv.items || []).forEach(function(it){
-      if(!it) return;
-      const isR = _isRaisinPilafItem(it, raisinIds);
-      const e = ent(it.productId || null, it.name || '—');
-      e[sec].gross += isR ? _raisinPilafPackages(it) : (it.qty || 0);
-      if(isR && !(it.weight && it.weight > 0)){
-        const pr = productOf(it.productId);
-        if(!(pr && pr.packageWeight > 0)){
-          e.issues.push({ code: 'unit_ambiguous', section: sec, invoiceId: inv.id || null, paymentId: null });
-        }
-      }
-    });
-  });
-  returns.forEach(function(p){
-    (p.returnItems || []).forEach(function(ri){
-      if(!ri || (!ri.productId && !ri.name)) return;
-      const e = ent(ri.productId || null, ri.name || '—');
-      const base = { paymentId: p.id || null, invoiceId: p.invoiceId || null };
-      /* A return cannot predate its sale: an unplaceable return registered before the late half started can
-         only concern the early half (quantity quality), anything later may touch the late half. */
-      const midDate = (invs[mid] && invs[mid].date) || null;
-      const unplaceable = (p.date && midDate && String(p.date) < String(midDate)) ? 'early' : 'unknown';
-      if(!p.invoiceId){
-        e.issues.push(Object.assign({ code: 'unlinked_return', section: unplaceable }, base));
-        return;
-      }
-      const src = invById[p.invoiceId];
-      if(!src){
-        let foreign = null;
-        if(typeof data !== 'undefined' && Array.isArray(data.invoices)) foreign = data.invoices.find(function(x){ return x && x.id === p.invoiceId; }) || null;
-        e.issues.push(Object.assign({ code: foreign ? 'source_invoice_foreign' : 'source_invoice_unresolved', section: unplaceable }, base));
-        return;
-      }
-      const sec = sectionOfInv[p.invoiceId];
-      const rows = (src.items || []).filter(function(x){ return x && ri.productId && x.productId === ri.productId; });
-      if(!rows.length){
-        e.issues.push(Object.assign({ code: 'return_item_not_in_source_invoice', section: sec }, base));
-        return;
-      }
-      let qty = ri.qty || 0;
-      if(_isRaisinPilafItem(rows[0], raisinIds)){
-        const hasWeight = rows.some(function(x){ return x.weight && x.weight > 0; });
-        const hasLegacy = rows.some(function(x){ return !(x.weight && x.weight > 0); });
-        if(hasWeight && hasLegacy){
-          e.issues.push(Object.assign({ code: 'unit_ambiguous', section: sec }, base));
-          return;
-        }
-        if(hasLegacy){
-          const pr = productOf(ri.productId);
-          const pw = pr && pr.packageWeight;
-          if(pw > 0) qty = Math.round((qty / pw) * 100) / 100;
-        }
-      }
-      e[sec].ret += qty;
-    });
-  });
-  Object.keys(map).forEach(function(k){
-    const e = map[k];
-    const lateIssue = e.issues.some(function(x){ return x.section === 'late' || x.section === 'unknown'; });
-    const lateNet = e.late.gross - e.late.ret;
-    let state;
-    if(lateIssue) state = 'uncertain';
-    else if(!(e.late.gross > 0) && !(e.late.ret > 0)) state = 'no_purchase';
-    else state = lateNet > 0 ? 'net_positive' : 'net_nonpositive';
-    e.latePurchaseState = state;
-  });
-  return map;
-}
-
 /**
  * Runtime derived behavior profile for sales decisions.
  * Purchase truth = invoices minus sales-returns (payments method==='return').
  * Visits = observation only. Returns null when data is insufficient. Never mutates data.
  */
-/* ============================================================
-   v117 — وضعیت رابطه تجاری مشتری (سلامت رابطه)  [مستقل از Risk / Priority / Action / SKU / مالی]
-
-   فقط داده خرید معتبر کل حساب مشتری را می‌بیند؛ هیچ سیگنال، امتیاز، هشدار مالی یا Action وارد نمی‌شود.
-   مشتق‌شده است و هیچ‌چیزی ذخیره یا مهاجرت نمی‌شود. کش فقط داخل ctx.memo و با کلید تاریخ مرجع است.
-
-   خرید معتبر: فاکتور مشتری با تاریخ معتبر (نه آینده نسبت به ctx.asOfDate)، حداقل یک قلم با qty>0 و total>0.
-   فاکتور در داده‌های این پروژه حذف فیزیکی می‌شود و ویرایش آن با تاریخ نهایی ثبت می‌شود؛ سند مرجوعی
-   در داده، payment با method='return' است و خرید حساب نمی‌شود. روز خرید = تاریخ تقویمی؛ چند فاکتور هم‌روز یک روز است.
-
-   پارامترها (تأییدشده، بدون گرد کردن):
-     حداقل سابقه: ۴ روز خرید متمایز؛ چرخه از حداکثر ۷ روز اخیر و میانهٔ فاصله‌ها (حداکثر ۶ فاصله)
-     قرمز: فاصله از آخرین خرید ≥ ۴×چرخه و ≥ ۳۰ روز   (قرمز بر زرد اولویت دارد)
-     زرد: فاصله ≥ ۲×چرخه
-     سبز: در غیر این صورت
-   ============================================================ */
-const RELATIONSHIP_PARAMS = Object.freeze({
-  minPurchaseDays: 4,
-  cycleWindowDays: 7,
-  redCycleMultiple: 4,
-  redMinGapDays: 30,
-  yellowCycleMultiple: 2
-});
-
-/* Product returns (payment.method==='return' with returnItems) are linked to their SOURCE invoice by invoiceId and
-   use the same quantity unit as the invoice rows (the app validates requested <= invoiced per product).
-   - A product return without invoiceId cannot be attributed to a purchase: it is counted and reported, never guessed.
-   - An invoice whose every product is returned in full (returned >= invoiced) is NOT a valid purchase any more.
-   - A partial return leaves the remaining part a real purchase on its own date (the date is not moved).
-   - Ambiguous units (legacy kg rows mixed with weighted raisin-pilaf rows, same product, same invoice) that are
-     touched by a return => the invoice is not decided as fully returned; reported as uncertain. */
-function _relationshipReturnIndex(cid, invIds, ctx){
-  const byInv = Object.create(null);
-  let unlinked = 0;
-  ((ctx.customerPayments(cid) || [])).forEach(function(p){
-    if(!p || p.method !== 'return' || !Array.isArray(p.returnItems)) return;
-    if(!p.invoiceId){
-      if(p.returnItems.some(function(r){ return r && Number(r.qty) > 0; })) unlinked++;
-      return;
-    }
-    if(!invIds[p.invoiceId]) return;                      // source belongs to another customer / unknown
-    const m = byInv[p.invoiceId] || (byInv[p.invoiceId] = Object.create(null));
-    p.returnItems.forEach(function(r){
-      if(!r || Number(r.qty) <= 0) return;
-      const k = String(r.productId);
-      m[k] = (m[k] || 0) + Number(r.qty);
-    });
-  });
-  return { byInv: byInv, unlinked: unlinked };
-}
-
-function _relationshipInvoiceReturnState(inv, retMap){
-  const need = Object.create(null);
-  (inv.items || []).forEach(function(it){
-    if(!it || !(Number(it.qty) > 0)) return;
-    const k = String(it.productId);
-    need[k] = (need[k] || 0) + Number(it.qty);
-  });
-  const keys = Object.keys(need);
-  if(!keys.length || !retMap) return 'none';
-  const touched = keys.filter(function(k){ return (retMap[k] || 0) > 0; });
-  if(!touched.length) return 'none';
-  // ambiguous unit: a touched product that has mixed weighted / legacy raisin rows on this invoice
-  if(typeof _isRaisinPilafItem === 'function' && typeof _raisinPilafProductIds === 'function'){
-    const rIds = _raisinPilafProductIds();
-    const ambiguous = touched.some(function(k){
-      const rows = (inv.items || []).filter(function(it){ return it && String(it.productId) === k; });
-      if(!rows.length || !_isRaisinPilafItem(rows[0], rIds)) return false;
-      const w = rows.some(function(x){ return x.weight && x.weight > 0; });
-      const l = rows.some(function(x){ return !(x.weight && x.weight > 0); });
-      return w && l;
-    });
-    if(ambiguous) return 'uncertain';
-  }
-  const full = keys.every(function(k){ return (retMap[k] || 0) >= need[k] - 1e-9; });
-  return full ? 'full' : 'partial';
-}
-
-function _relationshipPurchaseDays(invs, ctx, cid){
-  const invIds = Object.create(null);
-  (invs || []).forEach(function(inv){ if(inv && inv.id) invIds[inv.id] = true; });
-  const ret = _relationshipReturnIndex(cid, invIds, ctx);
-  const set = Object.create(null);
-  const counts = { fullyReturnedInvoices: 0, partiallyReturnedInvoices: 0, uncertainReturnInvoices: 0, unlinkedProductReturns: ret.unlinked };
-  (invs || []).forEach(function(inv){
-    if(!inv || typeof inv.date !== 'string') return;
-    const day = _analysisNormalizeDay(inv.date);
-    if(!day) return;
-    const gap = analysisDaysAgo(day, ctx);
-    if(gap == null || gap < 0) return;                       // invalid or after the reference day
-    const hasQty = Array.isArray(inv.items) && inv.items.some(function(it){ return it && Number(it.qty) > 0; });
-    if(!hasQty || !(Number(inv.total) > 0)) return;          // not a real purchase
-    const state = _relationshipInvoiceReturnState(inv, ret.byInv[inv.id]);
-    if(state === 'full'){ counts.fullyReturnedInvoices++; return; }   // fully returned: not a valid purchase
-    if(state === 'partial') counts.partiallyReturnedInvoices++;
-    if(state === 'uncertain') counts.uncertainReturnInvoices++;
-    set[day] = true;                                          // none / partial / uncertain (kept, reported)
-  });
-  return { days: Object.keys(set).sort(), counts: counts };   // ascending ISO days
-}
-
-function _relationshipMedian(values){
-  const a = values.slice().sort(function(x, y){ return x - y; });
-  const n = a.length;
-  return n % 2 ? a[(n - 1) / 2] : (a[n / 2 - 1] + a[n / 2]) / 2;
-}
-
-function _relationshipCompute(cid, ctx){
-  const P = RELATIONSHIP_PARAMS;
-  const asOf = analysisToday(ctx);
-  const cust = ((ctx && ctx.data && ctx.data.customers) || []).find(function(x){ return x && x.id === cid; });
-  const base = { customerId: cid, asOfDate: asOf, purchaseDays: 0, cycleDays: null, gapDays: null, lastPurchaseDate: null };
-
-  if(cust && cust.oneOff){
-    return Object.assign(base, { status: 'not_applicable', color: null, label: 'مشتری یک‌بار‌مصرف', reason: 'ارزیابی رابطه برای مشتری یک‌بار‌مصرف معنا ندارد' });
-  }
-
-  const pd = _relationshipPurchaseDays((ctx.customerInvoices(cid) || []), ctx, cid);
-  const days = pd.days;
-  Object.assign(base, pd.counts);
-  base.purchaseDays = days.length;
-  base.lastPurchaseDate = days.length ? days[days.length - 1] : null;
-
-  if(days.length < P.minPurchaseDays){
-    return Object.assign(base, { status: 'insufficient', color: null, label: 'سابقه ناکافی', reason: 'سابقه کافی برای ارزیابی وجود ندارد' });
-  }
-
-  const recent = days.slice(-P.cycleWindowDays);
-  const intervals = [];
-  for(let i = 1; i < recent.length; i++){
-    intervals.push(analysisDaysAgo(recent[i - 1], { asOfDate: recent[i] }));
-  }
-  const cycle = _relationshipMedian(intervals);
-  const gap = analysisDaysAgo(base.lastPurchaseDate, ctx);
-  base.cycleDays = cycle;
-  base.gapDays = gap;
-
-  if(gap >= P.redCycleMultiple * cycle && gap >= P.redMinGapDays){
-    return Object.assign(base, { status: 'red', color: 'red', label: 'ریسک قطع رابطه', reason: 'توقف خرید طولانی‌تر از الگوی مشتری' });
-  }
-  if(gap >= P.yellowCycleMultiple * cycle){
-    return Object.assign(base, { status: 'yellow', color: 'yellow', label: 'نیازمند توجه', reason: 'فاصله از خرید معمول بیشتر شده' });
-  }
-  const restarted = gap === 0;
-  return Object.assign(base, {
-    status: 'green', color: 'green', label: 'رابطه عادی',
-    reason: restarted ? 'خرید امروز ثبت شد؛ فاصله خرید از نو شروع شد' : 'خرید در چرخه معمول'
-  });
-}
-
-/* Single source for the three customer views (list, detail, Quick View). Memoized per context:
-   ctx.memo keys include ctx.asOfDate, so changing the reference day never serves another day's result. */
-/* One mapping status -> tone / colour class, used by the list, the detail page and Quick View.
-   The label always comes from the relation result itself (never from Risk, Action or legacy list flags). */
-function customerRelationshipPresentation(relation){
-  const map = {
-    red:           { tone: 'danger',  cls: 'radar-rel-red' },
-    yellow:        { tone: 'warning', cls: 'radar-rel-yellow' },
-    green:         { tone: 'neutral', cls: 'radar-rel-green' },
-    insufficient:  { tone: 'muted',   cls: null },
-    not_applicable:{ tone: 'muted',   cls: null }
-  };
-  const st = relation && relation.status;
-  const m = map[st] || { tone: 'muted', cls: null };
-  return { status: st || null, label: (relation && relation.label) || '', tone: m.tone, cls: m.cls };
-}
-
-function customerRelationshipHealth(cid, ctx){
-  if(!ctx || typeof ctx.customerInvoices !== 'function'){
-    const d = (typeof data !== 'undefined') ? data : { customers: [], invoices: [], payments: [] };
-    ctx = createComputationContext({ data: d });
-  }
-  return ctx.memo('customerRelationshipHealth', cid, function(){ return _relationshipCompute(cid, ctx); });
-}
-
 function customerBehavior(cid, ctx, skipMemo){
   if(ctx && typeof ctx.memo === 'function' && !skipMemo){
     return ctx.memo('customerBehavior', cid, function(){ return customerBehavior(cid, ctx, true); });
@@ -1536,11 +1249,8 @@ function customerBehavior(cid, ctx, skipMemo){
     }
   }
 
-  /* v117: calendar-day distance to the shared reference date; invalid date => null; never below 0 */
-  const daysSinceLastRaw = lastInvoiceDate
-    ? (typeof analysisDaysAgo === 'function' ? analysisDaysAgo(lastInvoiceDate, ctx) : daysAgo(lastInvoiceDate))
-    : null;
-  const daysSinceLast = (daysSinceLastRaw != null && isFinite(daysSinceLastRaw)) ? Math.max(0, daysSinceLastRaw) : null;
+  const daysSinceLastRaw = lastInvoiceDate ? daysAgo(lastInvoiceDate) : null;
+  const daysSinceLast = (daysSinceLastRaw != null && isFinite(daysSinceLastRaw)) ? daysSinceLastRaw : null;
   const behindPattern = (avgIntervalDays != null && daysSinceLast != null)
     ? (daysSinceLast > avgIntervalDays + 0.5)
     : null;
@@ -1578,20 +1288,14 @@ function customerBehavior(cid, ctx, skipMemo){
     ? (daysSinceLast > avgDistinctIntervalDays + 0.5)
     : null;
 
-  /* v117 sales windows (both ends inclusive, anchored on the shared reference date):
-       sales30     = asOf-29 .. asOf
-       salesPrev30 = asOf-59 .. asOf-30   (exactly 30 days, no gap / overlap with sales30)
-       sales90     = asOf-89 .. asOf
-     Only the time boundary changed; amount and return-allocation rules are the previous ones. */
-  const today = (typeof analysisToday === 'function') ? analysisToday(ctx)
-    : ((typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0,10));
-  const w30start = _behaviorISODaysAgo(29, ctx);
-  const wPrevStart = _behaviorISODaysAgo(59, ctx);
-  const wPrevEnd = _behaviorISODaysAgo(30, ctx);
-  const w90start = _behaviorISODaysAgo(89, ctx);
-  const sales30 = _behaviorSalesInRange(invs, w30start, today) - _behaviorReturnsInRange(returns, w30start, today, invs);
-  const sales90 = _behaviorSalesInRange(invs, w90start, today) - _behaviorReturnsInRange(returns, w90start, today, invs);
-  const salesPrev30 = _behaviorSalesInRange(invs, wPrevStart, wPrevEnd) - _behaviorReturnsInRange(returns, wPrevStart, wPrevEnd, invs);
+  const today = (typeof todayISO === 'function') ? todayISO() : new Date().toISOString().slice(0,10);
+  const d30 = _behaviorISODaysAgo(30);
+  const d60 = _behaviorISODaysAgo(60);
+  const d90 = _behaviorISODaysAgo(90);
+  const d31 = _behaviorISODaysAgo(31);
+  const sales30 = _behaviorSalesInRange(invs, d30, today) - _behaviorReturnsInRange(returns, d30, today, invs);
+  const sales90 = _behaviorSalesInRange(invs, d90, today) - _behaviorReturnsInRange(returns, d90, today, invs);
+  const salesPrev30 = _behaviorSalesInRange(invs, d60, d31) - _behaviorReturnsInRange(returns, d60, d31, invs);
 
   let amountTrend = null;
   if(count >= 2){
@@ -1646,34 +1350,61 @@ function customerBehavior(cid, ctx, skipMemo){
   let decliningProducts = [];
   if(count >= 4){
     const mid = Math.floor(count / 2);
-    /* v117: gross / return / net per half, returns allocated by their SOURCE invoice, ambiguity kept
-       as evidence instead of being guessed (see _behaviorProductSplit). Thresholds are unchanged. */
-    const split = _behaviorProductSplit(invs, returns, mid, ctx);
-    const r2 = function(n){ return Math.round(n * 100) / 100; };
-    Object.keys(split).forEach(key => {
-      const x = split[key];
-      const e = x.early.gross - x.early.ret;
-      const lateNet = x.late.gross - x.late.ret;
-      const l = lateNet;
+    const early = invs.slice(0, mid);
+    const late = invs.slice(mid);
+    const earlyMap = {}, lateMap = {};
+    function accSold(list, map){
+      list.forEach(inv => (inv.items||[]).forEach(it=>{
+        const key = it.productId || ('n:' + (it.name||''));
+        if(!map[key]) map[key] = { productId: it.productId||null, name: it.name||'—', qty: 0 };
+        /* کشمش پلویی: نرمال‌سازی به تعداد بسته/کارتن تا رکوردهای قدیمی (qty=کیلوگرم)
+           و جدید (qty=تعداد بسته) قابل مقایسه باشند — رجوع کن به _raisinPilafPackages بالای فایل. */
+        map[key].qty += _isRaisinPilafItem(it, _raisinIdsForBehavior) ? _raisinPilafPackages(it) : (it.qty||0);
+      }));
+    }
+    accSold(early, earlyMap);
+    accSold(late, lateMap);
+    /* Return allocation follows the same rule as _behaviorReturnsInRange:
+       linked returns use the original invoice date; account-only or
+       unresolvable returns fall back to the return's own date. */
+    const midDate = invs[mid] && invs[mid].date ? invs[mid].date : null;
+    let returnInvById = null;
+    if(Array.isArray(invs)){
+      returnInvById = {};
+      invs.forEach(inv => {
+        if(inv && inv.id) returnInvById[inv.id] = inv;
+      });
+    }
+    if(midDate){
+      returns.forEach(p => {
+        let refDate = p.date || '';
+        if(returnInvById && p.invoiceId && returnInvById[p.invoiceId] && returnInvById[p.invoiceId].date){
+          refDate = returnInvById[p.invoiceId].date;
+        }
+        const target = refDate < midDate ? earlyMap : lateMap;
+        (p.returnItems || []).forEach(ri => {
+          const key = ri.productId || ('n:' + (ri.name||''));
+          if(!target[key]) target[key] = { productId: ri.productId||null, name: ri.name||'—', qty: 0 };
+          target[key].qty -= (ri.qty||0);
+        });
+      });
+    }
+    Object.keys(earlyMap).forEach(key => {
+      const e = earlyMap[key].qty;
+      const l = (lateMap[key] && lateMap[key].qty) || 0;
       if(e >= 2 && l < e * 0.6){
-        const pid = x.productId;
+        const pid = earlyMap[key].productId;
         if(pid){
           const prod = ctx && typeof ctx.productById === 'function'
             ? ctx.productById(pid)
-            : (data.products || []).find(y => y.id === pid);
+            : (data.products || []).find(x => x.id === pid);
           if(prod && prod.active === false) return; // exclude inactive from CURRENT signals
         }
         decliningProducts.push({
-          name: x.name,
-          productId: x.productId,
-          earlyQty: Math.max(0, r2(e)),
-          lateQty: Math.max(0, r2(l)),
-          lateGrossQty: r2(x.late.gross),
-          lateReturnQty: r2(x.late.ret),
-          lateNetQty: r2(lateNet),
-          latePurchaseState: x.latePurchaseState,
-          quantityQuality: x.issues.length ? 'uncertain' : 'certain',
-          uncertaintyReasons: x.issues.map(function(i){ return { code: i.code, section: i.section, paymentId: i.paymentId, invoiceId: i.invoiceId }; })
+          name: earlyMap[key].name,
+          productId: earlyMap[key].productId,
+          earlyQty: Math.max(0, Math.round(e * 100) / 100),
+          lateQty: Math.max(0, Math.round(l * 100) / 100)
         });
       }
     });
@@ -1929,197 +1660,4 @@ async function hydrateMonthlySalesTarget(){
   }
   _monthlySalesTargetCache = 0;
   return 0;
-}
-
-/* ============================================================
-   v118 — جست‌وجوی تاریخچهٔ یک مشتری (فقط خواندنی؛ هیچ داده‌ای تغییر نمی‌کند)
-
-   منابع: فاکتورها (کالا، تعداد، مبلغ، شماره، برگشت کالا)، پرداخت‌ها (مبلغ، روش، توضیح)،
-          ویزیت‌ها (نتیجه، دلیل، اقدام بعدی، یادداشت، پیشنهادهای قبول/رد و دلیل رد).
-   چک‌ها و هر اطلاعات چکی عمداً خارج از جست‌وجو هستند.
-
-   نرمال‌سازی 1:1 است (طول رشته تغییر نمی‌کند) تا اندیس‌های هایلایت دقیق بمانند:
-   ارقام فارسی/عربی → لاتین، ی/ك عربی → فارسی، نیم‌فاصله → فاصله، حروف لاتین → کوچک.
-   ============================================================ */
-const HISTORY_SEARCH_LIMIT = 200;
-const HISTORY_SYNONYMS = { 'ناموجود': ['موجود نبود'] };
-const HISTORY_METHOD_LABEL = { cash: 'نقد', card: 'کارت', transfer: 'انتقال بانکی', discount: 'تخفیف', return: 'مرجوعی' };
-const HISTORY_REACTION_LABEL = { accepted: 'قبول شد', rejected: 'رد شد', deferred: 'بعداً تصمیم می‌گیرد' };
-const HISTORY_REASON_LABEL = {
-  price: 'قیمت', quality: 'کیفیت', competitor: 'رقیب', unavailable: 'موجود نبود',
-  no_need: 'نیاز نداشت', still_stock: 'موجود داشت', other: 'سایر'
-};
-
-function historyNormalize(str){
-  const s = String(str == null ? '' : str);
-  let out = '';
-  for(let i = 0; i < s.length; i++){
-    const c = s.charCodeAt(i);
-    if(c >= 0x06F0 && c <= 0x06F9) out += String.fromCharCode(48 + c - 0x06F0);
-    else if(c >= 0x0660 && c <= 0x0669) out += String.fromCharCode(48 + c - 0x0660);
-    else if(c === 0x064A || c === 0x0649) out += '\u06CC';       // ي ى -> ی
-    else if(c === 0x0643) out += '\u06A9';                       // ك -> ک
-    else if(c === 0x200C) out += ' ';                            // نیم‌فاصله -> فاصله
-    else if(c >= 0x41 && c <= 0x5A) out += String.fromCharCode(c + 32);
-    else out += s.charAt(i);
-  }
-  return out;
-}
-
-/* Query -> tokens. A number followed by a unit word (میلیون/هزار/m/k) becomes ONE numeric token. */
-function parseHistoryQuery(raw){
-  const parts = historyNormalize(raw).trim().split(/\s+/).filter(Boolean);
-  const units = { 'میلیون': 1e6, 'ملیون': 1e6, 'میلون': 1e6, 'm': 1e6, 'هزار': 1e3, 'k': 1e3 };
-  const out = [];
-  for(let i = 0; i < parts.length; i++){
-    const t = parts[i].replace(/[,٬،]/g, '');
-    if(/^\d+(\.\d+)?$/.test(t)){
-      const next = parts[i + 1];
-      if(next && units[next] !== undefined){
-        out.push({ kind: 'num', value: Number(t) * units[next], text: t, hasUnit: true });
-        i++;
-      } else {
-        out.push({ kind: 'num', value: Number(t), text: t });
-      }
-    } else {
-      out.push({ kind: 'text', text: parts[i] });
-    }
-  }
-  return out;
-}
-
-/* A field is { text, amount? }. Returns ranges [start,end) of the text that match this token. */
-function historyFieldRanges(field, token){
-  const ranges = [];
-  const norm = historyNormalize(field.text || '');
-  if(token.kind === 'num'){
-    if(typeof field.amount === 'number' && Math.abs(field.amount - token.value) < 0.5){
-      ranges.push([0, norm.length]);
-    }
-    // a number written with a unit («۲ میلیون») is an AMOUNT: compare amounts only, never raw digits
-    // (otherwise the digit 2 would match quantities such as «۱۲»).
-    if(!ranges.length && !token.hasUnit && norm.indexOf(token.text) !== -1) {
-      let p = norm.indexOf(token.text);
-      while(p !== -1){ ranges.push([p, p + token.text.length]); p = norm.indexOf(token.text, p + token.text.length); }
-    }
-    return ranges;
-  }
-  const cands = [token.text].concat(HISTORY_SYNONYMS[token.text] || []);
-  cands.forEach(function(c){
-    let p = norm.indexOf(c);
-    while(p !== -1){ ranges.push([p, p + c.length]); p = norm.indexOf(c, p + c.length); }
-  });
-  return ranges;
-}
-
-function _historyFmtAmount(n){ return (typeof toman === 'function') ? toman(Math.abs(n)) + ' ت' : String(n); }
-function _historyFa(s){ return (typeof enToFaDigits === 'function') ? enToFaDigits(String(s)) : String(s); }
-function _historyDate(iso){ return (typeof faDate === 'function') ? faDate(iso) : String(iso || ''); }
-
-/* Builds every searchable event of ONE customer (read-only). Checks are never read here. */
-function _historyEvents(cid){
-  const d = (typeof data !== 'undefined') ? data : {};
-  const cust = (d.customers || []).find(function(c){ return c && c.id === cid; });
-  const prodName = function(pid, fallback){
-    const p = (d.products || []).find(function(x){ return x && x.id === pid; });
-    return (p && p.name) || fallback || 'کالا';
-  };
-  const payments = (d.payments || []).filter(function(p){ return p && p.customerId === cid; });
-  const returnsByInv = Object.create(null);
-  payments.forEach(function(p){
-    if(p.method === 'return' && p.invoiceId){
-      (returnsByInv[p.invoiceId] = returnsByInv[p.invoiceId] || []).push(p);
-    }
-  });
-  const events = [];
-
-  (d.invoices || []).filter(function(i){ return i && i.customerId === cid; }).forEach(function(inv){
-    const fields = [{ text: 'شماره فاکتور ' + _historyFa(inv.number || '') }];
-    (inv.items || []).forEach(function(it){
-      if(!it) return;
-      const name = it.name || prodName(it.productId);
-      const qty = Number(it.qty) || 0;
-      fields.push({ text: name });
-      fields.push({ text: 'تعداد ' + _historyFa(qty) });
-      const amt = (Number(it.price) || 0) * qty;
-      fields.push({ text: _historyFmtAmount(amt), amount: amt });
-    });
-    fields.push({ text: 'جمع فاکتور ' + _historyFmtAmount(inv.total || 0), amount: Number(inv.total) || 0 });
-    (returnsByInv[inv.id] || []).forEach(function(r){
-      fields.push({ text: 'مرجوعی ' + _historyFmtAmount(r.amount || 0), amount: Number(r.amount) || 0 });
-      (r.returnItems || []).forEach(function(ri){
-        if(!ri) return;
-        const rn = ri.name || prodName(ri.productId);
-        fields.push({ text: 'برگشت کالا: ' + rn + ' ' + _historyFa(Number(ri.qty) || 0) });
-      });
-    });
-    events.push({ kind: 'invoice', date: inv.date || '', time: '', title: 'خرید · فاکتور ' + _historyFa(inv.number || ''),
-      amount: Number(inv.total) || 0, fields: fields, target: { kind: 'invoice', id: inv.id } });
-  });
-
-  payments.forEach(function(p){
-    if(p.method === 'check') return;                           // cheques never enter the search
-    const isReturn = p.method === 'return';
-    if(isReturn && p.invoiceId) return;                        // linked returns are shown inside their invoice
-    const label = isReturn ? 'مرجوعی بدون فاکتور' : ('پرداخت · ' + (HISTORY_METHOD_LABEL[p.method] || p.method || ''));
-    const fields = [{ text: label }, { text: _historyFmtAmount(p.amount || 0), amount: Number(p.amount) || 0 }];
-    if(p.note) fields.push({ text: String(p.note) });
-    events.push({ kind: 'payment', date: p.date || '', time: '', title: label, amount: Number(p.amount) || 0,
-      fields: fields, target: { kind: 'payment', id: p.id, invoiceId: p.invoiceId || null } });
-  });
-
-  ((cust && cust.visits) || []).forEach(function(v){
-    if(!v) return;
-    const fields = [];
-    if(v.result) fields.push({ text: String(v.result) });
-    if(v.reason) fields.push({ text: String(v.reason) });
-    if(v.nextAction) fields.push({ text: String(v.nextAction) });
-    if(v.note) fields.push({ text: String(v.note) });
-    (Array.isArray(v.offeredProducts) ? v.offeredProducts : []).forEach(function(op){
-      if(!op || !op.productId) return;
-      fields.push({ text: prodName(op.productId) });
-      let meta = 'پیشنهاد: ' + (HISTORY_REACTION_LABEL[op.reaction] || op.reaction || '');
-      if(op.reaction === 'rejected' && HISTORY_REASON_LABEL[op.rejectionReason]) meta += ' · ' + HISTORY_REASON_LABEL[op.rejectionReason];
-      fields.push({ text: meta });
-    });
-    events.push({ kind: 'visit', date: v.date || '', time: v.time || '', title: 'ویزیت' + (v.result ? ' · ' + v.result : ''),
-      amount: null, fields: fields, target: { kind: 'visit', id: v.id } });
-  });
-
-  return events;
-}
-
-/* Public: search one customer's history. Returns newest first.
-   Result: [{ kind, date, time, title, amount, target, lines: [{ text, ranges }] }] */
-function customerHistorySearch(cid, query){
-  const tokens = parseHistoryQuery(query);
-  if(!tokens.length || !cid) return [];
-  const out = [];
-  _historyEvents(cid).forEach(function(ev){
-    const lines = [];
-    let allTokens = true;
-    tokens.forEach(function(tok){
-      let hit = false;
-      ev.fields.forEach(function(f){
-        const r = historyFieldRanges(f, tok);
-        if(r.length) hit = true;
-      });
-      if(!hit) allTokens = false;
-    });
-    if(!allTokens) return;
-    ev.fields.forEach(function(f){
-      const ranges = [];
-      tokens.forEach(function(tok){ historyFieldRanges(f, tok).forEach(function(r){ ranges.push(r); }); });
-      if(ranges.length){
-        ranges.sort(function(a, b){ return a[0] - b[0]; });
-        lines.push({ text: f.text, ranges: ranges });
-      }
-    });
-    out.push({ kind: ev.kind, date: ev.date, time: ev.time, title: ev.title, amount: ev.amount, target: ev.target, lines: lines });
-  });
-  out.sort(function(a, b){
-    const ka = (a.date || '') + ' ' + (a.time || ''), kb = (b.date || '') + ' ' + (b.time || '');
-    return ka < kb ? 1 : (ka > kb ? -1 : 0);
-  });
-  return out.slice(0, HISTORY_SEARCH_LIMIT);
 }

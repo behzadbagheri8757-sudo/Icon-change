@@ -1249,3 +1249,73 @@ function chartSmoothPath(coords){
   }
   return d;
 }
+
+/* Search normaliser shared by the customer picker and the invoice product picker:
+   lower-case, Arabic ي/ك → Persian ی/ک, Persian/Arabic-Indic digits → ASCII,
+   ZWNJ/tatweel/spaces collapsed. Display text is never changed; only what is compared. */
+function normalizeSearchText(s){
+  return String(s==null?'':s).toLowerCase()
+    .replace(/ي/g,'ی').replace(/ك/g,'ک').replace(/ۀ/g,'ه').replace(/ة/g,'ه')
+    .replace(/[۰-۹]/g,function(d){ return String(d.charCodeAt(0)-1776); })
+    .replace(/[٠-٩]/g,function(d){ return String(d.charCodeAt(0)-1632); })
+    .replace(/[\u200c\u200d\u0640\u064b-\u065f]/g,'')
+    .replace(/\s+/g,' ').trim();
+}
+
+/* ── Customer picker (presentation helper) ─────────────────────────────────
+   One searchable "choose a customer" sheet shared by every quick action
+   (new invoice / payment / check / visit). It replaces the native <select> +
+   «ادامه» two-step with: type to filter → tap a customer → continue.
+   Read-only over data.customers; it only calls the same open* function each
+   caller already used, with the same customer id. */
+function openCustomerPicker(title, onPick, opts){
+  opts = opts || {};
+  const all = (typeof data !== 'undefined' && Array.isArray(data.customers)) ? data.customers : [];
+  if(!all.length){
+    openSheet('<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>' +
+      '<div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>');
+    return;
+  }
+  const list = all.filter(function(c){ return c && c.id && (opts.includeInactive || c.active !== false); })
+    .slice().sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','fa'); });
+  const norm = normalizeSearchText;
+  const index = list.map(function(c){
+    return { c: c, hay: norm([c.name, c.ownerName, c.phone, c.region, c.route].join(' ')) };
+  });
+  openSheet(
+    '<h3>' + esc(title) + '</h3>' +
+    '<div class="field cpick-search"><input id="cpick-q" type="search" inputmode="search" enterkeyhint="search" ' +
+      'placeholder="جستجوی نام، تلفن یا منطقه…" autocomplete="off" aria-label="جستجوی مشتری"></div>' +
+    (opts.note ? '<div class="cpick-note">' + esc(opts.note) + '</div>' : '') +
+    '<div class="cpick-count" id="cpick-count" aria-live="polite"></div>' +
+    '<div class="cpick-list" id="cpick-list"></div>'
+  );
+  const qEl = document.getElementById('cpick-q');
+  const listEl = document.getElementById('cpick-list');
+  const countEl = document.getElementById('cpick-count');
+  if(!qEl || !listEl) return;
+  function paint(){
+    const q = norm(qEl.value).trim();
+    const rows = q ? index.filter(function(x){ return x.hay.indexOf(q) !== -1; }) : index;
+    if(countEl) countEl.textContent = q ? ('نتیجه: ' + enToFaDigits(String(rows.length))) : ('مشتریان: ' + enToFaDigits(String(rows.length)));
+    if(!rows.length){ listEl.innerHTML = '<div class="empty">مشتری‌ای با این مشخصات پیدا نشد.</div>'; return; }
+    listEl.innerHTML = rows.slice(0, 80).map(function(x){
+      const c = x.c;
+      const sub = [c.ownerName, c.region || c.route, c.phone].filter(Boolean).join(' · ');
+      return '<button type="button" class="cpick-row" data-cid="' + esc(c.id) + '">' +
+        '<span class="cpick-avatar" aria-hidden="true">' + esc(String(c.name||'؟').trim().charAt(0) || '؟') + '</span>' +
+        '<span class="cpick-text"><span class="cpick-name">' + esc(c.name || '—') + '</span>' +
+        (sub ? '<span class="cpick-sub">' + esc(sub) + '</span>' : '') + '</span>' +
+        '<svg class="cpick-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>';
+    }).join('') + (rows.length > 80 ? '<div class="cpick-more">برای دیدن بقیه، جستجو را دقیق‌تر کنید.</div>' : '');
+  }
+  qEl.addEventListener('input', paint);
+  listEl.addEventListener('click', function(e){
+    const btn = e.target.closest ? e.target.closest('.cpick-row') : null;
+    if(!btn) return;
+    const cid = btn.getAttribute('data-cid');
+    closeModal();
+    if(typeof onPick === 'function') onPick(cid);
+  });
+  paint();
+}

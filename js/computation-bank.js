@@ -12,115 +12,44 @@ var RECEIVABLE_ATTENTION_DEFAULTS = {
   daysFloor: 10
 };
 
-
-/* ---- v117: shared analysis reference date (asOfDate) ---------------------------------------
- * ctx.asOfDate is the reference DAY for time-based analysis (not a historical replay of the CRM).
- * Calendar-day arithmetic only: Date.UTC on Y/M/D components, never a division of two local
- * midnights (a DST change would make that 23h/25h). Invalid / missing dates => null. */
-function _analysisDayNumber(value) {
-  if (value == null || value === '') return null;
-  var y, m, d;
-  if (Object.prototype.toString.call(value) === '[object Date]') {
-    if (isNaN(value.getTime())) return null;
-    y = value.getFullYear(); m = value.getMonth() + 1; d = value.getDate();
-  } else {
-    var mt = String(value).trim().match(/^(\d{4})-(\d{2})-(\d{2})(?:$|[T\s])/);
-    if (!mt) return null;
-    y = +mt[1]; m = +mt[2]; d = +mt[3];
-  }
-  if (!(y >= 1000 && y <= 9999) || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) return null;
-  var t = Date.UTC(y, m - 1, d);
-  var chk = new Date(t);
-  // real calendar validity (rejects 2026-02-30, 2026-13-01 ...): regex alone is not enough
-  if (chk.getUTCFullYear() !== y || chk.getUTCMonth() !== m - 1 || chk.getUTCDate() !== d) return null;
-  return Math.round(t / 86400000);
-}
-function _analysisNormalizeDay(value) {
-  var n = _analysisDayNumber(value);
-  if (n == null) return null;
-  var dt = new Date(n * 86400000);
-  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
-}
-/* Reference day of a context; without a (valid) context date it is the system's today. */
-function analysisToday(ctx) {
-  var v = ctx && _analysisNormalizeDay(ctx.asOfDate);
-  if (v) return v;
-  var t = (typeof todayISO === 'function') ? _analysisNormalizeDay(todayISO()) : null;
-  if (t) return t;
-  var n = new Date();
-  return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0');
-}
-/* asOfDate - isoDate in whole calendar days. Future date => negative (caller clamps). Invalid => null. */
-function analysisDaysAgo(isoDate, ctx) {
-  var a = _analysisDayNumber(analysisToday(ctx));
-  var b = _analysisDayNumber(isoDate);
-  if (a == null || b == null) return null;
-  return a - b;
-}
-/* ISO day = reference day minus n calendar days. */
-function analysisISODaysAgo(n, ctx) {
-  var a = _analysisDayNumber(analysisToday(ctx));
-  if (a == null) return null;
-  var dt = new Date((a - Number(n)) * 86400000);
-  return dt.getUTCFullYear() + '-' + String(dt.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dt.getUTCDate()).padStart(2, '0');
-}
-
 (function (global) {
   function createComputationContext(options) {
     options = options || {};
     var source = options.data || global.data || {};
     var values = Object.create(null);
 
-    /* v117: reference date. options.asOfDate > options.referenceDate (legacy callers) > today. */
-    var initialAsOf = _analysisNormalizeDay(options.asOfDate) ||
-      _analysisNormalizeDay(options.referenceDate) ||
-      (typeof todayISO === 'function' ? _analysisNormalizeDay(todayISO()) : null) ||
-      _analysisNormalizeDay(new Date());
-
-    function memoCore(bucket, key, producer, dateKey) {
+    function memo(bucket, key, producer) {
       var group = values[bucket];
       if (!group) group = values[bucket] = Object.create(null);
-      var normalized = (dateKey ? dateKey + '|' : '') + String(key == null ? '__default__' : key);
+      var normalized = String(key == null ? '__default__' : key);
       if (Object.prototype.hasOwnProperty.call(group, normalized)) return group[normalized];
       var value = producer();
       group[normalized] = value;
       return value;
     }
-    /* Public memo: the CURRENT ctx.asOfDate is part of the key (read at call time, so changing
-       ctx.asOfDate on the same context, A -> B -> A, never serves another date's result). */
-    function memo(bucket, key, producer) {
-      return memoCore(bucket, key, producer, analysisToday(ctx));
-    }
-    /* Date-independent raw indexes (invoices of a customer, product by id ...) are not rebuilt
-       when only the reference date changes. */
-    function memoStable(bucket, key, producer) {
-      return memoCore(bucket, key, producer, '');
-    }
 
     var ctx = {
       data: source,
       values: values,
-      asOfDate: initialAsOf,
       memo: memo,
-      memoStable: memoStable,
       aggregatePairMapCache: Object.create(null),
 
       customerInvoices: function (cid) {
-        return memoStable('customerInvoices', cid, function () {
+        return memo('customerInvoices', cid, function () {
           return (source.invoices || []).filter(function (row) {
             return row && row.customerId === cid;
           });
         });
       },
       customerPayments: function (cid) {
-        return memoStable('customerPayments', cid, function () {
+        return memo('customerPayments', cid, function () {
           return (source.payments || []).filter(function (row) {
             return row && row.customerId === cid;
           });
         });
       },
       customerChecks: function (cid) {
-        return memoStable('customerChecks', cid, function () {
+        return memo('customerChecks', cid, function () {
           return (source.checks || []).filter(function (row) {
             return row && row.customerId === cid;
           });
@@ -129,7 +58,7 @@ function analysisISODaysAgo(n, ctx) {
       /* Pending payment promise of a customer (js/payment-promises.js). A customer with an active
          promise is handled by the promise flow, not by the generic receivable follow-up. */
       activePromise: function (cid) {
-        return memoStable('activePromise', cid, function () {
+        return memo('activePromise', cid, function () {
           var best = null;
           (source.paymentPromises || []).forEach(function (p) {
             if (!p || p.customerId !== cid || p.status !== 'pending') return;
@@ -139,14 +68,14 @@ function analysisISODaysAgo(n, ctx) {
         });
       },
       customerById: function (cid) {
-        return memoStable('customerById', cid, function () {
+        return memo('customerById', cid, function () {
           return (source.customers || []).find(function (row) {
             return row && row.id === cid;
           }) || null;
         });
       },
       productById: function (pid) {
-        return memoStable('productById', pid, function () {
+        return memo('productById', pid, function () {
           return (source.products || []).find(function (row) {
             return row && row.id === pid;
           }) || null;
@@ -193,7 +122,7 @@ function analysisISODaysAgo(n, ctx) {
               if (!cycle.invoice || !(cycle.remaining >= amountFloor)) continue;
               var startDate = cycle.dueDate || cycle.invoice.date;
               var graceDays = cycle.dueDate ? 0 : daysFloor;
-              var dsc = analysisDaysAgo(startDate, ctx);
+              var dsc = (typeof daysAgo === 'function') ? daysAgo(startDate) : null;
               if (dsc == null || !isFinite(dsc) || dsc < graceDays) continue;   // not due yet => no follow-up
               var rowC = {
                 customerId: c.id, name: c.name || '', balance: cycle.remaining,
@@ -242,7 +171,7 @@ function analysisISODaysAgo(n, ctx) {
             }
             if (!lastDate) continue;
 
-            var days = analysisDaysAgo(lastDate, ctx);
+            var days = (typeof daysAgo === 'function') ? daysAgo(lastDate) : null;
             if (days == null || !isFinite(days) || days < daysFloor) continue;
 
             var promised = ctx.activePromise(c.id);
