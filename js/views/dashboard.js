@@ -35,26 +35,8 @@
      global add-* functions (openAddInvoice/openAddTransaction/openAddVisit).
      No new business logic — same pattern as invoices.js's openNewInvoicePicker. */
   function quickActionPickCustomer(title, fn) {
-    if (!data.customers || !data.customers.length) {
-      if (typeof openSheet === 'function') {
-        openSheet('<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>' +
-          '<div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>');
-      }
-      return;
-    }
-    const opts = data.customers.slice().sort(function (a, b) { return (a.name || '').localeCompare(b.name || '', 'fa'); })
-      .map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.name) + '</option>'; }).join('');
-    openSheet(
-      '<h3>' + esc(title) + '</h3>' +
-      '<div class="field"><label>مشتری</label><select id="qa-pick-customer">' + opts + '</select></div>' +
-      '<div class="btn-row"><button class="btn" id="qa-pick-go">ادامه</button></div>'
-    );
-    const goBtn = document.getElementById('qa-pick-go');
-    if (goBtn) goBtn.onclick = function () {
-      const cid = document.getElementById('qa-pick-customer').value;
-      closeModal();
-      if (typeof fn === 'function') fn(cid);
-    };
+    // includeInactive keeps the previous dashboard behaviour (it never filtered inactive customers).
+    openCustomerPicker(title, fn, { includeInactive: true });
   }
 
   function quickActionsHtml() {

@@ -923,25 +923,20 @@
        no new score, threshold or signal. */
     let recommendedAction = null;
     let customerRiskLevel = null;
-    let customerHealthLabel = '';          // v117: always set from the relationship result below (never a generic default)
-    let customerRelationColor = null;
+    let customerHealthLabel = 'وضعیت عادی';
     let _storyTextRaw = '';
     if (isOneOffCustomer(c)) {
       // مشتری یک‌بار‌مصرف: امتیاز/ریسک/داستان رفتاری معنا ندارد (چند نفر زیر یک حساب)
+      customerHealthLabel = 'مشتری یک‌بار‌مصرف';
     } else {
       let priority = null, action = null;
       try { if (typeof calculateCustomerPriority === 'function') priority = calculateCustomerPriority(c.id, { ctx: ctx }); } catch (eP) { priority = null; }
       try { if (typeof calculateCustomerAction === 'function') action = calculateCustomerAction(c.id, priority, { ctx: ctx }); } catch (eA) { action = null; }
       recommendedAction = action && action.actionType !== 'no_action' ? action : null;
       const riskLevel = priority ? priority.riskLevel : null;
-      customerRiskLevel = riskLevel;   // still used only for the narrative box tone
+      customerRiskLevel = riskLevel;
+      customerHealthLabel = (typeof getRiskBadge === 'function' ? getRiskBadge(riskLevel).label : '') || 'وضعیت عادی';
       _storyTextRaw = (priority && priority.customerStory && priority.customerStory.summary) ? priority.customerStory.summary : '';
-    }
-    // v117 (revised): the health label/colour is the relationship status for EVERY customer, one-off included.
-    {
-      const relHealth = customerRelationshipPresentation(customerRelationshipHealth(c.id, ctx));
-      customerHealthLabel = relHealth.label;
-      customerRelationColor = (relHealth.status === 'red' || relHealth.status === 'yellow' || relHealth.status === 'green') ? relHealth.status : null;
     }
 
     // P0 (what matters now) + follow-ups waiting for this customer — presentation of existing Truth.
@@ -1164,6 +1159,71 @@
           })
           .join('')
       : '<div class="empty" style="padding:12px 0;">ویزیتی ثبت نشده</div>';
+
+    /* Customer 360 timeline — one chronological feed merged from the four
+       existing per-customer lists (invoices, payments, checks, visits).
+       Read-only presentation: no new data, score or calculation. */
+    var tlItems = [];
+    invs.forEach(function (inv) {
+      var st = invoicePayStatus(inv);
+      tlItems.push({ kind: 'invoice', label: 'فاکتور', date: inv.date || '', key: inv.date || '',
+        title: '#' + String(inv.number || ''), sub: st.label, subCls: st.cls, amount: inv.total,
+        href: '#/invoice?id=' + encodeURIComponent(inv.id) + '&fromCustomer=' + encodeURIComponent(c.id) + '&fromSection=timeline' });
+    });
+    pays.forEach(function (p) {
+      tlItems.push({ kind: 'payment', label: 'پرداخت', date: p.date || '', key: p.date || '',
+        title: paymentMethodLabel(p.method), sub: p.note || '', subCls: '', amount: p.amount,
+        href: p.invoiceId ? '#/invoice?id=' + encodeURIComponent(p.invoiceId) + '&fromCustomer=' + encodeURIComponent(c.id) + '&fromSection=timeline' : '' });
+    });
+    chks.forEach(function (ch) {
+      var d = ch.issueDate || ch.dueDate || '';
+      var cleared = ch.status === 'cleared', bounced = ch.status === 'bounced';
+      tlItems.push({ kind: 'check', label: 'چک', date: d, key: d,
+        title: ch.checkNumber ? 'چک ' + ch.checkNumber : 'چک',
+        sub: (bounced ? 'برگشتی' : cleared ? 'پاس‌شده' : 'در جریان') + (ch.dueDate ? ' · سررسید ' + faDate(ch.dueDate) : ''),
+        subCls: bounced ? 'accent-rust' : cleared ? 'accent-olive' : 'accent-amber', amount: ch.amount,
+        href: ch.invoiceId ? '#/invoice?id=' + encodeURIComponent(ch.invoiceId) + '&fromCustomer=' + encodeURIComponent(c.id) + '&fromSection=timeline' : '' });
+    });
+    visits.forEach(function (v) {
+      var ord = v.ordered || v.result === (typeof VISIT_RESULTS !== 'undefined' && VISIT_RESULTS[0]);
+      tlItems.push({ kind: 'visit', label: 'ویزیت', date: v.date || '', key: (v.date || '') + ' ' + (v.time || ''),
+        title: v.result || 'ویزیت', sub: [v.nextAction, v.reason, v.note].filter(Boolean)[0] || '',
+        subCls: '', amount: null, time: v.time || '', tone: ord ? 'accent-olive' : '', href: '' });
+    });
+    tlItems.sort(function (a, b) { return String(b.key).localeCompare(String(a.key)); });
+    function tlRowHtml(it) {
+      var inner =
+        '<span class="cd-tl-dot cd-tl-' + it.kind + '" aria-hidden="true"></span>' +
+        '<span class="cd-tl-body">' +
+          '<span class="cd-tl-head"><span class="cd-tl-kind">' + esc(it.label) + '</span>' +
+          '<span class="cd-tl-date">' + faDate(it.date) + (it.time ? ' ' + esc(it.time) : '') + '</span></span>' +
+          '<span class="cd-tl-title ' + (it.tone || '') + '">' + esc(it.title) + '</span>' +
+          (it.sub ? '<span class="cd-tl-sub ' + (it.subCls || '') + '">' + esc(it.sub) + '</span>' : '') +
+        '</span>' +
+        (it.amount != null ? '<span class="cd-tl-amount">' + toman(it.amount) + ' ت</span>' : '');
+      return it.href
+        ? '<a class="cd-tl-item" href="' + it.href + '">' + inner + '</a>'
+        : '<div class="cd-tl-item">' + inner + '</div>';
+    }
+    var timelineListHtml = tlItems.length
+      ? '<div class="cd-tl-list">' + tlItems.slice(0, 150).map(tlRowHtml).join('') + '</div>' +
+        (tlItems.length > 150 ? '<div class="sub" style="padding:8px 4px;">۱۵۰ رویداد اخیر نمایش داده شده؛ بقیه در بخش‌های فاکتور، پرداخت، چک و ویزیت است.</div>' : '')
+      : '<div class="empty" style="padding:12px 0;">هنوز فعالیتی برای این مشتری ثبت نشده</div>';
+    var timelineSectionHtml = '<details class="cd-history-details" data-section="timeline">' +
+      '<summary class="customer-behavior-summary">خط زمان فعالیت (' + tlItems.length + ')</summary>' + timelineListHtml + '</details>';
+    var timelineRowHtml = '<a class="cd-push-row" href="#/customer?id=' + encodeURIComponent(c.id) + '&section=timeline"><span class="cd-push-label">خط زمان فعالیت</span><span class="cd-push-meta">' + tlItems.length + '</span><svg class="cd-push-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></a>';
+    var timelinePreviewHtml = tlItems.length
+      ? '<div class="cd-tl-preview"><div class="cd-tl-preview-head"><h3 class="sub-title customer-detail-helper-title">آخرین فعالیت‌ها</h3>' +
+        '<a class="section-action" href="#/customer?id=' + encodeURIComponent(c.id) + '&section=timeline">همه ←</a></div>' +
+        '<div class="cd-tl-list">' + tlItems.slice(0, 4).map(tlRowHtml).join('') + '</div></div>'
+      : '';
+    var callHtml = '';
+    if (c.phone) {
+      var telDigits = String(c.phone).replace(/[۰-۹]/g, function (d) { return String(d.charCodeAt(0) - 1776); })
+        .replace(/[٠-٩]/g, function (d) { return String(d.charCodeAt(0) - 1632); }).replace(/[^\d+]/g, '');
+      if (telDigits) callHtml = '<a class="cd-call-btn" href="tel:' + esc(telDigits) + '" aria-label="تماس با ' + esc(c.name) + '">' +
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/></svg><span>تماس</span></a>';
+    }
 
     let behaviorHtml = '';
     let behaviorSectionHtml = '';
@@ -1426,7 +1486,8 @@
         '<a class="btn small secondary" href="#/visits">همه ویزیت‌ها</a>' +
       '</div><div class="customer-tx-list customer-visit-list">' + visitRows + '</div></details>';
 
-    var sectionBodyHtml = currentSection === 'invoices' ? invoiceSectionHtml
+    var sectionBodyHtml = currentSection === 'timeline' ? timelineSectionHtml
+      : currentSection === 'invoices' ? invoiceSectionHtml
       : currentSection === 'payments' ? paymentSectionHtml
       : currentSection === 'checks' ? checkSectionHtml
       : currentSection === 'visits' ? visitSectionHtml
@@ -1451,7 +1512,7 @@
             '</div>'
           : '') +
         '<div class="bp-customer-health"><span class="bp-customer-health-label">وضعیت مشتری</span>' +
-          '<span class="bp-customer-health-value ' + (customerRelationColor ? 'radar-rel-' + esc(customerRelationColor) : '') + '">' +
+          '<span class="bp-customer-health-value ' + (customerRiskLevel ? 'radar-risk-' + esc(customerRiskLevel) : '') + '">' +
             esc(customerHealthLabel) +
           '</span></div>' +
         '<div class="customer-identity-meta">' +
@@ -1464,6 +1525,7 @@
           (c.address ? cdMeta('آدرس', c.address) : '') +
           (c.note ? cdMeta('یادداشت', c.note) : '') +
         '</div>' +
+        callHtml +
       '</div>' +
 
       topAlertHtml +
@@ -1496,11 +1558,13 @@
         '<div class="cd-metric-cell"><div class="label">سود مشتری</div><div class="value">' + toman(profit) + ' ت</div></div>' +
       '</div>' +
 
+      timelinePreviewHtml +
+
       focus.html +
       followUpTopHtml +
       behaviorHtml +
       (currentSection ? '' : '<div class="cd-records-nav">' +
-        watchRowHtml + behaviorRowHtml + invoiceRowHtml + paymentRowHtml + checkRowHtml + visitRowHtml + ackRowHtml + rejectionRowHtml + historyRowHtml +
+        timelineRowHtml + watchRowHtml + behaviorRowHtml + invoiceRowHtml + paymentRowHtml + checkRowHtml + visitRowHtml + ackRowHtml + rejectionRowHtml + historyRowHtml +
         '</div>') +
       sectionBodyHtml;
 
@@ -1869,8 +1933,7 @@
     var totals = customerTotals(cid, ctx) || { balance: 0 };
     var story = priority && priority.customerStory && priority.customerStory.summary ? priority.customerStory.summary : '';
     var riskLevel = priority ? priority.riskLevel : null;
-    var relation = customerRelationshipPresentation(customerRelationshipHealth(cid, ctx));   // v117: same source as list and detail
-    var health = relation.label;
+    var health = (typeof getRiskBadge === 'function' ? getRiskBadge(riskLevel).label : '') || 'وضعیت عادی';
 
     // Recommended action (same calculateCustomerAction the Detail page and Dashboard queue use).
     // Signature: calculateCustomerAction(cid, precomputedPriority, { ctx }).
@@ -1919,7 +1982,7 @@
               '<span class="bp-qv-balance-label">' + esc(balanceStatusWord(totals.balance)) + '</span>' +
               (totals.balance !== 0 ? '<span class="bp-qv-balance-amount">' + toman(Math.abs(totals.balance)) + ' ت</span>' : '') +
             '</div>' +
-            '<div class="bp-qv-health' + (relation.cls ? ' ' + esc(relation.cls) : '') + '">' + esc(health) + '</div>' +
+            '<div class="bp-qv-health radar-risk-' + esc(riskLevel || 'normal') + '">' + esc(health) + '</div>' +
           '</div>' +
         '</div>' +
         alertHtml +
@@ -2000,7 +2063,7 @@
      Reuses the already-rendered section list (moved, not re-rendered) so every
      bound handler keeps working. The delegated handlers live on #main, which
      stays the same element. */
-  var PUSH_SECTION_LABELS = { invoices: 'فاکتورها', payments: 'پرداخت‌ها', checks: 'چک‌ها', visits: 'ویزیت‌ها و ارزیابی‌ها', watches: 'هشدارها', behavior: 'تحلیل رفتار خرید', decisions: 'تصمیم‌های ثبت‌شده', history: 'تاریخچهٔ وعده‌ها و قول‌های تحویل', rejections: 'کالاهای ردشده توسط مشتری' };
+  var PUSH_SECTION_LABELS = { timeline: 'خط زمان فعالیت', invoices: 'فاکتورها', payments: 'پرداخت‌ها', checks: 'چک‌ها', visits: 'ویزیت‌ها و ارزیابی‌ها', watches: 'هشدارها', behavior: 'تحلیل رفتار خرید', decisions: 'تصمیم‌های ثبت‌شده', history: 'تاریخچهٔ وعده‌ها و قول‌های تحویل', rejections: 'کالاهای ردشده توسط مشتری' };
   function applyPushSection(root) {
     if (!root || !currentSection) return;
     var det = root.querySelector('[data-section="' + currentSection + '"]');
@@ -2038,269 +2101,6 @@
     if (typeof setHeaderTitle === 'function') setHeaderTitle(PUSH_SECTION_LABELS[currentSection] || '', {});
   }
 
-  /* ---------------------------------------------------------------
-     v118 — جست‌وجو در تاریخچهٔ همین مشتری (فقط خواندنی).
-     موتور در calc.js (customerHistorySearch) است؛ این بخش فقط نمایش و هدایت است.
-     هایلایت با createTextNode/span انجام می‌شود؛ هیچ متن داده‌ای به‌صورت HTML تفسیر نمی‌شود.
-     --------------------------------------------------------------- */
-  var HIST_DOT_TONE = { invoice: 'primary', payment: 'success', visit: 'warning' };
-  var historySearchState = { root: null, btn: null, overlay: null, cid: null, lastFocus: null, timer: null, lastQuery: '', focusTimer: null };
-
-  function historyHighlightedNode(text, ranges, markClass) {
-    var frag = document.createDocumentFragment();
-    var pos = 0;
-    (ranges || []).forEach(function (r) {
-      if (r[0] < pos) return;                                   // overlapping ranges: keep first
-      if (r[0] > pos) frag.appendChild(document.createTextNode(text.slice(pos, r[0])));
-      var mark = document.createElement('mark');
-      mark.className = markClass || 'cs-hit';
-      mark.textContent = text.slice(r[0], r[1]);
-      frag.appendChild(mark);
-      pos = r[1];
-    });
-    if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
-    return frag;
-  }
-
-  function historyAmountText(n) {
-    if (n == null) return '';
-    return (typeof toman === 'function' ? toman(Math.abs(n)) : String(n)) + ' ت';
-  }
-
-  function renderHistoryResults(list, query) {
-    var ul = historySearchState.overlay.querySelector('.cs-results');
-    var hint = historySearchState.overlay.querySelector('.cs-hint');
-    ul.innerHTML = '';
-    if (!query.trim()) { hint.textContent = 'عبارت جست‌وجو را وارد کنید: نام کالا، مبلغ، یادداشت ویزیت…'; hint.hidden = false; ul.hidden = true; return; }
-    if (!list.length) { hint.textContent = 'نتیجه‌ای برای «' + query.trim() + '» پیدا نشد.'; hint.hidden = false; ul.hidden = true; return; }
-    hint.hidden = true;
-    ul.hidden = false;
-    list.forEach(function (res, idx) {
-      var li = document.createElement('li');
-      li.className = 'cs-item';
-      var btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'cs-item-btn';
-      btn.setAttribute('data-kind', res.target.kind);
-      btn.setAttribute('data-id', res.target.id || '');
-      if (res.target.invoiceId) btn.setAttribute('data-invoice', res.target.invoiceId);
-      btn.setAttribute('data-idx', String(idx));
-
-      var dot = document.createElement('span');
-      dot.className = 'cs-dot cs-dot-' + (HIST_DOT_TONE[res.kind] || 'primary');
-      dot.setAttribute('aria-hidden', 'true');
-      btn.appendChild(dot);
-
-      var main = document.createElement('span');
-      main.className = 'cs-item-main';
-      var title = document.createElement('span');
-      title.className = 'cs-item-title';
-      title.textContent = res.title;
-      main.appendChild(title);
-      var sub = document.createElement('span');
-      sub.className = 'cs-item-sub';
-      var dateTxt = (typeof faDate === 'function' ? faDate(res.date) : res.date) + (res.time ? ' · ' + res.time : '');
-      sub.appendChild(document.createTextNode(dateTxt));
-      var first = res.lines[0];
-      if (first) {
-        sub.appendChild(document.createTextNode(' · '));
-        sub.appendChild(historyHighlightedNode(first.text, first.ranges, 'cs-hit'));
-      }
-      main.appendChild(sub);
-      btn.appendChild(main);
-
-      if (res.amount != null) {
-        var amt = document.createElement('span');
-        amt.className = 'cs-amount';
-        amt.textContent = historyAmountText(res.amount);
-        btn.appendChild(amt);
-      }
-      li.appendChild(btn);
-      ul.appendChild(li);
-    });
-  }
-
-  function runHistorySearch() {
-    var o = historySearchState.overlay;
-    if (!o) return;
-    var q = o.querySelector('.cs-input').value;
-    historySearchState.lastQuery = q;
-    o.querySelector('.cs-clear').hidden = !q;
-    var list = (q.trim() && typeof customerHistorySearch === 'function') ? customerHistorySearch(historySearchState.cid, q) : [];
-    renderHistoryResults(list, q);
-  }
-
-  function closeHistorySearch(restoreFocus) {
-    var st = historySearchState;
-    if (!st.overlay) return;
-    var o = st.overlay;
-    st.overlay = null;
-    o.classList.remove('is-open');
-    setTimeout(function () { if (o.parentNode) o.parentNode.removeChild(o); }, 260);
-    document.body.classList.remove('cs-search-open');
-    if (restoreFocus && st.btn) { try { st.btn.focus({ preventScroll: true }); } catch (e) { /* ignore */ } }
-  }
-
-  function openHistorySearch(cid) {
-    if (historySearchState.overlay) return;
-    historySearchState.cid = cid;
-    historySearchState.lastFocus = document.activeElement;
-    var o = document.createElement('div');
-    o.className = 'cs-search';
-    o.setAttribute('role', 'dialog');
-    o.setAttribute('aria-modal', 'true');
-    o.setAttribute('aria-label', 'جست‌وجو در تاریخچه مشتری');
-    o.innerHTML =
-      '<div class="cs-bar">' +
-        '<div class="cs-field">' +
-          '<svg class="cs-field-ico" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>' +
-          '<input class="cs-input" type="search" inputmode="search" enterkeyhint="search" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="جست‌وجو" aria-label="عبارت جست‌وجو">' +
-          '<button type="button" class="cs-clear" aria-label="پاک‌کردن" hidden>' +
-            '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="m8.5 8.5 7 7m0-7-7 7" stroke-width="2" stroke-linecap="round"/></svg>' +
-          '</button>' +
-        '</div>' +
-      '</div>' +
-      '<button type="button" class="cs-close">بستن</button>' +
-      '<div class="cs-body">' +
-        '<p class="cs-hint"></p>' +
-        '<ul class="cs-results" role="list"></ul>' +
-      '</div>';
-    document.body.appendChild(o);
-    historySearchState.overlay = o;
-    document.body.classList.add('cs-search-open');
-    var input = o.querySelector('.cs-input');
-    input.focus({ preventScroll: true });                       // synchronous, inside the tap: keeps the iOS keyboard
-    // the capsule expands on the next frame, so the CSS transition runs from the 44px button size
-    requestAnimationFrame(function () { o.classList.add('is-open'); });
-    input.addEventListener('input', function () {
-      clearTimeout(historySearchState.timer);
-      historySearchState.timer = setTimeout(runHistorySearch, 90);
-    });
-    o.querySelector('.cs-clear').addEventListener('click', function () {
-      input.value = ''; runHistorySearch(); input.focus({ preventScroll: true });
-    });
-    o.querySelector('.cs-close').addEventListener('click', function () { closeHistorySearch(true); });
-    o.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeHistorySearch(true); });
-    o.querySelector('.cs-results').addEventListener('click', function (e) {
-      var b = e.target.closest ? e.target.closest('.cs-item-btn') : null;
-      if (!b) return;
-      openHistoryTarget(b.getAttribute('data-kind'), b.getAttribute('data-id'), b.getAttribute('data-invoice'));
-    });
-    runHistorySearch();
-  }
-
-  /* ---- finding the matched word in the destination document ---- */
-  function clearDocHits() {
-    var marks = document.querySelectorAll('mark.cs-doc-hit');
-    for (var i = 0; i < marks.length; i++) {
-      var m = marks[i], parent = m.parentNode;
-      parent.replaceChild(document.createTextNode(m.textContent), m);
-      parent.normalize();
-    }
-  }
-
-  function highlightWordInDocument(query) {
-    var main = document.getElementById('main') || document.body;
-    clearDocHits();
-    var tokens = (typeof parseHistoryQuery === 'function' ? parseHistoryQuery(query) : [])
-      .filter(function (t) { return t.kind === 'text'; }).map(function (t) { return t.text; });
-    if (!tokens.length) return true;
-    var walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT, null);
-    var nodes = [], n;
-    while ((n = walker.nextNode())) {
-      if (!n.nodeValue || !n.nodeValue.trim()) continue;
-      var pn = n.parentNode;
-      if (!pn || pn.nodeName === 'SCRIPT' || pn.nodeName === 'STYLE' || pn.nodeName === 'TEXTAREA') continue;
-      if (pn.closest && pn.closest('.cs-search')) continue;
-      nodes.push(n);
-    }
-    var firstMark = null;
-    nodes.forEach(function (node) {
-      var norm = historyNormalize(node.nodeValue);
-      var ranges = [];
-      tokens.forEach(function (t) {
-        var p = norm.indexOf(t);
-        while (p !== -1) { ranges.push([p, p + t.length]); p = norm.indexOf(t, p + t.length); }
-      });
-      if (!ranges.length) return;
-      ranges.sort(function (a, b) { return a[0] - b[0]; });
-      var frag = historyHighlightedNode(node.nodeValue, ranges, 'cs-doc-hit');
-      node.parentNode.replaceChild(frag, node);
-      if (!firstMark) firstMark = node.parentNode && node.parentNode.querySelector ? node.parentNode.querySelector('mark.cs-doc-hit') : null;
-    });
-    if (firstMark) {
-      var det = firstMark.closest ? firstMark.closest('details') : null;
-      if (det) det.open = true;
-      firstMark.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      window.addEventListener('hashchange', clearDocHits, { once: true });   // highlight lasts until the next navigation
-      return true;
-    }
-    return false;
-  }
-
-  /* The destination view paints in several passes and may reset its scroll position after the first paint,
-     so the match is re-checked for ~3s: re-highlight if the marks were replaced, and keep it in view. */
-  function focusWordAfterNavigation(query, expectHashPart) {
-    clearInterval(historySearchState.focusTimer);
-    var tries = 0;
-    historySearchState.focusTimer = setInterval(function () {
-      tries++;
-      if (tries > 30) { clearInterval(historySearchState.focusTimer); return; }
-      if (location.hash.indexOf(expectHashPart) === -1) return;  // previous page still on screen
-      var m = document.querySelector('mark.cs-doc-hit');
-      if (!m || !m.isConnected) { highlightWordInDocument(query); return; }
-      var r = m.getBoundingClientRect();
-      if (r.top < 0 || r.bottom > window.innerHeight) m.scrollIntoView({ block: 'center', behavior: 'auto' });
-    }, 100);
-  }
-
-  function openHistoryTarget(kind, id, invoiceId) {
-    var cid = historySearchState.cid;
-    var q = historySearchState.lastQuery;
-    closeHistorySearch(false);
-    if (typeof AppRouter === 'undefined') return;
-    if (kind === 'invoice' && id) {
-      AppRouter.navigate('/invoice', { id: id });
-      focusWordAfterNavigation(q, '#/invoice');
-    } else if (kind === 'payment') {
-      if (invoiceId) { AppRouter.navigate('/invoice', { id: invoiceId }); focusWordAfterNavigation(q, '#/invoice'); return; }
-      AppRouter.navigate('/customer', { id: cid, section: 'payments' });
-      setTimeout(function () {
-        if (typeof openEditStandalonePayment === 'function' && id) openEditStandalonePayment(cid, id);
-      }, 350);
-    } else if (kind === 'visit') {
-      AppRouter.navigate('/customer', { id: cid, section: 'visits' });
-      focusWordAfterNavigation(q, 'section=visits');
-    }
-  }
-
-  /* Header search button (same circular header style as the Back and + buttons). Added while the
-     customer detail view is mounted and removed on unmount, so no other page is affected. */
-  function ensureHistorySearchButton(cid) {
-    var header = document.querySelector('header');
-    if (!header) return;
-    var btn = header.querySelector('.hdr-search');
-    if (!btn) {
-      btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'hdr-btn hdr-search';
-      btn.setAttribute('aria-label', 'جست‌وجو در تاریخچه مشتری');
-      btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>';
-      btn.addEventListener('click', function () { openHistorySearch(historySearchState.cid); });
-      header.appendChild(btn);
-    }
-    historySearchState.btn = btn;
-    historySearchState.cid = cid;
-  }
-
-  function removeHistorySearchButton() {
-    var header = document.querySelector('header');
-    var btn = header && header.querySelector('.hdr-search');
-    if (btn) btn.parentNode.removeChild(btn);
-    historySearchState.btn = null;
-    closeHistorySearch(false);
-  }
-
   function mount(root, params) {
     let refreshToken = null;
     if (!root) return function () {};
@@ -2311,7 +2111,6 @@
 
     currentCustomerId = params && params.id ? params.id : null;
     currentSection = params && params.section ? String(params.section) : null;
-    ensureHistorySearchButton(currentCustomerId);
     function refreshCustomer() {
       // Per-cycle, RAM-only Context: shared only so that reconcileWatchLifecycle's
       // Watch-observation pass and the subsequent Priority/Signals pass (both of
@@ -2336,7 +2135,6 @@
       refreshToken = null;
       currentCustomerId = null;
       currentSection = null;
-      removeHistorySearchButton();
       root.classList.remove('customer-detail-view'); // UPDATED: Added for CSS scoping cleanup
       root.innerHTML = '';
       rootEl = null;

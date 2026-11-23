@@ -83,55 +83,12 @@
     } catch (e) { return ''; }
   }
 
-  /* Pure: customers that have a valid critical action in the shared queue. Prospect items
-     (prospectId set) and items without a customerId are ignored; no_action and missing or
-     non-string actionType never qualify. */
-  /* actionType values the action engine emits (action.js ACTION_RULES + overrides). Keep in sync. */
-  var ENGINE_ACTION_TYPES = ['check_followup', 'payment_followup', 'visit', 'manager_review', 'investigate', 'call', 'follow_up', 'prospect_followup', 'no_action'];
-  function buildUrgentActionIds(actions) {
-    const ids = new Map();
-    (Array.isArray(actions) ? actions : []).forEach(function (a) {
-      if (!a || a.prospectId || !a.customerId) return;
-      if (typeof a.actionType !== 'string' || ENGINE_ACTION_TYPES.indexOf(a.actionType) < 0) return;
-      if (a.actionType === 'no_action') return;
-      if (a.urgency !== 'critical') return;
-      ids.set(a.customerId, true);
-    });
-    return ids;
-  }
-
-  /* Row label policy (list only): AT MOST ONE label per customer, chosen by priority.
-     A normal customer (green relationship, no flag) gets NO label.
-     Relationship colour / status stays unchanged in the detail page and Quick View. */
-  function customerListBadge(inp) {
-    if (inp.relation === 'red') return { label: 'ریسک قطع رابطه', tone: 'danger' };
-    if (inp.relation === 'yellow') return { label: 'نیازمند توجه', tone: 'warning' };
-    if (inp.urgent) return { label: 'اقدام فوری', tone: 'danger' };
-    if (inp.status === 'lost') return { label: 'از دست رفته', tone: 'muted' };
-    if (inp.active === false) return { label: 'غیرفعال شده', tone: 'muted' };
-    if (inp.behindPattern) return { label: 'عقب‌افتاده', tone: 'warning' };
-    if (inp.status === 'inactive') return { label: 'سرد شده', tone: 'muted' };
-    if (inp.relation === 'insufficient' || inp.status === 'new') return { label: 'سابقه ناکافی', tone: 'muted' };
-    if (inp.relation === 'not_applicable') return { label: 'مشتری یک‌بار‌مصرف', tone: 'muted' };
-    return null;
-  }
-
   function renderCustomerListOnly() {
     const listEl = document.getElementById('customer-list');
     if (!listEl) return;
 
     if (!custPriorityMap) custPriorityMap = buildPriorityLookup();
     const priorityMap = custPriorityMap;
-    // «اقدام فوری» comes from the action engine only (same queue as the dashboard), never from riskLevel.
-    let urgentActionIds = new Map();
-    try {
-      if (custCtx && typeof calculateAllActions === 'function') {
-        urgentActionIds = buildUrgentActionIds(calculateAllActions(custCtx));
-      }
-    } catch (e) {
-      urgentActionIds = new Map(); // calculation error: no urgent badge (never a false urgent)
-      if (typeof console !== 'undefined' && console.warn) console.warn('customer list: action queue unavailable', e);
-    }
     let rows = (data.customers || []).slice();
     const q = (custQuery || '').trim().toLowerCase();
     if (q) {
@@ -214,11 +171,9 @@
 
         // One compact status badge + one activity metric. These are read-only
         // presentations of existing frozen outputs; no new scoring/thresholds.
-        // v117: one relationship status for list / detail / Quick View (see customerRelationshipHealth).
-        const relation = (typeof customerRelationshipHealth === 'function')
-          ? customerRelationshipHealth(c.id, custCtx) : null;
-        const relColor = relation && relation.color ? relation.color : null;
-        const riskCls = relColor ? 'radar-rel-' + relColor : '';
+        const pr = priorityMap[c.id] || null;
+        const riskLevel = pr ? pr.riskLevel : null;
+        const riskCls = riskLevel ? 'radar-risk-' + riskLevel : '';
         const behavior = (typeof customerBehavior === 'function')
           ? (function(){ try { return customerBehavior(c.id, custCtx) || {}; } catch(e){ return {}; } })()
           : {};
@@ -227,16 +182,21 @@
           : 0;
         const status = (typeof customerStatus === 'function') ? customerStatus(c.id, custCtx) : null;
 
-        const badge = customerListBadge({
-          active: c.active,
-          urgent: urgentActionIds.has(c.id),
-          relation: relation ? relation.status : null,
-          behindPattern: behavior.behindPattern === true,
-          status: status
-        });
-        const badgeHtml = badge
-          ? '<span class="customer-row-status badge tone-' + badge.tone + '">' + esc(badge.label) + '</span>'
-          : '';
+        let badgeLabel = '';
+        let badgeTone = 'neutral';
+        if (c.active === false) { badgeLabel = 'غیرفعال شده'; badgeTone = 'muted'; }
+        else if (c.oneOff) { badgeLabel = 'یک‌بار‌مصرف'; badgeTone = 'muted'; }
+        else if ((riskLevel === 'critical' || riskLevel === 'high') && typeof getRiskBadge === 'function') {
+          // Intentional: the list badges ONLY critical/high (medium/low stay badge-less so the list
+          // stays scannable). Detail and Quick View show the full label via the same getRiskBadge.
+          var _lr = getRiskBadge(riskLevel);
+          badgeLabel = _lr.label;
+          badgeTone = _lr.tone;
+        }
+        else if (behavior.behindPattern === true) { badgeLabel = 'عقب‌افتاده'; badgeTone = 'warning'; }
+        else if (status === 'lost') { badgeLabel = 'از دست رفته'; badgeTone = 'muted'; }
+        else if (status === 'inactive') { badgeLabel = 'سرد شده'; badgeTone = 'muted'; }
+        else if (status === 'new') { badgeLabel = 'جدید'; badgeTone = 'neutral'; }
 
         const days = (typeof customerStats === 'function')
         ? (function(){ try { return customerStats(c.id, custCtx).daysSinceLast; } catch(e){ return Infinity; } })()
@@ -259,7 +219,9 @@
           customerSparklineHtml(c.id, custCtx) +
           '</span>' +
           '<span class="customer-row-meta-line">' +
-          badgeHtml +
+          (badgeLabel
+            ? '<span class="customer-row-status badge tone-' + badgeTone + '">' + esc(badgeLabel) + '</span>'
+            : '') +
           '<span class="customer-row-meta">' + esc(daysText) + '</span>' +
           (watchCount > 0
             ? '<span class="customer-row-watch" aria-label="هشدار فعال" title="' + esc(watchTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg></span>'

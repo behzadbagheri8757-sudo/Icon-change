@@ -197,67 +197,9 @@
   }
 
   function openNewPaymentPicker() {
-    if (!data.customers.length) {
-      openSheet(`
-        <h3>مشتری ندارید</h3>
-        <div class="empty">
-          اول از بخش مشتریان، یک مشتری ثبت کنید.
-        </div>
-        <div class="btn-row">
-          <a class="btn secondary" href="#/customers">
-            رفتن به مشتریان
-          </a>
-        </div>
-      `);
-      return;
-    }
-
-    const opts = data.customers
-      .filter(c => c.active !== false)
-      .slice()
-      .sort((a, b) =>
-        (a.name || '').localeCompare(b.name || '', 'fa')
-      )
-      .map(
-        c =>
-          `<option value="${esc(c.id)}">${esc(c.name)}</option>`
-      )
-      .join('');
-
-    openSheet(`
-      <h3>ثبت پرداخت / دریافت</h3>
-
-      <div class="field">
-        <label>مشتری</label>
-        <select id="pay-pick-customer">
-          ${opts}
-        </select>
-      </div>
-
-      <div
-        class="empty"
-        style="padding:0 0 8px;text-align:right;font-size:.78rem;"
-      >
-        پرداخت به تامین‌کننده از صفحه همان تامین‌کننده ثبت می‌شود.
-      </div>
-
-      <div class="btn-row">
-        <button class="btn" id="pay-pick-go">
-          ادامه
-        </button>
-      </div>
-    `);
-
-    document.getElementById('pay-pick-go').onclick = () => {
-      const cid =
-        document.getElementById('pay-pick-customer').value;
-
-      closeModal();
-
-      if (typeof openAddTransaction === 'function') {
-        openAddTransaction(cid);
-      }
-    };
+    openCustomerPicker('ثبت پرداخت / دریافت — انتخاب مشتری', function (cid) {
+      if (typeof openAddTransaction === 'function') openAddTransaction(cid);
+    }, { note: 'پرداخت به تامین‌کننده از صفحه همان تامین‌کننده ثبت می‌شود.' });
   }
 
   function drawPaymentsPage(root) {

@@ -93,23 +93,9 @@
   }
 
   function openNewInvoicePicker() {
-    if (!data.customers.length) {
-      openSheet(`<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>
-        <div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>`);
-      return;
-    }
-    const opts = data.customers.filter(c => c.active !== false).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
-      .map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
-    openSheet(`
-      <h3>فاکتور جدید</h3>
-      <div class="field"><label>مشتری</label><select id="inv-pick-customer">${opts}</select></div>
-      <div class="btn-row"><button class="btn" id="inv-pick-go">ادامه</button></div>
-    `);
-    document.getElementById('inv-pick-go').onclick = ()=>{
-      const cid = document.getElementById('inv-pick-customer').value;
-      closeModal();
+    openCustomerPicker('فاکتور جدید — انتخاب مشتری', function (cid) {
       if (typeof openAddInvoice === 'function') openAddInvoice(cid);
-    };
+    });
   }
 
   function drawInvoicesPage(root) {

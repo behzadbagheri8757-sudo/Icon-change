@@ -147,23 +147,9 @@
   }
 
   function openNewVisitPicker() {
-    if (!data.customers.length) {
-      openSheet(`<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>
-        <div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>`);
-      return;
-    }
-    const opts = data.customers.filter(c => c.active !== false).slice().sort((a,b)=>(a.name||'').localeCompare(b.name||'','fa'))
-      .map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
-    openSheet(`
-      <h3>ثبت ویزیت</h3>
-      <div class="field"><label>مشتری</label><select id="visit-pick-customer">${opts}</select></div>
-      <div class="btn-row"><button class="btn" id="visit-pick-go">ادامه</button></div>
-    `);
-    document.getElementById('visit-pick-go').onclick = ()=>{
-      const cid = document.getElementById('visit-pick-customer').value;
-      closeModal();
+    openCustomerPicker('ثبت ویزیت — انتخاب مشتری', function (cid) {
       if (typeof openAddVisit === 'function') openAddVisit(cid);
-    };
+    });
   }
 
   function drawVisitsPage(root) {

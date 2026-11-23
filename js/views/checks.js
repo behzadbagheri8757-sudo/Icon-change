@@ -190,23 +190,9 @@
   }
 
   function openNewCheckPicker() {
-    if (!data.customers.length) {
-      openSheet(`<h3>مشتری ندارید</h3><div class="empty">اول از بخش مشتریان، یک مشتری ثبت کنید.</div>
-        <div class="btn-row"><a class="btn secondary" href="#/customers">رفتن به مشتریان</a></div>`);
-      return;
-    }
-    const opts = data.customers.filter(c => c.active !== false).slice().sort((a,b) => (a.name || '').localeCompare(b.name || '', 'fa'))
-      .map(c => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
-    openSheet(`
-      <h3>ثبت چک</h3>
-      <div class="field"><label>مشتری</label><select id="chk-pick-customer">${opts}</select></div>
-      <div class="btn-row"><button class="btn" id="chk-pick-go">ادامه</button></div>
-    `);
-    document.getElementById('chk-pick-go').onclick = function () {
-      const cid = document.getElementById('chk-pick-customer').value;
-      closeModal();
+    openCustomerPicker('ثبت چک — انتخاب مشتری', function (cid) {
       if (typeof openAddCheck === 'function') openAddCheck(cid);
-    };
+    });
   }
 
   function drawChecksPage(root) {

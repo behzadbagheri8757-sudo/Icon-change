@@ -277,6 +277,11 @@
     var isFollowUp = watchFilter === 'followup';
     var shown = sets[watchFilter] || sets.all;
 
+    /* Most severe first: an early-warning list should lead with what needs attention most.
+       Order only — uses the stored severity (o.level); nothing is recalculated.
+       Follow-ups are judged by date, so that filter keeps its alphabetical order. */
+    var SEV = { high: 3, medium: 2, low: 1 };
+    function sevOf(o) { return isFollowUp ? 0 : (SEV[o && o.level] || 0); }
     var groups = Object.create(null), order = [];
     shown.slice().sort(function (a, b) {
       var an = customerNameById(a.customerId), bn = customerNameById(b.customerId);
@@ -284,9 +289,16 @@
       return cmp || String(a.id || '').localeCompare(String(b.id || ''));
     }).forEach(function (o) {
       var key = String(o.customerId || '');
-      if (!groups[key]) { groups[key] = { cid: o.customerId, name: customerNameById(o.customerId), items: [] }; order.push(key); }
+      if (!groups[key]) { groups[key] = { cid: o.customerId, name: customerNameById(o.customerId), items: [], sev: 0 }; order.push(key); }
       groups[key].items.push(o);
+      groups[key].sev = Math.max(groups[key].sev, sevOf(o));
     });
+    if (!isFollowUp) {
+      order.sort(function (ka, kb) { return (groups[kb].sev - groups[ka].sev); }); // stable: ties keep name order
+      order.forEach(function (k) {
+        groups[k].items.sort(function (a, b) { return sevOf(b) - sevOf(a); });
+      });
+    }
 
     var html = order.map(function (key) {
       var g = groups[key];
